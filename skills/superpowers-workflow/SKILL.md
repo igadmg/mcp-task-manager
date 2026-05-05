@@ -9,7 +9,7 @@ description: Execute task manager tasks using installed planner, coder, and revi
 
 Execute tasks from the task manager MCP using Codex custom role agents.
 
-These agents are packaged with the `mcp-task-manager` Codex plugin under `plugins/mcp-task-manager/agents/`. The repo-local `.codex/agents/` files are compatibility symlinks to those packaged definitions. Installed plugin users must run `/install-agents` after install or upgrade so the packaged agents are linked into `~/.codex/agents/` for global discovery.
+These agents are packaged with the `mcp-task-manager` Codex plugin under `plugins/mcp-task-manager/agents/`. The repo-local `.codex/agents/` files are compatibility symlinks to those packaged definitions. Installed plugin users must use `$install-agents` after install or upgrade so the packaged agents are linked into `~/.codex/agents/` for global discovery.
 
 - Parent tasks without subtasks dispatch `planner`.
 - Executable subtasks dispatch `coder`.
@@ -38,7 +38,7 @@ Never silently downgrade.
 
 If the preferred Codex custom agent cannot be used, stop and ask the user which fallback to allow before continuing. Make the downgrade explicit so the user understands the workflow is leaving the intended task-manager guardrails.
 
-If the missing role is `planner`, `coder`, or `reviewer`, tell the user to run `/install-agents` and restart Codex before falling back.
+If the missing role is `planner`, `coder`, or `reviewer`, tell the user to use `$install-agents` and restart Codex before falling back.
 
 Apply this rule independently for:
 
