@@ -403,6 +403,75 @@ func TestIndex_NextIDIncludesArchivedTasks(t *testing.T) {
 	}
 }
 
+func TestService_CreateUsesArchivedTaskIDs(t *testing.T) {
+	tests := []struct {
+		name     string
+		activeID int
+	}{
+		{name: "archived task has highest id"},
+		{name: "mixed active and archived tasks", activeID: 12},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tasksDir := t.TempDir()
+			storageBackend := NewMarkdownStorage(tasksDir)
+
+			if tt.activeID != 0 {
+				active := makeTestTask(tt.activeID)
+				active.Status = task.StatusTodo
+				active.Title = "Active Task"
+				if err := storageBackend.Save(active); err != nil {
+					t.Fatalf("Save(%d) error = %v", tt.activeID, err)
+				}
+			}
+
+			archived := makeTestTask(78)
+			archived.Title = "Archived Task"
+			if err := storageBackend.Save(archived); err != nil {
+				t.Fatalf("Save(78) error = %v", err)
+			}
+			if err := storageBackend.Archive(78); err != nil {
+				t.Fatalf("Archive(78) error = %v", err)
+			}
+
+			idx := NewIndex(tasksDir, storageBackend)
+			cfg := &config.Config{TaskTypes: []string{"feature", "bug"}, ProjectFound: true}
+			svc := task.NewService(storageBackend, storageBackend, idx, cfg.TaskTypes, cfg)
+			if err := svc.Initialize(); err != nil {
+				t.Fatalf("Initialize() error = %v", err)
+			}
+
+			created, err := svc.Create("New Task", "Description", task.PriorityHigh, "bug", nil)
+			if err != nil {
+				t.Fatalf("Create() error = %v", err)
+			}
+			if created.ID != 79 {
+				t.Fatalf("Create() ID = %d, want 79", created.ID)
+			}
+
+			gotArchived, err := svc.Get(78)
+			if err != nil {
+				t.Fatalf("Get(78) error = %v", err)
+			}
+			if gotArchived.Title != "Archived Task" {
+				t.Fatalf("Get(78) title = %q, want %q", gotArchived.Title, "Archived Task")
+			}
+
+			gotCreated, err := svc.Get(79)
+			if err != nil {
+				t.Fatalf("Get(79) error = %v", err)
+			}
+			if gotCreated.Title != "New Task" {
+				t.Fatalf("Get(79) title = %q, want %q", gotCreated.Title, "New Task")
+			}
+			if gotCreated.Description != "Description" {
+				t.Fatalf("Get(79) description = %q, want %q", gotCreated.Description, "Description")
+			}
+		})
+	}
+}
+
 func TestIndex_NextTodoBreaksTiesByLowerID(t *testing.T) {
 	dir := t.TempDir()
 	storage := NewMarkdownStorage(dir)
