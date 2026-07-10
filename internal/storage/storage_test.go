@@ -121,34 +121,116 @@ func TestMarkdownStorage_LoadAll(t *testing.T) {
 }
 
 func TestMarkdownStorage_NextID(t *testing.T) {
-	dir := t.TempDir()
-	storage := NewMarkdownStorage(dir)
+	t.Run("empty directory", func(t *testing.T) {
+		dir := t.TempDir()
+		storage := NewMarkdownStorage(dir)
 
-	// Empty directory
-	id, err := storage.NextID()
-	if err != nil {
-		t.Fatalf("NextID() error = %v", err)
-	}
-	if id != 1 {
-		t.Errorf("NextID() on empty dir = %d, want 1", id)
-	}
-
-	// Add some tasks
-	now := time.Now().UTC()
-	for _, i := range []int{1, 5, 3} {
-		tk := &task.Task{ID: i, Title: "Task", Status: task.StatusTodo, Priority: task.PriorityMedium, Type: "feature", CreatedAt: now, UpdatedAt: now}
-		if err := storage.Save(tk); err != nil {
-			t.Fatalf("Save() error = %v", err)
+		id, err := storage.NextID()
+		if err != nil {
+			t.Fatalf("NextID() error = %v", err)
 		}
-	}
+		if id != 1 {
+			t.Errorf("NextID() on empty dir = %d, want 1", id)
+		}
+	})
 
-	id, err = storage.NextID()
-	if err != nil {
-		t.Fatalf("NextID() error = %v", err)
-	}
-	if id != 6 {
-		t.Errorf("NextID() = %d, want 6", id)
-	}
+	t.Run("active tasks only", func(t *testing.T) {
+		dir := t.TempDir()
+		storage := NewMarkdownStorage(dir)
+
+		now := time.Now().UTC()
+		for _, i := range []int{1, 5, 3} {
+			tk := &task.Task{ID: i, Title: "Task", Status: task.StatusTodo, Priority: task.PriorityMedium, Type: "feature", CreatedAt: now, UpdatedAt: now}
+			if err := storage.Save(tk); err != nil {
+				t.Fatalf("Save() error = %v", err)
+			}
+		}
+
+		id, err := storage.NextID()
+		if err != nil {
+			t.Fatalf("NextID() error = %v", err)
+		}
+		if id != 6 {
+			t.Errorf("NextID() = %d, want 6", id)
+		}
+	})
+
+	t.Run("archived tasks only", func(t *testing.T) {
+		dir := t.TempDir()
+		storage := NewMarkdownStorage(dir)
+
+		for _, i := range []int{2, 8, 4} {
+			tk := makeTestTask(i)
+			if err := storage.Save(tk); err != nil {
+				t.Fatalf("Save(%d) error = %v", i, err)
+			}
+			if err := storage.Archive(i); err != nil {
+				t.Fatalf("Archive(%d) error = %v", i, err)
+			}
+		}
+
+		id, err := storage.NextID()
+		if err != nil {
+			t.Fatalf("NextID() error = %v", err)
+		}
+		if id != 9 {
+			t.Errorf("NextID() = %d, want 9", id)
+		}
+	})
+
+	t.Run("archived task has highest id", func(t *testing.T) {
+		dir := t.TempDir()
+		storage := NewMarkdownStorage(dir)
+
+		for _, i := range []int{1, 3} {
+			tk := makeTestTask(i)
+			if err := storage.Save(tk); err != nil {
+				t.Fatalf("Save(%d) error = %v", i, err)
+			}
+		}
+		tk := makeTestTask(10)
+		if err := storage.Save(tk); err != nil {
+			t.Fatalf("Save(10) error = %v", err)
+		}
+		if err := storage.Archive(10); err != nil {
+			t.Fatalf("Archive(10) error = %v", err)
+		}
+
+		id, err := storage.NextID()
+		if err != nil {
+			t.Fatalf("NextID() error = %v", err)
+		}
+		if id != 11 {
+			t.Errorf("NextID() = %d, want 11", id)
+		}
+	})
+
+	t.Run("active task has highest id", func(t *testing.T) {
+		dir := t.TempDir()
+		storage := NewMarkdownStorage(dir)
+
+		for _, i := range []int{2, 5} {
+			tk := makeTestTask(i)
+			if err := storage.Save(tk); err != nil {
+				t.Fatalf("Save(%d) error = %v", i, err)
+			}
+			if err := storage.Archive(i); err != nil {
+				t.Fatalf("Archive(%d) error = %v", i, err)
+			}
+		}
+		tk := makeTestTask(9)
+		if err := storage.Save(tk); err != nil {
+			t.Fatalf("Save(9) error = %v", err)
+		}
+
+		id, err := storage.NextID()
+		if err != nil {
+			t.Fatalf("NextID() error = %v", err)
+		}
+		if id != 10 {
+			t.Errorf("NextID() = %d, want 10", id)
+		}
+	})
 }
 
 func TestIndex_SetGetDelete(t *testing.T) {

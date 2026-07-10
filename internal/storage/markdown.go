@@ -267,10 +267,27 @@ func (s *MarkdownStorage) IsArchived(id int) bool {
 
 // NextID returns the next available task ID
 func (s *MarkdownStorage) NextID() (int, error) {
-	entries, err := os.ReadDir(s.dir)
+	activeMax, err := maxMarkdownTaskID(s.dir)
+	if err != nil {
+		return 0, err
+	}
+
+	archiveMax, err := maxMarkdownTaskID(filepath.Join(s.dir, "archive"))
+	if err != nil {
+		return 0, err
+	}
+
+	if archiveMax > activeMax {
+		return archiveMax + 1, nil
+	}
+	return activeMax + 1, nil
+}
+
+func maxMarkdownTaskID(dir string) (int, error) {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return 1, nil
+			return 0, nil
 		}
 		return 0, err
 	}
@@ -286,5 +303,5 @@ func (s *MarkdownStorage) NextID() (int, error) {
 		}
 	}
 
-	return maxID + 1, nil
+	return maxID, nil
 }
