@@ -1,5 +1,7 @@
 # Task 54 Design: Repo-Local Planner, Coder, and Reviewer Agents
 
+> **Superseded for active workflow behavior:** The implicit subagent role migration in [docs/plans/2026-07-10-implicit-subagent-roles-migration.md](../../plans/2026-07-10-implicit-subagent-roles-migration.md) replaces the role-agent installation and dispatch behavior described below. This document remains historical Task 54 design context.
+
 ## Summary
 
 Task 54 adds three repo-local agents under `agents/` and updates the `superpowers-workflow` skill to use them directly instead of relying only on generic references to `subagent-driven-development`.

@@ -154,7 +154,7 @@ claude mcp add --transport stdio task-manager -- mcp-task-manager
 
 **Usage:**
 
-Use the Claude Code command `/mcp-task-manager:superpowers-workflow` to automatically execute pending tasks with installed `planner`, `coder`, and `reviewer` agents. If one of those agents cannot be used, the workflow stops and asks before allowing a fallback.
+Use the Claude Code command `/mcp-task-manager:superpowers-workflow` to automatically execute pending tasks. The workflow spawns ordinary subagents and includes the complete planner, coder, and reviewer role contracts in the relevant subagent initial prompts.
 
 ### Codex Integration
 
@@ -162,7 +162,7 @@ Use this path for Codex specifically. This repository now acts as a Codex market
 
 **Prerequisite: install the MCP server binary first**
 
-The Codex plugin package includes `superpowers-workflow`, `install-agents`, `/execute-all`, packaged role agents, and a packaged `.mcp.json`, but it still expects the `mcp-task-manager` executable to already be available on your `PATH`:
+The Codex plugin package includes `superpowers-workflow`, `/execute-all`, and a packaged `.mcp.json`, but it still expects the `mcp-task-manager` executable to already be available on your `PATH`:
 
 ```bash
 go install github.com/gpayer/mcp-task-manager/cmd/mcp-task-manager@latest
@@ -182,19 +182,11 @@ Inside Codex, install the packaged plugin from that marketplace:
 
 The plugin package wires in the MCP server definition from `plugins/mcp-task-manager/.mcp.json`, so you do not need a separate `codex mcp add` step as long as `mcp-task-manager` is already installed and resolvable by name.
 
-**Install the role agents globally**
-
-Codex discovers reusable subagents from `~/.codex/agents/` or project-local `.codex/agents/`. After installing or upgrading the plugin, use the packaged `$install-agents` skill once:
-
-```text
-$install-agents
-```
-
-This creates `planner`, `coder`, and `reviewer` symlinks in `~/.codex/agents/` pointing at the installed plugin's packaged agent definitions. Restart Codex after running it so the agents are available in every session.
-
 **Usage**
 
-Use the Codex skill `$superpowers-workflow` or the packaged command `/execute-all` to automatically execute pending tasks with installed `planner`, `coder`, and `reviewer` agents. If one of those agents cannot be used, the workflow stops and asks before allowing a fallback.
+Use the Codex skill `$superpowers-workflow` or the packaged command `/execute-all` to automatically execute pending tasks. The workflow spawns ordinary subagents and includes the complete planner, coder, and reviewer role contracts in the relevant subagent initial prompts.
+
+The model/reasoning settings are capability-based recommendations. The workflow applies them only when the active subagent tool supports those controls and they are not overridden by user choice, model availability, policy, cost/latency constraints, or task-specific needs.
 
 ## MCP Tools
 
