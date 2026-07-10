@@ -11,7 +11,6 @@
   "license": "MIT",
   "keywords": ["task-manager", "mcp", "workflow", "superpowers", "subtasks"],
   "skills": "./skills",
-  "agents": "./agents",
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "MCP Task Manager",
