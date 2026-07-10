@@ -538,7 +538,16 @@ func (idx *Index) NextID() int {
 			maxID = id
 		}
 	}
-	return maxID + 1
+	activeNextID := maxID + 1
+
+	storageNextID, err := idx.storage.NextID()
+	if err != nil {
+		return activeNextID
+	}
+	if storageNextID > activeNextID {
+		return storageNextID
+	}
+	return activeNextID
 }
 
 // GetSubtasks returns all subtasks of a parent task

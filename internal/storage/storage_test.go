@@ -368,6 +368,41 @@ func TestIndex_NextID(t *testing.T) {
 	}
 }
 
+func TestIndex_NextIDIncludesArchivedTasks(t *testing.T) {
+	tests := []struct {
+		name     string
+		activeID int
+		want     int
+	}{
+		{name: "no active entries", want: 79},
+		{name: "archived task has highest id", activeID: 12, want: 79},
+		{name: "active task has highest id", activeID: 90, want: 91},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			storage := NewMarkdownStorage(dir)
+			idx := NewIndex(dir, storage)
+
+			if err := storage.Save(makeTestTask(78)); err != nil {
+				t.Fatalf("Save(78) error = %v", err)
+			}
+			if err := storage.Archive(78); err != nil {
+				t.Fatalf("Archive(78) error = %v", err)
+			}
+
+			if tt.activeID != 0 {
+				idx.Set(makeTestTask(tt.activeID))
+			}
+
+			if got := idx.NextID(); got != tt.want {
+				t.Errorf("NextID() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIndex_NextTodoBreaksTiesByLowerID(t *testing.T) {
 	dir := t.TempDir()
 	storage := NewMarkdownStorage(dir)
