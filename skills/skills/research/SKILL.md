@@ -1,28 +1,28 @@
 ---
 name: research
-description: Use when the user asks to research or analyze the mengine codebase and current behavior without proposing changes. Trigger for requests about entity/component wiring, systems, lifecycle order, codegen output, subsystems, tests, or factual engine behavior in this repository.
+description: Use when the user asks to research or analyze this project's codebase and current behavior without proposing changes. Trigger for requests about module/component wiring, execution order, codegen output, subsystems, tests, or factual behavior in this repository.
 ---
 
-# mengine Research
+# Research
 
-Use this skill for evidence-only analysis of mengine.
+Use this skill for evidence-only analysis of this project.
 
 ## Load Order
 
 1. Read `CLAUDE.md`.
-2. Read `README.md` and `src/core/README.md`.
-3. Read only the task-relevant notes: `01.dev.md`, `01.todo*.md`, and the matching files under `doc/`.
+2. Read `README.md` and any module-level README.
+3. Read only the task-relevant notes under `doc/` (or this project's equivalent notes location).
 4. Inspect only the code and tests needed for the requested scope.
 
 ## Output Rules
 
-- Report the engine as it exists now.
+- Report the codebase as it exists now.
 - Do not propose fixes, refactors, or design changes.
 - Separate facts from unknowns.
 - If something is inferred, label it as an inference.
 - Every non-trivial claim must cite a file reference with line numbers.
 - If docs and code disagree, record both and state that code currently wins.
-- When citing behavior that lives in generated code, cite both the `ecs`/`gog`/`lazy` tag in the handwritten source and the generated `0.gen_*.go` file it produces.
+- When citing behavior that lives in generated code, cite both the annotation/tag in the handwritten source and the generated file it produces.
 
 ## Output Format
 
@@ -60,15 +60,15 @@ Use exactly these sections, in this order:
 
 - Task classification
 - Relevant documents loaded
-- Current execution path (entity construction -> Prepare -> Layout / system update order)
-- Components, archetypes, and generated accessors involved
-- Subsystem dependencies and side effects (`Gfx`, `Input`, `Dbg`, `Prof`, `Sys`)
+- Current execution path (construction -> initialization -> update/render order, or this project's equivalent)
+- Modules, data structures, and generated accessors involved
+- Subsystem dependencies and side effects
 - Existing tests and quality constraints
 - Open questions or missing evidence
 
 ## Repository Constraints
 
-- Respect the actual repo layout: engine modules under `src/core/*`, games under `src/projects/*`, tooling in `cmd/**` (notably `msh`), vendored/submodule libraries in `pkg/**`, assets in `games/**`, plus `tests/**` and `third_party/**`.
-- Library markdown under `pkg/**` and `third_party/**` is not a rule source for `src/**` unless the task explicitly targets those packages.
-- Cover the real execution path when relevant: entity constructor, component fields and tags, generated accessors, input scheme selection, layout, systems, and tests.
-- Keep the scope tight. Do not load unrelated games or subsystems.
+- Respect this project's actual repo layout and module boundaries.
+- Library/vendored documentation is not a rule source for this project's own code unless the task explicitly targets those packages.
+- Cover the real execution path when relevant: construction, data fields, generated accessors, configuration/selection steps, update/render logic, and tests.
+- Keep the scope tight. Do not load unrelated modules or subsystems.

@@ -1,6 +1,6 @@
 ---
 name: create_task
-description: Use when the user provides a new feature request, bug report, or ticket description for mengine and wants it processed through research, design, planning, and implementation phases with saved artifacts and explicit approval gates between each phase.
+description: Use when the user provides a new feature request, bug report, or ticket description for this project and wants it processed through research, design, planning, and implementation phases with saved artifacts and explicit approval gates between each phase.
 ---
 
 # Create Task Skill

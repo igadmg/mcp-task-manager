@@ -1,11 +1,11 @@
 ---
 name: workflow
-description: Use when the user wants a full mengine delivery workflow that moves through research, design, planning, and implementation in order. Trigger for requests to orchestrate the whole process, choose the current phase, enforce phase handoffs, or keep work aligned with repository guidance and quality gates.
+description: Use when the user wants a full delivery workflow for this project that moves through research, design, planning, and implementation in order. Trigger for requests to orchestrate the whole process, choose the current phase, enforce phase handoffs, or keep work aligned with repository guidance and quality gates.
 ---
 
 # Workflow
 
-Use this skill as the top-level workflow for mengine tasks.
+Use this skill as the top-level workflow for this project's tasks.
 
 ## Phase Order
 
@@ -17,12 +17,12 @@ Use this skill as the top-level workflow for mengine tasks.
 ## Operating Rules
 
 - Optimize for context correctness and low noise.
-- Read broad repository guidance first: `CLAUDE.md`, `README.md`, and `src/core/README.md`.
-- After that, load only the task-relevant notes: `01.dev.md`, `01.todo.md`, `01.todo.ecs.md`, `01.todo.gone.md`, and `doc/**`.
+- Read broad repository guidance first: `CLAUDE.md`, `README.md`, and any module-level README.
+- After that, load only the task-relevant notes under `doc/**` (or this project's equivalent notes location).
 - Treat code as the final source of truth when docs and code disagree, and call out the mismatch explicitly.
-- Respect the actual architecture in this repo: ECS entities (`ecs:"archetype"`) and components (`ecs:"component"`), `ecs.Ref[T]` cross-entity links, `World` as the subsystem integration point (`Gfx/Input/Dbg/Prof/Sys`), UI screens/modals with `PrepareLayout()` + `Layout(*ui.Context)`, and `input.InputSchemeComponent` driven input.
-- Generated files `src/**/0.gen_*.go` are produced by `msh generate`; never hand-edit them (the sole exception is `0.gen_gone.go`, which holds utility type definitions).
-- Use the repository quality gates: `msh generate --fast` when tags or signatures changed, `gofmt` on every touched file, `go build ./src/...`, and targeted `go test ./src/core/<module>/...`.
+- Respect this project's actual architecture and existing patterns — reuse what's already there rather than introducing new ones.
+- Never hand-edit generated files; regenerate them from their source of truth instead, following this project's convention (documented exceptions aside).
+- Use this project's quality gates: regeneration when generation inputs or signatures changed, formatting on every touched file, build, and targeted tests.
 
 ## Phase Handoff
 

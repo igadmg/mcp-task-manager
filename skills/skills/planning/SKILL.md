@@ -1,25 +1,25 @@
 ---
 name: planning
-description: Use when the user wants an implementation plan for mengine based on an approved design. Trigger for requests to break work into phases, commits, milestones, verification steps, dependencies, rollback notes, or execution order in this repository.
+description: Use when the user wants an implementation plan for this project based on an approved design. Trigger for requests to break work into phases, commits, milestones, verification steps, dependencies, rollback notes, or execution order in this repository.
 ---
 
-# mengine Planning
+# Planning
 
 Use this skill to convert approved design into atomic implementation phases.
 
 ## Preconditions
 
 - Plan only from approved design or an explicitly agreed approach.
-- Read `CLAUDE.md` and `src/core/README.md`.
+- Read `CLAUDE.md` and any module-level README.
 
 ## Planning Rules
 
 - Do not redesign in this phase.
 - Each phase must be logically complete, independently testable, and suitable for one commit.
 - Keep phases small and minimize cross-file noise.
-- Respect the actual repo layout: engine modules under `src/core/*` (`ui`, `gfx`, `input`, `net`, `sys`, `dbg`, `prof`, `rsc`), games under `src/projects/*`, tooling in `cmd/msh`, libraries in `pkg/**`, assets in `games/**`, and `tests/**`.
-- Isolate phases that change `ecs`/`gog`/`lazy` tags: regeneration is a distinct, verifiable step.
-- Never plan a commit that mixes a tag change with unrelated logic changes — the generated diff hides the real change.
+- Respect this project's actual repo layout and module boundaries.
+- Isolate phases that change code-generation inputs: regeneration is a distinct, verifiable step.
+- Never plan a commit that mixes a code-generation input change with unrelated logic changes — the generated diff hides the real change.
 - If a phase cannot be validated independently, split it again.
 
 ## For Each Phase Include
@@ -28,7 +28,7 @@ Use this skill to convert approved design into atomic implementation phases.
 - Goal
 - Exact scope
 - Files or packages expected to change
-- Whether regeneration is required (`msh generate --fast` or full `msh generate`)
+- Whether regeneration is required (partial or full, if this project uses code generation)
 - Dependencies and prerequisites
 - Tests to add or run
 - Quality gates to clear
