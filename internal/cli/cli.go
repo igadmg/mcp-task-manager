@@ -145,6 +145,30 @@ func RunWithArgs(args []string, stdout, stderr io.Writer) int {
 	archiveCmd.Bool(&archiveJSON, "j", "json", "Output as JSON")
 	flaggy.AttachSubcommand(archiveCmd, 1)
 
+	// WriteTaskFile subcommand
+	writeTaskFileCmd := flaggy.NewSubcommand("write-task-file")
+	writeTaskFileCmd.Description = "Write or overwrite a file attached to a task"
+	var writeTaskFileIDStr, writeTaskFileFilename, writeTaskFileContent string
+	writeTaskFileCmd.AddPositionalValue(&writeTaskFileIDStr, "task-id", 1, true, "Task ID")
+	writeTaskFileCmd.AddPositionalValue(&writeTaskFileFilename, "filename", 2, true, "Attached file name")
+	writeTaskFileCmd.AddPositionalValue(&writeTaskFileContent, "content", 3, true, "File content")
+	flaggy.AttachSubcommand(writeTaskFileCmd, 1)
+
+	// ReadTaskFile subcommand
+	readTaskFileCmd := flaggy.NewSubcommand("read-task-file")
+	readTaskFileCmd.Description = "Read a file attached to a task"
+	var readTaskFileIDStr, readTaskFileFilename string
+	readTaskFileCmd.AddPositionalValue(&readTaskFileIDStr, "task-id", 1, true, "Task ID")
+	readTaskFileCmd.AddPositionalValue(&readTaskFileFilename, "filename", 2, true, "Attached file name")
+	flaggy.AttachSubcommand(readTaskFileCmd, 1)
+
+	// ListTaskFiles subcommand
+	listTaskFilesCmd := flaggy.NewSubcommand("list-task-files")
+	listTaskFilesCmd.Description = "List files attached to a task"
+	var listTaskFilesIDStr string
+	listTaskFilesCmd.AddPositionalValue(&listTaskFilesIDStr, "task-id", 1, true, "Task ID")
+	flaggy.AttachSubcommand(listTaskFilesCmd, 1)
+
 	// Parse with custom args
 	flaggy.ParseArgs(args[1:])
 
@@ -218,6 +242,33 @@ func RunWithArgs(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		return cmdArchive(stdout, stderr, archiveJSON, archiveID)
+	}
+
+	if writeTaskFileCmd.Used {
+		id, err := strconv.Atoi(writeTaskFileIDStr)
+		if err != nil {
+			fmt.Fprintf(stderr, "Error: invalid task ID: %s\n", writeTaskFileIDStr)
+			return 1
+		}
+		return cmdWriteTaskFile(stdout, stderr, id, writeTaskFileFilename, writeTaskFileContent)
+	}
+
+	if readTaskFileCmd.Used {
+		id, err := strconv.Atoi(readTaskFileIDStr)
+		if err != nil {
+			fmt.Fprintf(stderr, "Error: invalid task ID: %s\n", readTaskFileIDStr)
+			return 1
+		}
+		return cmdReadTaskFile(stdout, stderr, id, readTaskFileFilename)
+	}
+
+	if listTaskFilesCmd.Used {
+		id, err := strconv.Atoi(listTaskFilesIDStr)
+		if err != nil {
+			fmt.Fprintf(stderr, "Error: invalid task ID: %s\n", listTaskFilesIDStr)
+			return 1
+		}
+		return cmdListTaskFiles(stdout, stderr, id)
 	}
 
 	return 0

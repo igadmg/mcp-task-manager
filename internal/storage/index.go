@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -303,7 +304,15 @@ func (idx *Index) isStaleOnDisk() (bool, error) {
 
 	taskCount := 0
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+		if !entry.IsDir() {
+			continue
+		}
+		if _, err := strconv.Atoi(entry.Name()); err != nil {
+			continue
+		}
+
+		info, err := os.Stat(filepath.Join(idx.dir, entry.Name(), entry.Name()+".md"))
+		if err != nil {
 			continue
 		}
 
@@ -313,10 +322,6 @@ func (idx *Index) isStaleOnDisk() (bool, error) {
 			continue
 		}
 
-		info, err := entry.Info()
-		if err != nil {
-			return false, err
-		}
 		if info.ModTime().After(indexInfo.ModTime()) {
 			return true, nil
 		}

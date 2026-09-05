@@ -22,8 +22,8 @@ A Go-based MCP server for task management, designed for Claude and coding agents
 └─────────────────────────────────────────────┘
          │                        │
          ▼                        ▼
-    ./tasks/*.md           ./tasks/.index.json
-    ./tasks/archive/*.md   (archived tasks, no index)
+    ./tasks/{id}/{id}.md           ./tasks/.index.json
+    ./tasks/archive/{id}/{id}.md   (archived tasks, no index)
 ```
 
 ## Development Process
@@ -52,11 +52,13 @@ Use the **cclsp MCP tools** (LSP server access) for code navigation:
 ## Design Decisions
 
 ### Storage
-- **Source of truth:** Markdown files with YAML frontmatter (`./tasks/*.md`)
-- **Archive:** `./tasks/archive/*.md` — archived tasks (same format, no index)
+- **Source of truth:** Markdown files with YAML frontmatter, one per-task directory (`./tasks/{id}/{id}.md`)
+- **Attached files:** free-form named text files live alongside `{id}.md` in the same `./tasks/{id}/` directory
+- **Archive:** `./tasks/archive/{id}/{id}.md` — archived tasks (same format, no index); archiving moves the whole per-task directory, carrying attached files with it
 - **Index cache:** `./tasks/.index.json` - rebuildable from .md files on startup
 - **Location:** Project-local by default, configurable via `MCP_TASKS_DIR` env var
 - **Config file:** `./mcp-tasks.yaml`
+- **Legacy layout migration:** on startup, any task still found in the old flat layout (`tasks/{id}.md` or `tasks/archive/{id}.md`) is automatically migrated into the per-task directory layout
 
 ### Task Schema
 
@@ -82,7 +84,7 @@ Markdown description here.
 
 ### Task Identification
 - Numeric auto-incrementing IDs
-- Filenames: `001.md`, `002.md`, etc.
+- Per-task directory: `001/`, `002/`, etc., each containing `{id}.md` (e.g. `001/001.md`) plus any attached files
 
 ### Task Lifecycle
 - Simple 3-state workflow: `todo` → `in_progress` → `done`
@@ -154,8 +156,8 @@ Relation types are configurable via `mcp-tasks.yaml`. Behavioral effects are har
 Completed tasks can be archived to keep the active task list clean and the index small.
 
 **Storage:**
-- Archived files move to `tasks/archive/` (same markdown format, unchanged)
-- No archive index — queries against archived tasks do a linear scan of `archive/*.md`
+- Archiving renames the whole `tasks/{id}/` directory to `tasks/archive/{id}/` (same markdown format, unchanged); attached files move along with it automatically
+- No archive index — queries against archived tasks do a linear scan of `archive/{id}/{id}.md`
 - Active index shrinks as tasks are archived
 
 **Archive Rules:**
@@ -168,6 +170,20 @@ Completed tasks can be archived to keep the active task list clean and the index
 - When enabled in config, done tasks older than `after_days` (since `updated_at`) are automatically archived
 - Triggers on startup and after each `complete_task` call
 
+### Attached Files
+
+A task can have zero or more free-form named text files attached to it (e.g. research notes, design docs), read and written incrementally over the task's lifetime.
+
+**Storage:**
+- Attached files live inside the task's own `tasks/{id}/` directory, alongside `{id}.md`
+- Filenames are chosen freely by the caller at write time — no fixed set of categories
+- Because attached files share the task's directory, `archive_task` and `delete_task` already move/remove them as a side effect of moving/removing that directory — no separate cascade step is needed
+
+**Rules:**
+- Filenames must be non-empty, must not contain a path separator (`/` or `\`) or a `..` segment, and must not collide with the task's own `{id}.md` record file
+- `write_task_file` is rejected for archived tasks (archived tasks are read-only, consistent with the rest of this project's archived-task semantics)
+- `read_task_file` and `list_task_files` work for both active and archived tasks
+
 ## MCP Tools
 
 ### Task Management
@@ -178,7 +194,14 @@ Completed tasks can be archived to keep the active task list clean and the index
 | `list_tasks` | List tasks with optional filters (status, priority, type, parent_id, archived); top-level tasks by default |
 | `get_task` | Get full details of a task by ID (includes subtasks for parent tasks; falls back to archive) |
 | `delete_task` | Remove a task; use `delete_subtasks: true` to cascade delete subtasks |
-| `archive_task` | Archive a completed task (moves to `tasks/archive/`) |
+| `archive_task` | Archive a completed task (moves its directory, including attached files, to `tasks/archive/`) |
+
+### Attached Files
+| Tool | Description |
+|------|-------------|
+| `write_task_file` | Create or overwrite a named text file attached to a task (rejected for archived tasks) |
+| `read_task_file` | Read the content of a named file attached to a task (works for active and archived tasks) |
+| `list_task_files` | List the names of all files attached to a task (works for active and archived tasks) |
 
 ### Relations
 | Tool | Description |
@@ -235,7 +258,9 @@ mcp-task-manager/
 │   │   └── config.go            # Config loading (file + env)
 │   ├── storage/
 │   │   ├── storage.go           # Storage interface
-│   │   ├── markdown.go          # Markdown file operations
+│   │   ├── markdown.go          # Markdown file operations (per-task directory layout)
+│   │   ├── migrate.go           # Legacy flat-layout migration
+│   │   ├── files.go             # Attached-file read/write/list
 │   │   └── index.go             # JSON index cache
 │   ├── task/
 │   │   ├── task.go              # Task model/types
@@ -244,7 +269,8 @@ mcp-task-manager/
 │       ├── tools.go             # Tool registration
 │       ├── management.go        # create, update, list, get, delete
 │       ├── workflow.go          # get_next_task, start, complete
-│       └── relations.go         # add_relation, remove_relation
+│       ├── relations.go         # add_relation, remove_relation
+│       └── files.go             # write_task_file, read_task_file, list_task_files
 ├── mcp-tasks.yaml               # Default config (for reference)
 ├── go.mod
 ├── go.sum

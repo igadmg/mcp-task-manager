@@ -35,8 +35,8 @@ func TestMarkdownStorage_SaveAndLoad(t *testing.T) {
 	}
 
 	// Verify file exists
-	if _, err := os.Stat(filepath.Join(dir, "001.md")); os.IsNotExist(err) {
-		t.Fatal("expected 001.md to exist")
+	if _, err := os.Stat(filepath.Join(dir, "001", "001.md")); os.IsNotExist(err) {
+		t.Fatal("expected 001/001.md to exist")
 	}
 
 	// Load
@@ -66,6 +66,22 @@ func TestMarkdownStorage_SaveAndLoad(t *testing.T) {
 	}
 }
 
+func TestMarkdownStorage_SaveCreatesTaskDir(t *testing.T) {
+	dir := t.TempDir()
+	storage := NewMarkdownStorage(dir)
+
+	now := time.Now().UTC()
+	tk := &task.Task{ID: 7, Title: "Nested", Status: task.StatusTodo, Priority: task.PriorityHigh, Type: "feature", CreatedAt: now, UpdatedAt: now}
+	if err := storage.Save(tk); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	wantPath := filepath.Join(dir, "007", "007.md")
+	if _, err := os.Stat(wantPath); err != nil {
+		t.Fatalf("expected %s to exist, got error: %v", wantPath, err)
+	}
+}
+
 func TestMarkdownStorage_Delete(t *testing.T) {
 	dir := t.TempDir()
 	storage := NewMarkdownStorage(dir)
@@ -90,6 +106,29 @@ func TestMarkdownStorage_Delete(t *testing.T) {
 
 	if _, err := storage.Load(1); !os.IsNotExist(err) {
 		t.Errorf("expected file to be deleted, got error: %v", err)
+	}
+}
+
+func TestMarkdownStorage_Delete_RemovesWholeDirectory(t *testing.T) {
+	dir := t.TempDir()
+	storage := NewMarkdownStorage(dir)
+
+	tk := makeTestTask(1)
+	if err := storage.Save(tk); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	attached := filepath.Join(dir, "001", "notes.md")
+	if err := os.WriteFile(attached, []byte("attached content"), 0644); err != nil {
+		t.Fatalf("failed to write attached file: %v", err)
+	}
+
+	if err := storage.Delete(1); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "001")); !os.IsNotExist(err) {
+		t.Error("expected task directory (including attached files) to be removed after Delete()")
 	}
 }
 
@@ -437,7 +476,7 @@ func TestService_CreateUsesArchivedTaskIDs(t *testing.T) {
 
 			idx := NewIndex(tasksDir, storageBackend)
 			cfg := &config.Config{TaskTypes: []string{"feature", "bug"}, ProjectFound: true}
-			svc := task.NewService(storageBackend, storageBackend, idx, cfg.TaskTypes, cfg)
+			svc := task.NewService(storageBackend, storageBackend, storageBackend, idx, cfg.TaskTypes, cfg)
 			if err := svc.Initialize(); err != nil {
 				t.Fatalf("Initialize() error = %v", err)
 			}
@@ -743,7 +782,7 @@ func TestService_Initialize_EmptyProjectDoesNotCreateTasksDirOrIndex(t *testing.
 		TaskTypes:    []string{"feature", "bug"},
 		ProjectFound: true,
 	}
-	svc := task.NewService(storageBackend, nil, idx, cfg.TaskTypes, cfg)
+	svc := task.NewService(storageBackend, nil, storageBackend, idx, cfg.TaskTypes, cfg)
 
 	if err := svc.Initialize(); err != nil {
 		t.Fatalf("Initialize() error = %v", err)
@@ -1508,7 +1547,7 @@ func TestIndex_Load_RebuildOnGitChange(t *testing.T) {
 	}
 
 	// Verify file was created
-	if _, err := os.Stat(filepath.Join(dir, "001.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, "001", "001.md")); err != nil {
 		t.Fatalf("Task file not created: %v", err)
 	}
 
@@ -1639,7 +1678,7 @@ func TestMarkdownStorage_SaveLoad_WithoutRelations(t *testing.T) {
 	}
 
 	// Verify the file doesn't contain "relations" field
-	data, err := os.ReadFile(filepath.Join(dir, "001.md"))
+	data, err := os.ReadFile(filepath.Join(dir, "001", "001.md"))
 	if err != nil {
 		t.Fatalf("ReadFile error = %v", err)
 	}
@@ -2093,9 +2132,9 @@ func TestMarkdownStorage_Archive(t *testing.T) {
 		t.Fatalf("Save() error = %v", err)
 	}
 
-	// Verify file exists before archiving
-	if _, err := os.Stat(filepath.Join(dir, "001.md")); os.IsNotExist(err) {
-		t.Fatal("expected 001.md to exist before archiving")
+	// Verify directory exists before archiving
+	if _, err := os.Stat(filepath.Join(dir, "001", "001.md")); os.IsNotExist(err) {
+		t.Fatal("expected 001/001.md to exist before archiving")
 	}
 
 	// Archive the task
@@ -2103,14 +2142,42 @@ func TestMarkdownStorage_Archive(t *testing.T) {
 		t.Fatalf("Archive() error = %v", err)
 	}
 
-	// Verify original file is gone
-	if _, err := os.Stat(filepath.Join(dir, "001.md")); !os.IsNotExist(err) {
-		t.Error("expected 001.md to be removed after archiving")
+	// Verify original directory is gone
+	if _, err := os.Stat(filepath.Join(dir, "001")); !os.IsNotExist(err) {
+		t.Error("expected 001/ to be removed after archiving")
 	}
 
-	// Verify file exists in archive dir
-	if _, err := os.Stat(filepath.Join(dir, "archive", "001.md")); os.IsNotExist(err) {
-		t.Error("expected archive/001.md to exist after archiving")
+	// Verify directory exists in archive dir
+	if _, err := os.Stat(filepath.Join(dir, "archive", "001", "001.md")); os.IsNotExist(err) {
+		t.Error("expected archive/001/001.md to exist after archiving")
+	}
+}
+
+func TestMarkdownStorage_Archive_MovesWholeDirectory(t *testing.T) {
+	dir := t.TempDir()
+	s := NewMarkdownStorage(dir)
+
+	tk := makeTestTask(1)
+	if err := s.Save(tk); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	attached := filepath.Join(dir, "001", "notes.md")
+	if err := os.WriteFile(attached, []byte("attached content"), 0644); err != nil {
+		t.Fatalf("failed to write attached file: %v", err)
+	}
+
+	if err := s.Archive(1); err != nil {
+		t.Fatalf("Archive() error = %v", err)
+	}
+
+	archivedAttached := filepath.Join(dir, "archive", "001", "notes.md")
+	data, err := os.ReadFile(archivedAttached)
+	if err != nil {
+		t.Fatalf("expected attached file to survive archiving at %s, got error: %v", archivedAttached, err)
+	}
+	if string(data) != "attached content" {
+		t.Errorf("attached file content = %q, want %q", string(data), "attached content")
 	}
 }
 
@@ -2245,5 +2312,150 @@ func TestMarkdownStorage_IsArchived(t *testing.T) {
 	// Non-existent ID
 	if s.IsArchived(999) {
 		t.Error("IsArchived(999) = true for non-existent task, want false")
+	}
+}
+
+func TestMarkdownStorage_WriteFile_CreatesAndOverwrites(t *testing.T) {
+	dir := t.TempDir()
+	s := NewMarkdownStorage(dir)
+	tk := makeTestTask(1)
+	if err := s.Save(tk); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	if err := s.WriteFile(1, "notes.md", "first"); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	got, err := s.ReadFile(1, "notes.md")
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if got != "first" {
+		t.Errorf("ReadFile() = %q, want %q", got, "first")
+	}
+
+	if err := s.WriteFile(1, "notes.md", "second"); err != nil {
+		t.Fatalf("WriteFile() overwrite error = %v", err)
+	}
+	got, err = s.ReadFile(1, "notes.md")
+	if err != nil {
+		t.Fatalf("ReadFile() after overwrite error = %v", err)
+	}
+	if got != "second" {
+		t.Errorf("ReadFile() after overwrite = %q, want %q", got, "second")
+	}
+}
+
+func TestMarkdownStorage_ReadFile_NotFound(t *testing.T) {
+	dir := t.TempDir()
+	s := NewMarkdownStorage(dir)
+	tk := makeTestTask(1)
+	if err := s.Save(tk); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	if _, err := s.ReadFile(1, "missing.md"); err == nil {
+		t.Fatal("expected ReadFile() to error for a file that was never written")
+	}
+}
+
+func TestMarkdownStorage_ReadFile_TaskNotFound(t *testing.T) {
+	dir := t.TempDir()
+	s := NewMarkdownStorage(dir)
+
+	if _, err := s.ReadFile(999, "notes.md"); err == nil {
+		t.Fatal("expected ReadFile() to error for a task that does not exist")
+	}
+}
+
+func TestMarkdownStorage_ListFiles_ExcludesTaskMarkdown(t *testing.T) {
+	dir := t.TempDir()
+	s := NewMarkdownStorage(dir)
+	tk := makeTestTask(1)
+	if err := s.Save(tk); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	if err := s.WriteFile(1, "notes.md", "a"); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := s.WriteFile(1, "design.md", "b"); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	names, err := s.ListFiles(1)
+	if err != nil {
+		t.Fatalf("ListFiles() error = %v", err)
+	}
+	if len(names) != 2 {
+		t.Fatalf("ListFiles() returned %d names, want 2: %v", len(names), names)
+	}
+	for _, n := range names {
+		if n == "001.md" {
+			t.Error("ListFiles() should exclude the task's own record file")
+		}
+	}
+}
+
+func TestMarkdownStorage_ListFiles_EmptyWhenNoAttachedFiles(t *testing.T) {
+	dir := t.TempDir()
+	s := NewMarkdownStorage(dir)
+	tk := makeTestTask(1)
+	if err := s.Save(tk); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	names, err := s.ListFiles(1)
+	if err != nil {
+		t.Fatalf("ListFiles() error = %v", err)
+	}
+	if len(names) != 0 {
+		t.Errorf("ListFiles() = %v, want empty", names)
+	}
+}
+
+func TestMarkdownStorage_ReadListFiles_WorkOnArchivedTask(t *testing.T) {
+	dir := t.TempDir()
+	s := NewMarkdownStorage(dir)
+	tk := makeTestTask(1)
+	if err := s.Save(tk); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	if err := s.WriteFile(1, "notes.md", "content"); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := s.Archive(1); err != nil {
+		t.Fatalf("Archive() error = %v", err)
+	}
+
+	got, err := s.ReadFile(1, "notes.md")
+	if err != nil {
+		t.Fatalf("ReadFile() on archived task error = %v", err)
+	}
+	if got != "content" {
+		t.Errorf("ReadFile() on archived task = %q, want %q", got, "content")
+	}
+
+	names, err := s.ListFiles(1)
+	if err != nil {
+		t.Fatalf("ListFiles() on archived task error = %v", err)
+	}
+	if len(names) != 1 || names[0] != "notes.md" {
+		t.Errorf("ListFiles() on archived task = %v, want [notes.md]", names)
+	}
+}
+
+func TestMarkdownStorage_WriteFile_RejectsInvalidFilenames(t *testing.T) {
+	dir := t.TempDir()
+	s := NewMarkdownStorage(dir)
+	tk := makeTestTask(1)
+	if err := s.Save(tk); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	invalid := []string{"", "   ", "../escape.md", "sub/dir.md", "sub\\dir.md", "..", "001.md"}
+	for _, name := range invalid {
+		if err := s.WriteFile(1, name, "x"); err == nil {
+			t.Errorf("WriteFile(%q) expected error, got nil", name)
+		}
 	}
 }

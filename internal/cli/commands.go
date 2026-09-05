@@ -23,7 +23,7 @@ func initServiceWithConfig(cfg *config.Config) (*task.Service, error) {
 	tasksDir := cfg.TasksDir()
 	mdStorage := storage.NewMarkdownStorage(tasksDir)
 	index := storage.NewIndex(tasksDir, mdStorage)
-	svc := task.NewService(mdStorage, mdStorage, index, cfg.TaskTypes, cfg)
+	svc := task.NewService(mdStorage, mdStorage, mdStorage, index, cfg.TaskTypes, cfg)
 
 	if err := svc.Initialize(); err != nil {
 		return nil, fmt.Errorf("failed to initialize: %w", err)
@@ -399,6 +399,61 @@ func cmdArchive(stdout, stderr io.Writer, jsonOutput bool, id int) int {
 		fmt.Fprintln(stdout, msg)
 	}
 
+	return 0
+}
+
+// cmdWriteTaskFile handles the write-task-file command
+func cmdWriteTaskFile(stdout, stderr io.Writer, id int, filename, content string) int {
+	svc, _, err := initService()
+	if err != nil {
+		fmt.Fprintf(stderr, "Error: %v\n", err)
+		return 1
+	}
+
+	if err := svc.WriteTaskFile(id, filename, content); err != nil {
+		fmt.Fprintf(stderr, "Error: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintf(stdout, "Wrote file %q to task #%d.\n", filename, id)
+	return 0
+}
+
+// cmdReadTaskFile handles the read-task-file command
+func cmdReadTaskFile(stdout, stderr io.Writer, id int, filename string) int {
+	svc, _, err := initService()
+	if err != nil {
+		fmt.Fprintf(stderr, "Error: %v\n", err)
+		return 1
+	}
+
+	content, err := svc.ReadTaskFile(id, filename)
+	if err != nil {
+		fmt.Fprintf(stderr, "Error: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprint(stdout, content)
+	return 0
+}
+
+// cmdListTaskFiles handles the list-task-files command
+func cmdListTaskFiles(stdout, stderr io.Writer, id int) int {
+	svc, _, err := initService()
+	if err != nil {
+		fmt.Fprintf(stderr, "Error: %v\n", err)
+		return 1
+	}
+
+	names, err := svc.ListTaskFiles(id)
+	if err != nil {
+		fmt.Fprintf(stderr, "Error: %v\n", err)
+		return 1
+	}
+
+	for _, name := range names {
+		fmt.Fprintln(stdout, name)
+	}
 	return 0
 }
 

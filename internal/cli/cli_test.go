@@ -454,6 +454,132 @@ func TestArchiveCommandNotDone(t *testing.T) {
 	}
 }
 
+func TestWriteTaskFileCommand(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("MCP_TASKS_DIR", tmpDir)
+
+	var stdout, stderr bytes.Buffer
+	RunWithArgs([]string{"mcp-task-manager", "create", "Task with files"}, &stdout, &stderr)
+
+	stdout.Reset()
+	stderr.Reset()
+	code := RunWithArgs([]string{"mcp-task-manager", "write-task-file", "1", "notes.md", "hello"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Errorf("expected exit code 0, got %d. stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "notes.md") {
+		t.Errorf("expected confirmation mentioning notes.md, got: %s", stdout.String())
+	}
+}
+
+func TestWriteTaskFileCommand_UnknownTask(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("MCP_TASKS_DIR", tmpDir)
+
+	var stdout, stderr bytes.Buffer
+	code := RunWithArgs([]string{"mcp-task-manager", "write-task-file", "999", "notes.md", "hello"}, &stdout, &stderr)
+
+	if code != 1 {
+		t.Errorf("expected exit code 1 for unknown task, got %d", code)
+	}
+}
+
+func TestWriteTaskFileCommand_ArchivedTask(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("MCP_TASKS_DIR", tmpDir)
+
+	var stdout, stderr bytes.Buffer
+	RunWithArgs([]string{"mcp-task-manager", "create", "Task to archive"}, &stdout, &stderr)
+	RunWithArgs([]string{"mcp-task-manager", "start", "1"}, &stdout, &stderr)
+	RunWithArgs([]string{"mcp-task-manager", "complete", "1"}, &stdout, &stderr)
+	RunWithArgs([]string{"mcp-task-manager", "archive", "1"}, &stdout, &stderr)
+
+	stdout.Reset()
+	stderr.Reset()
+	code := RunWithArgs([]string{"mcp-task-manager", "write-task-file", "1", "notes.md", "hello"}, &stdout, &stderr)
+
+	if code != 1 {
+		t.Errorf("expected exit code 1 writing to an archived task, got %d", code)
+	}
+}
+
+func TestReadTaskFileCommand(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("MCP_TASKS_DIR", tmpDir)
+
+	var stdout, stderr bytes.Buffer
+	RunWithArgs([]string{"mcp-task-manager", "create", "Task with files"}, &stdout, &stderr)
+	RunWithArgs([]string{"mcp-task-manager", "write-task-file", "1", "notes.md", "hello world"}, &stdout, &stderr)
+
+	stdout.Reset()
+	stderr.Reset()
+	code := RunWithArgs([]string{"mcp-task-manager", "read-task-file", "1", "notes.md"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Errorf("expected exit code 0, got %d. stderr: %s", code, stderr.String())
+	}
+	if stdout.String() != "hello world" {
+		t.Errorf("stdout = %q, want %q", stdout.String(), "hello world")
+	}
+}
+
+func TestReadTaskFileCommand_NotFound(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("MCP_TASKS_DIR", tmpDir)
+
+	var stdout, stderr bytes.Buffer
+	RunWithArgs([]string{"mcp-task-manager", "create", "Task with files"}, &stdout, &stderr)
+
+	stdout.Reset()
+	stderr.Reset()
+	code := RunWithArgs([]string{"mcp-task-manager", "read-task-file", "1", "missing.md"}, &stdout, &stderr)
+
+	if code != 1 {
+		t.Errorf("expected exit code 1 for a missing file, got %d", code)
+	}
+}
+
+func TestListTaskFilesCommand(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("MCP_TASKS_DIR", tmpDir)
+
+	var stdout, stderr bytes.Buffer
+	RunWithArgs([]string{"mcp-task-manager", "create", "Task with files"}, &stdout, &stderr)
+	RunWithArgs([]string{"mcp-task-manager", "write-task-file", "1", "notes.md", "a"}, &stdout, &stderr)
+	RunWithArgs([]string{"mcp-task-manager", "write-task-file", "1", "design.md", "b"}, &stdout, &stderr)
+
+	stdout.Reset()
+	stderr.Reset()
+	code := RunWithArgs([]string{"mcp-task-manager", "list-task-files", "1"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Errorf("expected exit code 0, got %d. stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "notes.md") || !strings.Contains(stdout.String(), "design.md") {
+		t.Errorf("expected both file names listed, got: %s", stdout.String())
+	}
+}
+
+func TestListTaskFilesCommand_Empty(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("MCP_TASKS_DIR", tmpDir)
+
+	var stdout, stderr bytes.Buffer
+	RunWithArgs([]string{"mcp-task-manager", "create", "Task with no files"}, &stdout, &stderr)
+
+	stdout.Reset()
+	stderr.Reset()
+	code := RunWithArgs([]string{"mcp-task-manager", "list-task-files", "1"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Errorf("expected exit code 0, got %d. stderr: %s", code, stderr.String())
+	}
+	if stdout.String() != "" {
+		t.Errorf("expected empty stdout for a task with no attached files, got: %q", stdout.String())
+	}
+}
+
 func TestListArchivedCommand(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("MCP_TASKS_DIR", tmpDir)

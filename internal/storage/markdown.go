@@ -30,10 +30,17 @@ func (s *MarkdownStorage) EnsureDir() error {
 }
 
 // taskPath returns the file path for a task ID
-func (s *MarkdownStorage) taskPath(id int) string {
-	return filepath.Join(s.dir, fmt.Sprintf("%03d.md", id))
+// taskDir returns the per-task directory path for a task ID
+func (s *MarkdownStorage) taskDir(id int) string {
+	return filepath.Join(s.dir, fmt.Sprintf("%03d", id))
 }
 
+// taskPath returns the file path for a task ID
+func (s *MarkdownStorage) taskPath(id int) string {
+	return filepath.Join(s.taskDir(id), fmt.Sprintf("%03d.md", id))
+}
+
+// Save writes a task to a markdown file
 // Save writes a task to a markdown file
 func (s *MarkdownStorage) Save(t *task.Task) error {
 	// Build frontmatter
@@ -69,6 +76,10 @@ func (s *MarkdownStorage) Save(t *task.Task) error {
 	buf.WriteString("---\n\n")
 	buf.WriteString(t.Description)
 
+	if err := os.MkdirAll(s.taskDir(t.ID), 0755); err != nil {
+		return err
+	}
+
 	// Atomic write: write to temp, then rename
 	tmpPath := s.taskPath(t.ID) + ".tmp"
 	if err := os.WriteFile(tmpPath, buf.Bytes(), 0644); err != nil {
@@ -87,10 +98,12 @@ func (s *MarkdownStorage) Load(id int) (*task.Task, error) {
 }
 
 // Delete removes a task file
+// Delete removes a task's directory (the task's .md file and any attached files)
 func (s *MarkdownStorage) Delete(id int) error {
-	return os.Remove(s.taskPath(id))
+	return os.RemoveAll(s.taskDir(id))
 }
 
+// LoadAll reads all tasks from the directory
 // LoadAll reads all tasks from the directory
 func (s *MarkdownStorage) LoadAll() ([]*task.Task, error) {
 	entries, err := os.ReadDir(s.dir)
@@ -103,15 +116,15 @@ func (s *MarkdownStorage) LoadAll() ([]*task.Task, error) {
 
 	var tasks []*task.Task
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+		if !entry.IsDir() {
 			continue
 		}
-		// Skip index file
-		if entry.Name() == ".index.json" {
+		id, err := strconv.Atoi(entry.Name())
+		if err != nil || id <= 0 {
 			continue
 		}
 
-		data, err := os.ReadFile(filepath.Join(s.dir, entry.Name()))
+		data, err := os.ReadFile(filepath.Join(s.dir, entry.Name(), entry.Name()+".md"))
 		if err != nil {
 			continue
 		}
@@ -205,17 +218,24 @@ func parseTime(s string) (t time.Time, err error) {
 }
 
 // archivePath returns the file path for an archived task ID
+// archiveTaskDir returns the per-task archive directory path for a task ID
+func (s *MarkdownStorage) archiveTaskDir(id int) string {
+	return filepath.Join(s.dir, "archive", fmt.Sprintf("%03d", id))
+}
+
+// archivePath returns the file path for an archived task ID
 func (s *MarkdownStorage) archivePath(id int) string {
-	return filepath.Join(s.dir, "archive", fmt.Sprintf("%03d.md", id))
+	return filepath.Join(s.archiveTaskDir(id), fmt.Sprintf("%03d.md", id))
 }
 
 // Archive moves a task file from the tasks directory to the archive subdirectory
+// Archive moves a task's directory from the tasks directory to the archive subdirectory
 func (s *MarkdownStorage) Archive(id int) error {
 	archiveDir := filepath.Join(s.dir, "archive")
 	if err := os.MkdirAll(archiveDir, 0755); err != nil {
 		return err
 	}
-	return os.Rename(s.taskPath(id), s.archivePath(id))
+	return os.Rename(s.taskDir(id), s.archiveTaskDir(id))
 }
 
 // LoadArchived reads an archived task from the archive directory
@@ -227,6 +247,7 @@ func (s *MarkdownStorage) LoadArchived(id int) (*task.Task, error) {
 	return s.parse(data)
 }
 
+// LoadAllArchived reads all archived tasks from the archive subdirectory
 // LoadAllArchived reads all archived tasks from the archive subdirectory
 func (s *MarkdownStorage) LoadAllArchived() ([]*task.Task, error) {
 	archiveDir := filepath.Join(s.dir, "archive")
@@ -240,11 +261,15 @@ func (s *MarkdownStorage) LoadAllArchived() ([]*task.Task, error) {
 
 	var tasks []*task.Task
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+		if !entry.IsDir() {
+			continue
+		}
+		id, err := strconv.Atoi(entry.Name())
+		if err != nil || id <= 0 {
 			continue
 		}
 
-		data, err := os.ReadFile(filepath.Join(archiveDir, entry.Name()))
+		data, err := os.ReadFile(filepath.Join(archiveDir, entry.Name(), entry.Name()+".md"))
 		if err != nil {
 			continue
 		}
@@ -294,11 +319,10 @@ func maxMarkdownTaskID(dir string) (int, error) {
 
 	maxID := 0
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+		if !entry.IsDir() {
 			continue
 		}
-		name := strings.TrimSuffix(entry.Name(), ".md")
-		if id, err := strconv.Atoi(name); err == nil && id > maxID {
+		if id, err := strconv.Atoi(entry.Name()); err == nil && id > maxID {
 			maxID = id
 		}
 	}

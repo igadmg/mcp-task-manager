@@ -38,6 +38,38 @@ func TestRegisterDocumentsAllowedTypeValues(t *testing.T) {
 	)
 }
 
+func TestRegisterDocumentsFileTools(t *testing.T) {
+	s := server.NewMCPServer("test-server", "1.0.0")
+	Register(s, nil, []string{"feature", "bug"}, []string{"blocked_by", "relates_to", "duplicate_of"})
+
+	tools := s.ListTools()
+
+	cases := []struct {
+		name     string
+		required []string
+	}{
+		{"write_task_file", []string{"task_id", "filename", "content"}},
+		{"read_task_file", []string{"task_id", "filename"}},
+		{"list_task_files", []string{"task_id"}},
+	}
+
+	for _, c := range cases {
+		tool, ok := tools[c.name]
+		if !ok {
+			t.Fatalf("tool %q not registered", c.name)
+			continue
+		}
+		for _, name := range c.required {
+			if _, ok := tool.Tool.InputSchema.Properties[name]; !ok {
+				t.Errorf("tool %q: property %q not found", c.name, name)
+			}
+		}
+		if len(tool.Tool.InputSchema.Required) != len(c.required) {
+			t.Errorf("tool %q: required = %v, want %v", c.name, tool.Tool.InputSchema.Required, c.required)
+		}
+	}
+}
+
 func assertStringProperty(t *testing.T, properties map[string]any, name, wantDescriptionSuffix string, wantEnum []string) {
 	t.Helper()
 

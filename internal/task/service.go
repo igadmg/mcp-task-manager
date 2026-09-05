@@ -19,6 +19,10 @@ type Storage interface {
 	Load(id int) (*Task, error)
 	Delete(id int) error
 	EnsureDir() error
+	// MigrateFlatLayout migrates any task still stored in the legacy flat
+	// file layout into the current per-task directory layout. Called once
+	// by Service.Initialize(), before the index loads.
+	MigrateFlatLayout() error
 }
 
 // RelationEdge represents a directed relation between two tasks in the index
@@ -65,20 +69,33 @@ type ArchiveStorage interface {
 	IsArchived(id int) bool
 }
 
+// FileStorage manages free-form named text files attached to a task,
+// stored alongside the task's own {id}.md inside its per-task directory.
+// Because attached files share that directory, Archive/Delete already
+// move or remove them as a side effect of moving/removing the directory -
+// no separate cascade logic is needed here.
+type FileStorage interface {
+	WriteFile(taskID int, filename, content string) error
+	ReadFile(taskID int, filename string) (string, error)
+	ListFiles(taskID int) ([]string, error)
+}
+
 // Service provides task management operations
 type Service struct {
 	storage        Storage
 	archiveStorage ArchiveStorage
+	fileStorage    FileStorage
 	index          Index
 	validTypes     []string
 	config         *config.Config
 }
 
 // NewService creates a new task service
-func NewService(storage Storage, archiveStorage ArchiveStorage, index Index, validTypes []string, cfg *config.Config) *Service {
+func NewService(storage Storage, archiveStorage ArchiveStorage, fileStorage FileStorage, index Index, validTypes []string, cfg *config.Config) *Service {
 	return &Service{
 		storage:        storage,
 		archiveStorage: archiveStorage,
+		fileStorage:    fileStorage,
 		index:          index,
 		validTypes:     validTypes,
 		config:         cfg,
@@ -100,7 +117,13 @@ func (s *Service) ProjectFound() bool {
 }
 
 // Initialize loads the index if directory exists (does not create directory)
+// Initialize loads the index if directory exists (does not create directory)
 func (s *Service) Initialize() error {
+	// Migrate any legacy flat-layout tasks before the index scans the
+	// directory, so LoadAll/Rebuild only ever sees the current layout.
+	if err := s.storage.MigrateFlatLayout(); err != nil {
+		return err
+	}
 	// Only load index, don't create directory - that happens on first write
 	if err := s.index.Load(); err != nil {
 		return err
@@ -197,6 +220,36 @@ func (s *Service) GetWithSubtasks(id int) (*Task, []*Task, error) {
 	}
 	subtasks := s.index.GetSubtasks(id)
 	return t, subtasks, nil
+}
+
+// WriteTaskFile creates or overwrites a named file attached to the given
+// task. Only active tasks accept writes - archived tasks are read-only.
+func (s *Service) WriteTaskFile(taskID int, filename, content string) error {
+	if _, ok := s.index.Get(taskID); !ok {
+		if s.archiveStorage != nil && s.archiveStorage.IsArchived(taskID) {
+			return fmt.Errorf("task %d is archived; files are read-only", taskID)
+		}
+		return fmt.Errorf("task not found: %d", taskID)
+	}
+	return s.fileStorage.WriteFile(taskID, filename, content)
+}
+
+// ReadTaskFile returns the content of a named file attached to the given
+// task. Works for both active and archived tasks.
+func (s *Service) ReadTaskFile(taskID int, filename string) (string, error) {
+	if _, err := s.Get(taskID); err != nil {
+		return "", err
+	}
+	return s.fileStorage.ReadFile(taskID, filename)
+}
+
+// ListTaskFiles returns the names of all files attached to the given task.
+// Works for both active and archived tasks.
+func (s *Service) ListTaskFiles(taskID int) ([]string, error) {
+	if _, err := s.Get(taskID); err != nil {
+		return nil, err
+	}
+	return s.fileStorage.ListFiles(taskID)
 }
 
 // GetSubtaskCounts returns the count of subtasks for a task

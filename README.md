@@ -4,11 +4,12 @@ A Go-based MCP (Model Context Protocol) server for task management, designed for
 
 ## Overview
 
-MCP Task Manager provides a simple but powerful task management system that integrates with AI coding assistants via the Model Context Protocol. Tasks are stored as human-readable Markdown files with YAML frontmatter, making them easy to version control and inspect.
+MCP Task Manager provides a simple but powerful task management system that integrates with AI coding assistants via the Model Context Protocol. Tasks are stored as human-readable Markdown files with YAML frontmatter in a per-task directory, making them easy to version control and inspect.
 
 ### Features
 
-- **Markdown-based storage** - Tasks stored as `.md` files with YAML frontmatter
+- **Markdown-based storage** - Each task lives in its own directory (`tasks/{id}/{id}.md`) with YAML frontmatter
+- **Attached files** - `write_task_file`, `read_task_file`, `list_task_files` let an agent attach free-form notes, research, or design docs to a task; they move and are removed together with the task on archive/delete
 - **Priority-based workflow** - Critical > High > Medium > Low, with oldest-first tiebreaker
 - **Agent-friendly tools** - `get_next_task`, `start_task`, `complete_task` for automated workflows
 - **Self-healing index** - JSON index cache rebuilds automatically from source files
@@ -88,6 +89,12 @@ mcp-task-manager delete 1
 mcp-task-manager next              # Get highest priority todo task
 mcp-task-manager start 1           # Start a task (todo -> in_progress)
 mcp-task-manager complete 1        # Complete a task (in_progress -> done)
+mcp-task-manager archive 1         # Archive a completed task
+
+# Attached files
+mcp-task-manager write-task-file 1 notes.md "some research notes"
+mcp-task-manager read-task-file 1 notes.md
+mcp-task-manager list-task-files 1
 
 # Other
 mcp-task-manager version
@@ -106,9 +113,13 @@ mcp-task-manager --help
 | `next` | Get highest priority todo task |
 | `start <id>` | Move task to in_progress |
 | `complete <id>` | Move task to done |
+| `archive <id>` | Archive a completed task (moves its directory, including attached files, to `tasks/archive/`) |
+| `write-task-file <task-id> <filename> <content>` | Create or overwrite a file attached to a task (rejected for archived tasks) |
+| `read-task-file <task-id> <filename>` | Print the content of a file attached to a task |
+| `list-task-files <task-id>` | Print the names of all files attached to a task, one per line |
 | `version` | Show version |
 
-All commands support `--json` / `-j` for JSON output.
+All commands except `write-task-file`/`read-task-file`/`list-task-files` support `--json` / `-j` for JSON output (file content and filename lists have no distinct JSON shape worth adding).
 
 ### Claude Desktop Integration
 
@@ -199,6 +210,15 @@ The model/reasoning settings are capability-based recommendations. The workflow 
 | `list_tasks` | List tasks with optional filters (status, priority, `type`); use `parent_id` filter for subtasks. Allowed task `type` values come from config and default to `feature`, `bug`. |
 | `get_task` | Get full details of a task by ID (includes subtasks for parent tasks) |
 | `delete_task` | Remove a task; use `delete_subtasks` to cascade |
+| `archive_task` | Archive a completed task (moves its directory, including attached files, to `tasks/archive/`) |
+
+### Attached Files
+
+| Tool | Description |
+|------|-------------|
+| `write_task_file` | Create or overwrite a named text file attached to a task (rejected for archived tasks) |
+| `read_task_file` | Read the content of a named file attached to a task (active or archived) |
+| `list_task_files` | List the names of all files attached to a task (active or archived) |
 
 ### Agent Workflow
 
@@ -244,7 +264,7 @@ The `relation_types` list defines the allowed values for every relation `type` f
 
 ## Task Format
 
-Tasks are stored as Markdown files with YAML frontmatter:
+Each task is stored at `tasks/{id}/{id}.md` (e.g. `tasks/001/001.md`) as a Markdown file with YAML frontmatter. Any files attached via `write_task_file` / `write-task-file` live alongside it in the same `tasks/{id}/` directory.
 
 ```yaml
 ---
@@ -309,7 +329,7 @@ mcp-task-manager/
 │   ├── storage/             # Markdown + index storage
 │   ├── task/                # Task model and service
 │   └── tools/               # MCP tool handlers
-├── tasks/                   # Task storage (created at runtime)
+├── tasks/                   # Task storage (created at runtime); tasks/{id}/{id}.md plus attached files
 ├── mcp-tasks.yaml           # Configuration file
 └── CLAUDE.md                # AI assistant instructions
 ```
