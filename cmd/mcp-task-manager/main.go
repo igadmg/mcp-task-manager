@@ -18,6 +18,9 @@ import (
 //go:embed icon.png
 var iconPNG []byte
 
+//go:embed instructions.md
+var instructionsMD string
+
 func main() {
 	// CLI mode if any arguments provided
 	if len(os.Args) > 1 {
@@ -48,6 +51,7 @@ func main() {
 		"mcp-task-manager",
 		"0.1.0",
 		server.WithToolCapabilities(false),
+		server.WithInstructions(instructionsMD),
 		server.WithIcons(mcp.Icon{
 			Src:      "data:image/png;base64," + base64.StdEncoding.EncodeToString(iconPNG),
 			MIMEType: "image/png",
