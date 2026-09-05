@@ -1,6 +1,8 @@
 package main
 
 import (
+	_ "embed"
+	"encoding/base64"
 	"log"
 	"os"
 
@@ -9,8 +11,12 @@ import (
 	"github.com/gpayer/mcp-task-manager/internal/storage"
 	"github.com/gpayer/mcp-task-manager/internal/task"
 	"github.com/gpayer/mcp-task-manager/internal/tools"
+	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
+
+//go:embed icon.png
+var iconPNG []byte
 
 func main() {
 	// CLI mode if any arguments provided
@@ -42,6 +48,11 @@ func main() {
 		"mcp-task-manager",
 		"0.1.0",
 		server.WithToolCapabilities(false),
+		server.WithIcons(mcp.Icon{
+			Src:      "data:image/png;base64," + base64.StdEncoding.EncodeToString(iconPNG),
+			MIMEType: "image/png",
+			Sizes:    []string{"128x128"},
+		}),
 	)
 
 	// Register tools
