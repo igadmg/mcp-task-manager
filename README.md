@@ -62,6 +62,28 @@ The MCP server communicates via stdio:
 mcp-task-manager
 ```
 
+Task storage is resolved relative to the process's current working directory (`./tasks`, or the path in `MCP_TASKS_DIR` — see [Environment Variables](#environment-variables)). An MCP client normally launches the server with its working directory set to the project it's operating on, so each project gets its own `tasks/` directory automatically — no per-project server instance or config needed.
+
+#### Running a Locally Built Binary Against a Project
+
+To try a locally built binary against a real project before installing it system-wide:
+
+```bash
+# Build once, from the mcp-task-manager repo
+go build -o mcp-task-manager ./cmd/mcp-task-manager
+
+# Run it from inside the target project (stdio mode, for an MCP client)
+cd /path/to/your-project
+/path/to/mcp-task-manager/mcp-task-manager
+
+# Or exercise it directly via the CLI first
+cd /path/to/your-project
+/path/to/mcp-task-manager/mcp-task-manager create "First task"
+/path/to/mcp-task-manager/mcp-task-manager list
+```
+
+This creates `tasks/` inside `your-project`. Point your MCP client (see the integration sections below, including [VS Code Integration](#vs-code-integration)) at the absolute path of the binary you just built instead of a system-installed one to test local changes.
+
 ### CLI Usage
 
 The same binary also works as a standalone CLI tool when called with arguments:
@@ -198,6 +220,43 @@ The plugin package wires in the MCP server definition from `plugins/mcp-task-man
 Use the Codex skill `$superpowers-workflow` or the packaged command `/execute-all` to automatically execute pending tasks. The workflow spawns ordinary subagents and includes the complete planner, coder, and reviewer role contracts in the relevant subagent initial prompts.
 
 The model/reasoning settings are capability-based recommendations. The workflow applies them only when the active subagent tool supports those controls and they are not overridden by user choice, model availability, policy, cost/latency constraints, or task-specific needs.
+
+### VS Code Integration
+
+VS Code (with GitHub Copilot Chat's agent mode) can launch MCP servers per-workspace, which is a natural fit for project-local task storage: each project gets its own `tasks/` directory automatically, without editing global config.
+
+**Setup:**
+
+1. Install the binary, or build it locally (see [Build from Source](#build-from-source)):
+
+```bash
+go install github.com/gpayer/mcp-task-manager/cmd/mcp-task-manager@latest
+```
+
+2. In your project's root, create `.vscode/mcp.json`:
+
+```json
+{
+  "servers": {
+    "task-manager": {
+      "type": "stdio",
+      "command": "mcp-task-manager"
+    }
+  }
+}
+```
+
+Use an absolute path in `command` if the binary isn't on your `PATH` (e.g. a locally built one — see [Running a Locally Built Binary Against a Project](#running-a-locally-built-binary-against-a-project)).
+
+Alternatively, run **MCP: Add Server** from the Command Palette (`Cmd/Ctrl+Shift+P`), choose **Command (stdio)**, point it at the `mcp-task-manager` binary, and select **Workspace Settings** to have VS Code write this file for you.
+
+3. Reload the window, or run **MCP: List Servers** from the Command Palette and start `task-manager` from there.
+
+**Usage:**
+
+VS Code launches the server with the workspace root as its working directory, so tasks are stored in `<workspace>/tasks`. Open Copilot Chat, switch to **Agent** mode, and the task-manager tools (`create_task`, `get_next_task`, etc.) become available to the agent — check the tools list (🛠️) in the chat input to confirm they're enabled.
+
+To make the server available across every workspace instead of configuring it per project, use **MCP: Add Server** and choose **User Settings** (previously **Global**) instead of **Workspace Settings**. VS Code still launches the server with the current workspace as its working directory, so task storage stays project-local unless you pin it elsewhere with `MCP_TASKS_DIR`.
 
 ## MCP Tools
 
