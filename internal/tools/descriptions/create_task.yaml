@@ -1,0 +1,12 @@
+description: Create a new task
+params:
+  title: Task title
+  description: Task description (markdown supported)
+  priority: Task priority
+  type: Task type.
+  parent_id: Parent task ID (creates a subtask)
+  id: >-
+    Optional custom task id, used verbatim as the id and storage directory name
+    instead of the next auto-increment id. Validated like attached filenames
+    (non-empty, no '/' or '\', not '..'); "0", "archive", and ".index.json" are
+    reserved. Must not already exist (active or archived).

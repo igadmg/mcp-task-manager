@@ -1,0 +1,7 @@
+description: List tasks with optional filters
+params:
+  status: Filter by status
+  priority: Filter by priority
+  type: Filter by task type.
+  parent_id: Filter by parent task ID (0 for top-level tasks, omit for top-level by default)
+  archived: If true, list archived tasks instead of active tasks

@@ -1,0 +1,8 @@
+description: Update an existing task
+params:
+  id: Task ID
+  title: New title
+  description: New description
+  status: New status
+  priority: New priority
+  type: New task type.

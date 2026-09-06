@@ -1,0 +1,5 @@
+description: Remove a relation between two tasks
+params:
+  source: Source task ID
+  type: Relation type.
+  target: Target task ID

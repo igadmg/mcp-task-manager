@@ -1,0 +1,3 @@
+description: List the names of all files attached to a task
+params:
+  task_id: Task ID

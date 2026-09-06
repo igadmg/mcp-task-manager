@@ -11,39 +11,41 @@ import (
 
 func registerRelationTools(s *server.MCPServer, svc *task.Service, relationTypes []string) {
 	// add_relation
+	addText := textFor("add_relation")
 	addTool := mcp.NewTool("add_relation",
-		mcp.WithDescription("Add a relation between two tasks"),
+		mcp.WithDescription(addText.Description),
 		mcp.WithString("source",
 			mcp.Required(),
-			mcp.Description("Source task ID"),
+			mcp.Description(addText.param("source")),
 		),
 		mcp.WithString("type",
 			mcp.Required(),
-			mcp.Description(allowedValuesDescription("Relation type.", relationTypes)),
+			mcp.Description(allowedValuesDescription(addText.param("type"), relationTypes)),
 			mcp.Enum(relationTypes...),
 		),
 		mcp.WithString("target",
 			mcp.Required(),
-			mcp.Description("Target task ID"),
+			mcp.Description(addText.param("target")),
 		),
 	)
 	s.AddTool(addTool, addRelationHandler(svc))
 
 	// remove_relation
+	removeText := textFor("remove_relation")
 	removeTool := mcp.NewTool("remove_relation",
-		mcp.WithDescription("Remove a relation between two tasks"),
+		mcp.WithDescription(removeText.Description),
 		mcp.WithString("source",
 			mcp.Required(),
-			mcp.Description("Source task ID"),
+			mcp.Description(removeText.param("source")),
 		),
 		mcp.WithString("type",
 			mcp.Required(),
-			mcp.Description(allowedValuesDescription("Relation type.", relationTypes)),
+			mcp.Description(allowedValuesDescription(removeText.param("type"), relationTypes)),
 			mcp.Enum(relationTypes...),
 		),
 		mcp.WithString("target",
 			mcp.Required(),
-			mcp.Description("Target task ID"),
+			mcp.Description(removeText.param("target")),
 		),
 	)
 	s.AddTool(removeTool, removeRelationHandler(svc))

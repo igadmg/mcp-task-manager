@@ -1,0 +1,3 @@
+description: Move a task from in_progress to done
+params:
+  id: Task ID to complete

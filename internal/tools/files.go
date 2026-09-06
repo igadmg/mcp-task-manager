@@ -12,43 +12,46 @@ import (
 
 func registerFileTools(s *server.MCPServer, svc *task.Service) {
 	// write_task_file
+	writeText := textFor("write_task_file")
 	writeTool := mcp.NewTool("write_task_file",
-		mcp.WithDescription("Create or overwrite a named text file attached to a task"),
+		mcp.WithDescription(writeText.Description),
 		mcp.WithString("task_id",
 			mcp.Required(),
-			mcp.Description("Task ID"),
+			mcp.Description(writeText.param("task_id")),
 		),
 		mcp.WithString("filename",
 			mcp.Required(),
-			mcp.Description("Name of the attached file"),
+			mcp.Description(writeText.param("filename")),
 		),
 		mcp.WithString("content",
 			mcp.Required(),
-			mcp.Description("File content"),
+			mcp.Description(writeText.param("content")),
 		),
 	)
 	s.AddTool(writeTool, writeTaskFileHandler(svc))
 
 	// read_task_file
+	readText := textFor("read_task_file")
 	readTool := mcp.NewTool("read_task_file",
-		mcp.WithDescription("Read the content of a named text file attached to a task"),
+		mcp.WithDescription(readText.Description),
 		mcp.WithString("task_id",
 			mcp.Required(),
-			mcp.Description("Task ID"),
+			mcp.Description(readText.param("task_id")),
 		),
 		mcp.WithString("filename",
 			mcp.Required(),
-			mcp.Description("Name of the attached file"),
+			mcp.Description(readText.param("filename")),
 		),
 	)
 	s.AddTool(readTool, readTaskFileHandler(svc))
 
 	// list_task_files
+	listText := textFor("list_task_files")
 	listTool := mcp.NewTool("list_task_files",
-		mcp.WithDescription("List the names of all files attached to a task"),
+		mcp.WithDescription(listText.Description),
 		mcp.WithString("task_id",
 			mcp.Required(),
-			mcp.Description("Task ID"),
+			mcp.Description(listText.param("task_id")),
 		),
 	)
 	s.AddTool(listTool, listTaskFilesHandler(svc))

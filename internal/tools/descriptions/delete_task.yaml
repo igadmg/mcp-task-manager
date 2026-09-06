@@ -1,0 +1,4 @@
+description: Delete a task
+params:
+  id: Task ID
+  delete_subtasks: If true, also delete all subtasks (required if task has subtasks)

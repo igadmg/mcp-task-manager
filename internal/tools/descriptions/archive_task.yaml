@@ -1,0 +1,3 @@
+description: Archive a completed task (moves to archive directory)
+params:
+  id: Task ID to archive

@@ -12,115 +12,121 @@ import (
 
 func registerManagementTools(s *server.MCPServer, svc *task.Service, validTypes []string) {
 	// create_task
+	createText := textFor("create_task")
 	createTool := mcp.NewTool("create_task",
-		mcp.WithDescription("Create a new task"),
+		mcp.WithDescription(createText.Description),
 		mcp.WithString("title",
 			mcp.Required(),
-			mcp.Description("Task title"),
+			mcp.Description(createText.param("title")),
 		),
 		mcp.WithString("description",
-			mcp.Description("Task description (markdown supported)"),
+			mcp.Description(createText.param("description")),
 		),
 		mcp.WithString("priority",
 			mcp.Required(),
-			mcp.Description("Task priority"),
+			mcp.Description(createText.param("priority")),
 			mcp.Enum("critical", "high", "medium", "low"),
 		),
 		mcp.WithString("type",
 			mcp.Required(),
-			mcp.Description(allowedValuesDescription("Task type.", validTypes)),
+			mcp.Description(allowedValuesDescription(createText.param("type"), validTypes)),
 			mcp.Enum(validTypes...),
 		),
 		mcp.WithString("parent_id",
-			mcp.Description("Parent task ID (creates a subtask)"),
+			mcp.Description(createText.param("parent_id")),
 		),
 		mcp.WithString("id",
-			mcp.Description("Optional custom task id, used verbatim as the id and storage directory name instead of the next auto-increment id. Validated like attached filenames (non-empty, no '/' or '\\', not '..'); \"0\", \"archive\", and \".index.json\" are reserved. Must not already exist (active or archived)."),
+			mcp.Description(createText.param("id")),
 		),
 	)
 	s.AddTool(createTool, createTaskHandler(svc))
 
 	// get_task
+	getText := textFor("get_task")
 	getTool := mcp.NewTool("get_task",
-		mcp.WithDescription("Get a task by ID"),
+		mcp.WithDescription(getText.Description),
 		mcp.WithString("id",
 			mcp.Required(),
-			mcp.Description("Task ID"),
+			mcp.Description(getText.param("id")),
 		),
 	)
 	s.AddTool(getTool, getTaskHandler(svc))
 
 	// update_task
+	updateText := textFor("update_task")
 	updateTool := mcp.NewTool("update_task",
-		mcp.WithDescription("Update an existing task"),
+		mcp.WithDescription(updateText.Description),
 		mcp.WithString("id",
 			mcp.Required(),
-			mcp.Description("Task ID"),
+			mcp.Description(updateText.param("id")),
 		),
 		mcp.WithString("title",
-			mcp.Description("New title"),
+			mcp.Description(updateText.param("title")),
 		),
 		mcp.WithString("description",
-			mcp.Description("New description"),
+			mcp.Description(updateText.param("description")),
 		),
 		mcp.WithString("status",
-			mcp.Description("New status"),
+			mcp.Description(updateText.param("status")),
 			mcp.Enum("todo", "in_progress", "done"),
 		),
 		mcp.WithString("priority",
-			mcp.Description("New priority"),
+			mcp.Description(updateText.param("priority")),
 			mcp.Enum("critical", "high", "medium", "low"),
 		),
 		mcp.WithString("type",
-			mcp.Description(allowedValuesDescription("New task type.", validTypes)),
+			mcp.Description(allowedValuesDescription(updateText.param("type"), validTypes)),
 			mcp.Enum(validTypes...),
 		),
 	)
 	s.AddTool(updateTool, updateTaskHandler(svc))
 
 	// delete_task
+	deleteText := textFor("delete_task")
 	deleteTool := mcp.NewTool("delete_task",
-		mcp.WithDescription("Delete a task"),
+		mcp.WithDescription(deleteText.Description),
 		mcp.WithString("id",
 			mcp.Required(),
-			mcp.Description("Task ID"),
+			mcp.Description(deleteText.param("id")),
 		),
 		mcp.WithBoolean("delete_subtasks",
-			mcp.Description("If true, also delete all subtasks (required if task has subtasks)"),
+			mcp.Description(deleteText.param("delete_subtasks")),
 		),
 	)
 	s.AddTool(deleteTool, deleteTaskHandler(svc))
 
 	// list_tasks
+	listText := textFor("list_tasks")
 	listTool := mcp.NewTool("list_tasks",
-		mcp.WithDescription("List tasks with optional filters"),
+		mcp.WithDescription(listText.Description),
 		mcp.WithString("status",
-			mcp.Description("Filter by status"),
+			mcp.Description(listText.param("status")),
 			mcp.Enum("todo", "in_progress", "done"),
 		),
 		mcp.WithString("priority",
-			mcp.Description("Filter by priority"),
+			mcp.Description(listText.param("priority")),
 			mcp.Enum("critical", "high", "medium", "low"),
 		),
 		mcp.WithString("type",
-			mcp.Description(allowedValuesDescription("Filter by task type.", validTypes)),
+			mcp.Description(allowedValuesDescription(listText.param("type"), validTypes)),
 			mcp.Enum(validTypes...),
 		),
 		mcp.WithString("parent_id",
-			mcp.Description("Filter by parent task ID (0 for top-level tasks, omit for top-level by default)"),
+			mcp.Description(listText.param("parent_id")),
 		),
 		mcp.WithBoolean("archived",
-			mcp.Description("If true, list archived tasks instead of active tasks"),
+			mcp.Description(listText.param("archived")),
 		),
 	)
 	s.AddTool(listTool, listTasksHandler(svc))
 
 	// archive_task
+	archiveText := textFor("archive_task")
 	archiveTool := mcp.NewTool("archive_task",
-		mcp.WithDescription("Archive a completed task (moves to archive directory)"),
+		mcp.WithDescription(archiveText.Description),
 		mcp.WithString("id",
 			mcp.Required(),
-			mcp.Description("Task ID to archive"),
+			mcp.Description(archiveText.param("id")),
 		),
 	)
 	s.AddTool(archiveTool, archiveTaskHandler(svc))
