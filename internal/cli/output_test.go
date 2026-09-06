@@ -13,7 +13,7 @@ func TestFormatTaskDetail(t *testing.T) {
 	created := time.Date(2025, 1, 15, 10, 30, 0, 0, time.UTC)
 	updated := time.Date(2025, 1, 15, 11, 0, 0, 0, time.UTC)
 	tk := &task.Task{
-		ID:          1,
+		ID:          "1",
 		Title:       "Test task",
 		Description: "A test description",
 		Status:      task.StatusTodo,
@@ -45,9 +45,9 @@ func TestFormatTaskDetail(t *testing.T) {
 func TestFormatTaskDetailWithSubtasks(t *testing.T) {
 	created := time.Date(2025, 1, 15, 10, 30, 0, 0, time.UTC)
 	updated := time.Date(2025, 1, 15, 11, 0, 0, 0, time.UTC)
-	parentID := 1
+	parentID := "1"
 	tk := &task.Task{
-		ID:        1,
+		ID:        "1",
 		Title:     "Parent task",
 		Status:    task.StatusInProgress,
 		Priority:  task.PriorityHigh,
@@ -56,8 +56,8 @@ func TestFormatTaskDetailWithSubtasks(t *testing.T) {
 		UpdatedAt: updated,
 	}
 	subtasks := []*task.Task{
-		{ID: 2, Title: "Subtask 1", Status: task.StatusDone, ParentID: &parentID},
-		{ID: 3, Title: "Subtask 2", Status: task.StatusTodo, ParentID: &parentID},
+		{ID: "2", Title: "Subtask 1", Status: task.StatusDone, ParentID: parentID},
+		{ID: "3", Title: "Subtask 2", Status: task.StatusTodo, ParentID: parentID},
 	}
 
 	output := FormatTaskDetail(tk, &TaskDetailOptions{Subtasks: subtasks})
@@ -75,8 +75,8 @@ func TestFormatTaskDetailWithSubtasks(t *testing.T) {
 
 func TestFormatTaskTable(t *testing.T) {
 	tasks := []*task.Task{
-		{ID: 1, Title: "First task", Status: task.StatusTodo, Priority: task.PriorityHigh, Type: "feature"},
-		{ID: 2, Title: "Second task", Status: task.StatusDone, Priority: task.PriorityLow, Type: "bug"},
+		{ID: "1", Title: "First task", Status: task.StatusTodo, Priority: task.PriorityHigh, Type: "feature"},
+		{ID: "2", Title: "Second task", Status: task.StatusDone, Priority: task.PriorityLow, Type: "bug"},
 	}
 
 	output := FormatTaskTable(tasks, nil, nil)
@@ -97,12 +97,12 @@ func TestFormatTaskTable(t *testing.T) {
 
 func TestFormatTaskTableWithSubtasks(t *testing.T) {
 	tasks := []*task.Task{
-		{ID: 1, Title: "Parent task", Status: task.StatusInProgress, Priority: task.PriorityHigh, Type: "feature"},
+		{ID: "1", Title: "Parent task", Status: task.StatusInProgress, Priority: task.PriorityHigh, Type: "feature"},
 	}
 
 	// Subtask counts passed externally (as would be computed by cmdList)
-	subtaskCounts := map[int]SubtaskCounts{
-		1: {Total: 3, Done: 2},
+	subtaskCounts := map[string]SubtaskCounts{
+		"1": {Total: 3, Done: 2},
 	}
 
 	output := FormatTaskTable(tasks, subtaskCounts, nil)
@@ -121,27 +121,29 @@ func TestFormatTaskTableEmpty(t *testing.T) {
 }
 
 func TestFormatMessage(t *testing.T) {
-	output := FormatMessage("Task #3 deleted.", 3)
+	output := FormatMessage("Task #3 deleted.", "3")
 	if output != "Task #3 deleted." {
 		t.Errorf("expected 'Task #3 deleted.', got %q", output)
 	}
 }
 
 func TestFormatJSON(t *testing.T) {
-	tk := &task.Task{ID: 1, Title: "Test", Status: task.StatusTodo, Priority: task.PriorityMedium, Type: "feature"}
+	tk := &task.Task{ID: "1", Title: "Test", Status: task.StatusTodo, Priority: task.PriorityMedium, Type: "feature"}
 	var buf bytes.Buffer
 	err := FormatJSON(&buf, tk)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(buf.String(), `"id": 1`) {
-		t.Error("expected JSON with id:1")
+	// Ids are now JSON strings on the wire, not bare numbers - this is the
+	// intentional wire-format break called out in the acceptance criteria.
+	if !strings.Contains(buf.String(), `"id": "1"`) {
+		t.Errorf(`expected JSON with id: "1", got:\n%s`, buf.String())
 	}
 }
 
 func TestFormatJSONMessage(t *testing.T) {
 	var buf bytes.Buffer
-	err := FormatJSONMessage(&buf, "Task deleted", 5)
+	err := FormatJSONMessage(&buf, "Task deleted", "5")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -149,7 +151,7 @@ func TestFormatJSONMessage(t *testing.T) {
 	if !strings.Contains(output, `"message"`) {
 		t.Error("expected message field")
 	}
-	if !strings.Contains(output, `"id": 5`) {
-		t.Error("expected id field")
+	if !strings.Contains(output, `"id": "5"`) {
+		t.Errorf(`expected id field as a JSON string ("id": "5"), got:\n%s`, output)
 	}
 }

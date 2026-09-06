@@ -20,7 +20,7 @@ type TaskDetailOptions struct {
 // FormatTaskDetail formats a single task for human-readable output
 func FormatTaskDetail(t *task.Task, opts *TaskDetailOptions) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Task #%d\n", t.ID))
+	sb.WriteString(fmt.Sprintf("Task #%s\n", t.ID))
 	sb.WriteString(fmt.Sprintf("Title:       %s\n", t.Title))
 	status := string(t.Status)
 	if opts != nil && opts.Blocked {
@@ -29,21 +29,21 @@ func FormatTaskDetail(t *task.Task, opts *TaskDetailOptions) string {
 	sb.WriteString(fmt.Sprintf("Status:      %s\n", status))
 	sb.WriteString(fmt.Sprintf("Priority:    %s\n", t.Priority))
 	sb.WriteString(fmt.Sprintf("Type:        %s\n", t.Type))
-	if t.ParentID != nil {
-		sb.WriteString(fmt.Sprintf("Parent:      #%d\n", *t.ParentID))
+	if t.ParentID != "" {
+		sb.WriteString(fmt.Sprintf("Parent:      #%s\n", t.ParentID))
 	}
 	sb.WriteString(fmt.Sprintf("Created:     %s\n", t.CreatedAt.Format("2006-01-02 15:04:05")))
 	sb.WriteString(fmt.Sprintf("Updated:     %s\n", t.UpdatedAt.Format("2006-01-02 15:04:05")))
 	if len(t.Relations) > 0 {
 		sb.WriteString("\nRelations:\n")
 		for _, rel := range t.Relations {
-			sb.WriteString(fmt.Sprintf("  %s -> #%d\n", rel.Type, rel.Task))
+			sb.WriteString(fmt.Sprintf("  %s -> #%s\n", rel.Type, rel.Task))
 		}
 	}
 	if opts != nil && opts.Blocked && len(opts.Blockers) > 0 {
 		sb.WriteString("\nBlocked by:\n")
 		for _, b := range opts.Blockers {
-			sb.WriteString(fmt.Sprintf("  #%d [%s] %s\n", b.TaskID, b.Status, b.Title))
+			sb.WriteString(fmt.Sprintf("  #%s [%s] %s\n", b.TaskID, b.Status, b.Title))
 		}
 	}
 	if t.Description != "" {
@@ -52,7 +52,7 @@ func FormatTaskDetail(t *task.Task, opts *TaskDetailOptions) string {
 	if opts != nil && len(opts.Subtasks) > 0 {
 		sb.WriteString(fmt.Sprintf("\nSubtasks (%d):\n", len(opts.Subtasks)))
 		for _, sub := range opts.Subtasks {
-			sb.WriteString(fmt.Sprintf("  #%d [%s] %s\n", sub.ID, sub.Status, sub.Title))
+			sb.WriteString(fmt.Sprintf("  #%s [%s] %s\n", sub.ID, sub.Status, sub.Title))
 		}
 	}
 	return sb.String()
@@ -67,7 +67,7 @@ type SubtaskCounts struct {
 // FormatTaskTable formats a list of tasks as a table
 // subtaskCounts is a map of task ID to subtask counts (can be nil)
 // blockedTasks is a set of task IDs that are blocked (can be nil)
-func FormatTaskTable(tasks []*task.Task, subtaskCounts map[int]SubtaskCounts, blockedTasks map[int]bool) string {
+func FormatTaskTable(tasks []*task.Task, subtaskCounts map[string]SubtaskCounts, blockedTasks map[string]bool) string {
 	if len(tasks) == 0 {
 		return "No tasks found."
 	}
@@ -91,14 +91,14 @@ func FormatTaskTable(tasks []*task.Task, subtaskCounts map[int]SubtaskCounts, bl
 				subtaskStr = fmt.Sprintf("[%d/%d]", counts.Done, counts.Total)
 			}
 		}
-		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\n", t.ID, title, statusStr, t.Priority, t.Type, subtaskStr)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", t.ID, title, statusStr, t.Priority, t.Type, subtaskStr)
 	}
 	w.Flush()
 	return sb.String()
 }
 
 // FormatMessage formats a simple message
-func FormatMessage(msg string, id int) string {
+func FormatMessage(msg string, id string) string {
 	return msg
 }
 
@@ -110,7 +110,7 @@ func FormatJSON(w io.Writer, v any) error {
 }
 
 // FormatJSONMessage writes a message with ID as JSON
-func FormatJSONMessage(w io.Writer, msg string, id int) error {
+func FormatJSONMessage(w io.Writer, msg string, id string) error {
 	return FormatJSON(w, map[string]any{
 		"message": msg,
 		"id":      id,

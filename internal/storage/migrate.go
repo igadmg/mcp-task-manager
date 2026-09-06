@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 )
 
 var flatTaskFilePattern = regexp.MustCompile(`^(\d+)\.md$`)
@@ -25,7 +24,7 @@ func (s *MarkdownStorage) MigrateFlatLayout() error {
 	return nil
 }
 
-func (s *MarkdownStorage) migrateFlatDir(dir string, dirFor func(int) string, pathFor func(int) string) {
+func (s *MarkdownStorage) migrateFlatDir(dir string, dirFor func(string) string, pathFor func(string) string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		// Missing directory (nothing to migrate yet) or unreadable; either
@@ -42,18 +41,18 @@ func (s *MarkdownStorage) migrateFlatDir(dir string, dirFor func(int) string, pa
 		if m == nil {
 			continue
 		}
-		id, err := strconv.Atoi(m[1])
-		if err != nil || id <= 0 {
+		id := m[1]
+		if id == "0" {
 			continue
 		}
 
 		oldPath := filepath.Join(dir, entry.Name())
 		if err := os.MkdirAll(dirFor(id), 0755); err != nil {
-			log.Printf("migrate flat layout: failed to create directory for task %d: %v", id, err)
+			log.Printf("migrate flat layout: failed to create directory for task %s: %v", id, err)
 			continue
 		}
 		if err := os.Rename(oldPath, pathFor(id)); err != nil {
-			log.Printf("migrate flat layout: failed to move task %d into new layout: %v", id, err)
+			log.Printf("migrate flat layout: failed to move task %s into new layout: %v", id, err)
 			continue
 		}
 	}

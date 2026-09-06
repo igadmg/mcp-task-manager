@@ -40,13 +40,13 @@ func (p Priority) Order() int {
 // Relation represents a link between tasks
 type Relation struct {
 	Type string `yaml:"type" json:"type"`
-	Task int    `yaml:"task" json:"task"`
+	Task string `yaml:"task" json:"task"`
 }
 
 // Task represents a single task
 type Task struct {
-	ID          int        `yaml:"id" json:"id"`
-	ParentID    *int       `yaml:"parent_id,omitempty" json:"parent_id,omitempty"`
+	ID          string     `yaml:"id" json:"id"`
+	ParentID    string     `yaml:"parent_id,omitempty" json:"parent_id,omitempty"` // "" = no parent
 	Title       string     `yaml:"title" json:"title"`
 	Description string     `yaml:"-" json:"description"` // Stored in markdown body
 	Status      Status     `yaml:"status" json:"status"`

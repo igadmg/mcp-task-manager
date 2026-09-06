@@ -129,7 +129,7 @@ mcp-task-manager --help
 |---------|-------------|
 | `list` | List tasks with optional filters (`-s status`, `-p priority`, `-t type`, where allowed task types depend on config and default to `feature`, `bug`) |
 | `get <id>` | Get task details by ID |
-| `create <title>` | Create task (defaults: priority=`medium`, type=first configured task type; with default config that is `feature`; allowed task types depend on config and default to `feature`, `bug`); use `--parent` for subtasks |
+| `create <title>` | Create task (defaults: priority=`medium`, type=first configured task type; with default config that is `feature`; allowed task types depend on config and default to `feature`, `bug`); use `--parent` for subtasks, `--id` for a caller-supplied custom task id |
 | `update <id>` | Update task fields, including `type` (allowed task types depend on config and default to `feature`, `bug`) |
 | `delete <id>` | Delete a task |
 | `next` | Get highest priority todo task |
@@ -264,7 +264,7 @@ To make the server available across every workspace instead of configuring it pe
 
 | Tool | Description |
 |------|-------------|
-| `create_task` | Create a new task with title, description, priority, `type`, and optional `parent_id` for subtasks. Allowed task `type` values come from config and default to `feature`, `bug`. |
+| `create_task` | Create a new task with title, description, priority, `type`, optional `parent_id` for subtasks, and optional `id` for a caller-supplied custom task id (used verbatim as the id and storage directory name instead of the next auto-increment id). Allowed task `type` values come from config and default to `feature`, `bug`. |
 | `update_task` | Modify task fields (title, description, status, priority, `type`). Allowed task `type` values come from config and default to `feature`, `bug`. |
 | `list_tasks` | List tasks with optional filters (status, priority, `type`); use `parent_id` filter for subtasks. Allowed task `type` values come from config and default to `feature`, `bug`. |
 | `get_task` | Get full details of a task by ID (includes subtasks for parent tasks) |
@@ -323,7 +323,7 @@ The `relation_types` list defines the allowed values for every relation `type` f
 
 ## Task Format
 
-Each task is stored at `tasks/{id}/{id}.md` (e.g. `tasks/001/001.md`) as a Markdown file with YAML frontmatter. Any files attached via `write_task_file` / `write-task-file` live alongside it in the same `tasks/{id}/` directory.
+Each task is stored at `tasks/{id}/{id}.md` (e.g. `tasks/7/7.md`, unpadded) as a Markdown file with YAML frontmatter. Any files attached via `write_task_file` / `write-task-file` live alongside it in the same `tasks/{id}/` directory.
 
 ```yaml
 ---
@@ -342,6 +342,8 @@ Detailed description in Markdown format.
 - Implementation notes
 - Links and references
 ```
+
+Ids are strings on the wire (JSON responses and `--json` CLI output render `"id": "1"`, not a bare number); a bare YAML scalar like `id: 1` above still parses fine into that string field. By default `create_task` allocates the next auto-incrementing numeric-looking id, unpadded (`"8"`, not `"008"`). Optionally, pass `id` (MCP) or `--id` (CLI `create`) to use a caller-supplied custom text id instead — it's validated like an attached filename (non-empty, no `/` or `\`, not `..`; `"0"`, `"archive"`, and `".index.json"` are reserved) and rejected if it collides with an existing active or archived task.
 
 The `type` field must be one of the configured `task_types` values. With the default configuration, allowed values are `feature` and `bug`.
 

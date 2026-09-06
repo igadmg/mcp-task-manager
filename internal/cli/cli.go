@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strconv"
 	"strings"
 
 	"github.com/integrii/flaggy"
@@ -49,13 +48,13 @@ func RunWithArgs(args []string, stdout, stderr io.Writer) int {
 	listCmd.Description = "List tasks with optional filters"
 	var listStatus, listPriority, listType string
 	var listJSON bool
-	var listParent int
+	var listParent = "0"
 	var listArchived bool
 	listCmd.String(&listStatus, "s", "status", "Filter by status (todo|in_progress|done)")
 	listCmd.String(&listPriority, "p", "priority", "Filter by priority (critical|high|medium|low)")
 	listCmd.String(&listType, "t", "type", fmt.Sprintf("Filter by type (%s)", strings.Join(taskTypes, "|")))
 	listCmd.Bool(&listJSON, "j", "json", "Output as JSON")
-	listCmd.Int(&listParent, "", "parent", "List subtasks of parent task ID (default: top-level tasks)")
+	listCmd.String(&listParent, "", "parent", "List subtasks of parent task ID (default: top-level tasks)")
 	listCmd.Bool(&listArchived, "a", "archived", "List archived tasks")
 	flaggy.AttachSubcommand(listCmd, 1)
 
@@ -83,13 +82,15 @@ func RunWithArgs(args []string, stdout, stderr io.Writer) int {
 	var createType = defaultTaskType
 	var createDesc string
 	var createJSON bool
-	var createParent int
+	var createParent string
+	var createID string
 	createCmd.AddPositionalValue(&createTitle, "title", 1, true, "Task title")
 	createCmd.String(&createPriority, "p", "priority", "Priority (default: medium)")
 	createCmd.String(&createType, "t", "type", fmt.Sprintf("Type (%s; default: %s)", strings.Join(taskTypes, "|"), defaultTaskType))
 	createCmd.String(&createDesc, "d", "description", "Task description")
 	createCmd.Bool(&createJSON, "j", "json", "Output as JSON")
-	createCmd.Int(&createParent, "", "parent", "Parent task ID (creates a subtask)")
+	createCmd.String(&createParent, "", "parent", "Parent task ID (creates a subtask)")
+	createCmd.String(&createID, "", "id", "Optional custom task id (used verbatim as id and directory name instead of auto-increment)")
 	flaggy.AttachSubcommand(createCmd, 1)
 
 	// Update subcommand
@@ -183,12 +184,7 @@ func RunWithArgs(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if getCmd.Used {
-		getID, err := strconv.Atoi(getIDStr)
-		if err != nil {
-			fmt.Fprintf(stderr, "Error: invalid task ID: %v\n", err)
-			return 1
-		}
-		return cmdGet(stdout, stderr, getJSON, getID)
+		return cmdGet(stdout, stderr, getJSON, getIDStr)
 	}
 
 	if nextCmd.Used {
@@ -196,79 +192,39 @@ func RunWithArgs(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if createCmd.Used {
-		return cmdCreate(stdout, stderr, createJSON, createTitle, createPriority, createType, createDesc, createParent)
+		return cmdCreate(stdout, stderr, createJSON, createTitle, createPriority, createType, createDesc, createParent, createID)
 	}
 
 	if updateCmd.Used {
-		updateID, err := strconv.Atoi(updateIDStr)
-		if err != nil {
-			fmt.Fprintf(stderr, "Error: invalid task ID: %s\n", updateIDStr)
-			return 1
-		}
-		return cmdUpdate(stdout, stderr, updateJSON, updateID, updateTitle, updateStatus, updatePriority, updateType, updateDesc)
+		return cmdUpdate(stdout, stderr, updateJSON, updateIDStr, updateTitle, updateStatus, updatePriority, updateType, updateDesc)
 	}
 
 	if deleteCmd.Used {
-		deleteID, err := strconv.Atoi(deleteIDStr)
-		if err != nil {
-			fmt.Fprintf(stderr, "Error: invalid task ID: %s\n", deleteIDStr)
-			return 1
-		}
-		return cmdDelete(stdout, stderr, deleteJSON, deleteID, deleteForce)
+		return cmdDelete(stdout, stderr, deleteJSON, deleteIDStr, deleteForce)
 	}
 
 	if startCmd.Used {
-		startID, err := strconv.Atoi(startIDStr)
-		if err != nil {
-			fmt.Fprintf(stderr, "Error: invalid task ID: %s\n", startIDStr)
-			return 1
-		}
-		return cmdStart(stdout, stderr, startJSON, startID)
+		return cmdStart(stdout, stderr, startJSON, startIDStr)
 	}
 
 	if completeCmd.Used {
-		completeID, err := strconv.Atoi(completeIDStr)
-		if err != nil {
-			fmt.Fprintf(stderr, "Error: invalid task ID: %s\n", completeIDStr)
-			return 1
-		}
-		return cmdComplete(stdout, stderr, completeJSON, completeID)
+		return cmdComplete(stdout, stderr, completeJSON, completeIDStr)
 	}
 
 	if archiveCmd.Used {
-		archiveID, err := strconv.Atoi(archiveIDStr)
-		if err != nil {
-			fmt.Fprintf(stderr, "Error: invalid task ID: %s\n", archiveIDStr)
-			return 1
-		}
-		return cmdArchive(stdout, stderr, archiveJSON, archiveID)
+		return cmdArchive(stdout, stderr, archiveJSON, archiveIDStr)
 	}
 
 	if writeTaskFileCmd.Used {
-		id, err := strconv.Atoi(writeTaskFileIDStr)
-		if err != nil {
-			fmt.Fprintf(stderr, "Error: invalid task ID: %s\n", writeTaskFileIDStr)
-			return 1
-		}
-		return cmdWriteTaskFile(stdout, stderr, id, writeTaskFileFilename, writeTaskFileContent)
+		return cmdWriteTaskFile(stdout, stderr, writeTaskFileIDStr, writeTaskFileFilename, writeTaskFileContent)
 	}
 
 	if readTaskFileCmd.Used {
-		id, err := strconv.Atoi(readTaskFileIDStr)
-		if err != nil {
-			fmt.Fprintf(stderr, "Error: invalid task ID: %s\n", readTaskFileIDStr)
-			return 1
-		}
-		return cmdReadTaskFile(stdout, stderr, id, readTaskFileFilename)
+		return cmdReadTaskFile(stdout, stderr, readTaskFileIDStr, readTaskFileFilename)
 	}
 
 	if listTaskFilesCmd.Used {
-		id, err := strconv.Atoi(listTaskFilesIDStr)
-		if err != nil {
-			fmt.Fprintf(stderr, "Error: invalid task ID: %s\n", listTaskFilesIDStr)
-			return 1
-		}
-		return cmdListTaskFiles(stdout, stderr, id)
+		return cmdListTaskFiles(stdout, stderr, listTaskFilesIDStr)
 	}
 
 	return 0

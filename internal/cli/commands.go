@@ -58,7 +58,7 @@ func checkProjectExists(stderr io.Writer, cfg *config.Config) int {
 }
 
 // cmdList handles the list command
-func cmdList(stdout, stderr io.Writer, jsonOutput bool, status, priority, taskType string, parentID int, archived bool) int {
+func cmdList(stdout, stderr io.Writer, jsonOutput bool, status, priority, taskType string, parentID string, archived bool) int {
 	cfg, err := loadConfig()
 	if err != nil {
 		fmt.Fprintf(stderr, "Error: %v\n", err)
@@ -113,13 +113,13 @@ func cmdList(stdout, stderr io.Writer, jsonOutput bool, status, priority, taskTy
 	}
 
 	// parentID semantics:
-	// - Default (0): show top-level tasks only (parentID = 0)
+	// - Default ("0"): show top-level tasks only (parentID = "0")
 	// - Specified N: show subtasks of task N (parentID = N)
 	parentPtr := &parentID
 	tasks := svc.List(statusPtr, priorityPtr, typePtr, parentPtr)
 
 	// Build subtask counts for each task
-	subtaskCounts := make(map[int]SubtaskCounts)
+	subtaskCounts := make(map[string]SubtaskCounts)
 	for _, t := range tasks {
 		total, done := svc.GetSubtaskCounts(t.ID)
 		if total > 0 {
@@ -128,7 +128,7 @@ func cmdList(stdout, stderr io.Writer, jsonOutput bool, status, priority, taskTy
 	}
 
 	// Build blocked status for each task
-	blockedTasks := make(map[int]bool)
+	blockedTasks := make(map[string]bool)
 	for _, t := range tasks {
 		if blocked, _ := svc.IsBlocked(t.ID); blocked {
 			blockedTasks[t.ID] = true
@@ -152,7 +152,7 @@ func cmdList(stdout, stderr io.Writer, jsonOutput bool, status, priority, taskTy
 }
 
 // cmdGet handles the get command
-func cmdGet(stdout, stderr io.Writer, jsonOutput bool, id int) int {
+func cmdGet(stdout, stderr io.Writer, jsonOutput bool, id string) int {
 	cfg, err := loadConfig()
 	if err != nil {
 		fmt.Fprintf(stderr, "Error: %v\n", err)
@@ -246,19 +246,14 @@ func cmdNext(stdout, stderr io.Writer, jsonOutput bool) int {
 }
 
 // cmdCreate handles the create command
-func cmdCreate(stdout, stderr io.Writer, jsonOutput bool, title, priority, taskType, description string, parentID int) int {
+func cmdCreate(stdout, stderr io.Writer, jsonOutput bool, title, priority, taskType, description string, parentID string, id string) int {
 	svc, _, err := initService()
 	if err != nil {
 		fmt.Fprintf(stderr, "Error: %v\n", err)
 		return 1
 	}
 
-	var parentPtr *int
-	if parentID > 0 {
-		parentPtr = &parentID
-	}
-
-	t, err := svc.Create(title, description, task.Priority(priority), taskType, parentPtr)
+	t, err := svc.Create(title, description, task.Priority(priority), taskType, parentID, id)
 	if err != nil {
 		fmt.Fprintf(stderr, "Error: %v\n", err)
 		return 1
@@ -277,7 +272,7 @@ func cmdCreate(stdout, stderr io.Writer, jsonOutput bool, title, priority, taskT
 }
 
 // cmdUpdate handles the update command
-func cmdUpdate(stdout, stderr io.Writer, jsonOutput bool, id int, title, status, priority, taskType, description string) int {
+func cmdUpdate(stdout, stderr io.Writer, jsonOutput bool, id string, title, status, priority, taskType, description string) int {
 	svc, _, err := initService()
 	if err != nil {
 		fmt.Fprintf(stderr, "Error: %v\n", err)
@@ -325,7 +320,7 @@ func cmdUpdate(stdout, stderr io.Writer, jsonOutput bool, id int, title, status,
 }
 
 // cmdDelete handles the delete command
-func cmdDelete(stdout, stderr io.Writer, jsonOutput bool, id int, force bool) int {
+func cmdDelete(stdout, stderr io.Writer, jsonOutput bool, id string, force bool) int {
 	svc, _, err := initService()
 	if err != nil {
 		fmt.Fprintf(stderr, "Error: %v\n", err)
@@ -337,7 +332,7 @@ func cmdDelete(stdout, stderr io.Writer, jsonOutput bool, id int, force bool) in
 		return 1
 	}
 
-	msg := fmt.Sprintf("Task #%d deleted.", id)
+	msg := fmt.Sprintf("Task #%s deleted.", id)
 	if jsonOutput {
 		if err := FormatJSONMessage(stdout, msg, id); err != nil {
 			fmt.Fprintf(stderr, "Error: %v\n", err)
@@ -351,7 +346,7 @@ func cmdDelete(stdout, stderr io.Writer, jsonOutput bool, id int, force bool) in
 }
 
 // cmdStart handles the start command
-func cmdStart(stdout, stderr io.Writer, jsonOutput bool, id int) int {
+func cmdStart(stdout, stderr io.Writer, jsonOutput bool, id string) int {
 	svc, _, err := initService()
 	if err != nil {
 		fmt.Fprintf(stderr, "Error: %v\n", err)
@@ -363,7 +358,7 @@ func cmdStart(stdout, stderr io.Writer, jsonOutput bool, id int) int {
 		return 1
 	}
 
-	msg := fmt.Sprintf("Task #%d started.", id)
+	msg := fmt.Sprintf("Task #%s started.", id)
 	if jsonOutput {
 		if err := FormatJSONMessage(stdout, msg, id); err != nil {
 			fmt.Fprintf(stderr, "Error: %v\n", err)
@@ -377,7 +372,7 @@ func cmdStart(stdout, stderr io.Writer, jsonOutput bool, id int) int {
 }
 
 // cmdArchive handles the archive command
-func cmdArchive(stdout, stderr io.Writer, jsonOutput bool, id int) int {
+func cmdArchive(stdout, stderr io.Writer, jsonOutput bool, id string) int {
 	svc, _, err := initService()
 	if err != nil {
 		fmt.Fprintf(stderr, "Error: %v\n", err)
@@ -389,7 +384,7 @@ func cmdArchive(stdout, stderr io.Writer, jsonOutput bool, id int) int {
 		return 1
 	}
 
-	msg := fmt.Sprintf("Task #%d archived.", id)
+	msg := fmt.Sprintf("Task #%s archived.", id)
 	if jsonOutput {
 		if err := FormatJSONMessage(stdout, msg, id); err != nil {
 			fmt.Fprintf(stderr, "Error: %v\n", err)
@@ -403,7 +398,7 @@ func cmdArchive(stdout, stderr io.Writer, jsonOutput bool, id int) int {
 }
 
 // cmdWriteTaskFile handles the write-task-file command
-func cmdWriteTaskFile(stdout, stderr io.Writer, id int, filename, content string) int {
+func cmdWriteTaskFile(stdout, stderr io.Writer, id string, filename, content string) int {
 	svc, _, err := initService()
 	if err != nil {
 		fmt.Fprintf(stderr, "Error: %v\n", err)
@@ -415,12 +410,12 @@ func cmdWriteTaskFile(stdout, stderr io.Writer, id int, filename, content string
 		return 1
 	}
 
-	fmt.Fprintf(stdout, "Wrote file %q to task #%d.\n", filename, id)
+	fmt.Fprintf(stdout, "Wrote file %q to task #%s.\n", filename, id)
 	return 0
 }
 
 // cmdReadTaskFile handles the read-task-file command
-func cmdReadTaskFile(stdout, stderr io.Writer, id int, filename string) int {
+func cmdReadTaskFile(stdout, stderr io.Writer, id string, filename string) int {
 	svc, _, err := initService()
 	if err != nil {
 		fmt.Fprintf(stderr, "Error: %v\n", err)
@@ -438,7 +433,7 @@ func cmdReadTaskFile(stdout, stderr io.Writer, id int, filename string) int {
 }
 
 // cmdListTaskFiles handles the list-task-files command
-func cmdListTaskFiles(stdout, stderr io.Writer, id int) int {
+func cmdListTaskFiles(stdout, stderr io.Writer, id string) int {
 	svc, _, err := initService()
 	if err != nil {
 		fmt.Fprintf(stderr, "Error: %v\n", err)
@@ -458,7 +453,7 @@ func cmdListTaskFiles(stdout, stderr io.Writer, id int) int {
 }
 
 // cmdComplete handles the complete command
-func cmdComplete(stdout, stderr io.Writer, jsonOutput bool, id int) int {
+func cmdComplete(stdout, stderr io.Writer, jsonOutput bool, id string) int {
 	svc, _, err := initService()
 	if err != nil {
 		fmt.Fprintf(stderr, "Error: %v\n", err)
@@ -470,7 +465,7 @@ func cmdComplete(stdout, stderr io.Writer, jsonOutput bool, id int) int {
 		return 1
 	}
 
-	msg := fmt.Sprintf("Task #%d completed.", id)
+	msg := fmt.Sprintf("Task #%s completed.", id)
 	if jsonOutput {
 		if err := FormatJSONMessage(stdout, msg, id); err != nil {
 			fmt.Fprintf(stderr, "Error: %v\n", err)

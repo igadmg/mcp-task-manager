@@ -45,7 +45,7 @@ func TestMigrateFlatLayout_ActiveAndArchived(t *testing.T) {
 		t.Error("expected flat tasks/archive/002.md to no longer exist after migration")
 	}
 
-	active, err := s.Load(1)
+	active, err := s.Load("001")
 	if err != nil {
 		t.Fatalf("Load(1) after migration error = %v", err)
 	}
@@ -53,7 +53,7 @@ func TestMigrateFlatLayout_ActiveAndArchived(t *testing.T) {
 		t.Errorf("Load(1).Description = %q, want %q", active.Description, "active body")
 	}
 
-	archived, err := s.LoadArchived(2)
+	archived, err := s.LoadArchived("002")
 	if err != nil {
 		t.Fatalf("LoadArchived(2) after migration error = %v", err)
 	}
@@ -74,7 +74,7 @@ func TestMigrateFlatLayout_Idempotent(t *testing.T) {
 		t.Fatalf("second MigrateFlatLayout() error = %v", err)
 	}
 
-	tk, err := s.Load(1)
+	tk, err := s.Load("001")
 	if err != nil {
 		t.Fatalf("Load(1) after repeated migration error = %v", err)
 	}
@@ -118,12 +118,12 @@ func TestMigrateFlatLayout_NoFlatFiles_NoOp(t *testing.T) {
 		t.Fatalf("MigrateFlatLayout() error = %v", err)
 	}
 
-	loaded, err := s.Load(1)
+	loaded, err := s.Load("1")
 	if err != nil {
 		t.Fatalf("Load(1) after no-op migration error = %v", err)
 	}
-	if loaded.ID != 1 {
-		t.Errorf("Load(1).ID = %d, want 1", loaded.ID)
+	if loaded.ID != "1" {
+		t.Errorf("Load(1).ID = %s, want 1", loaded.ID)
 	}
 }
 
@@ -147,7 +147,7 @@ func TestMigrateFlatLayout_SkipsAndLogsOnPerIDCollision(t *testing.T) {
 		t.Error("expected colliding task 001.md to remain in place after a failed per-ID migration")
 	}
 
-	tk, err := s.Load(2)
+	tk, err := s.Load("002")
 	if err != nil {
 		t.Fatalf("Load(2) error = %v, want task 2 to have migrated despite task 1's collision", err)
 	}

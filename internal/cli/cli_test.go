@@ -145,6 +145,54 @@ func TestCreateCommandWithFlags(t *testing.T) {
 	}
 }
 
+func TestCreateCommandWithCustomID(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("MCP_TASKS_DIR", tmpDir)
+
+	var stdout, stderr bytes.Buffer
+	code := RunWithArgs([]string{"mcp-task-manager", "create", "Custom id task", "--id", "my-feature"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Errorf("expected exit code 0, got %d. stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Task #my-feature") {
+		t.Errorf("expected custom id in output, got: %s", stdout.String())
+	}
+
+	// A subsequent plain create (no --id) must still get the next
+	// auto-increment id, untouched by the custom id above.
+	stdout.Reset()
+	stderr.Reset()
+	code = RunWithArgs([]string{"mcp-task-manager", "create", "Auto id task"}, &stdout, &stderr)
+	if code != 0 {
+		t.Errorf("expected exit code 0, got %d. stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Task #1") {
+		t.Errorf("expected auto-increment id #1 in output, got: %s", stdout.String())
+	}
+}
+
+func TestCreateCommandWithCustomID_Collision(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("MCP_TASKS_DIR", tmpDir)
+
+	var stdout, stderr bytes.Buffer
+	code := RunWithArgs([]string{"mcp-task-manager", "create", "First", "--id", "dup"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d. stderr: %s", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = RunWithArgs([]string{"mcp-task-manager", "create", "Second", "--id", "dup"}, &stdout, &stderr)
+	if code == 0 {
+		t.Errorf("expected non-zero exit code for a colliding custom id, got 0")
+	}
+	if !strings.Contains(stderr.String(), "dup") {
+		t.Errorf("expected error message to mention the colliding id, got: %s", stderr.String())
+	}
+}
+
 func TestUpdateCommand(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("MCP_TASKS_DIR", tmpDir)

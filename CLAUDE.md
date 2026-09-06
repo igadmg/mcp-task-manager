@@ -64,7 +64,7 @@ Use the **cclsp MCP tools** (LSP server access) for code navigation:
 
 ```yaml
 ---
-id: 42
+id: 42                # string on the wire (JSON: "42"); a bare YAML scalar like this still parses fine
 title: "Task title"
 status: todo          # todo | in_progress | done
 priority: high        # critical | high | medium | low
@@ -83,8 +83,11 @@ Markdown description here.
 ```
 
 ### Task Identification
-- Numeric auto-incrementing IDs
-- Per-task directory: `001/`, `002/`, etc., each containing `{id}.md` (e.g. `001/001.md`) plus any attached files
+- Ids are strings. By default `create_task` still allocates an auto-incrementing numeric-looking id, now unpadded (e.g. `"8"`, not `"008"`).
+- Optionally, `create_task` accepts a caller-supplied custom text id via its `id` parameter; it is used verbatim as the id and never advances or collides with the numeric auto-increment counter (a numeric-looking custom id like `"5"` still participates correctly in future auto-increment collision avoidance).
+- Custom ids are validated the same way attached filenames are: non-empty, no `/` or `\`, not `..`; additionally `"0"`, `"archive"`, and `".index.json"` are reserved (they collide with this package's own on-disk sentinels) and rejected.
+- Creating a task with an id that already exists (active or archived) is rejected with a clear error, never silently overwritten or disambiguated.
+- Per-task directory is always named after the exact id string used: `7/`, `my-feature/`, etc., each containing `{id}.md` (e.g. `7/7.md`) plus any attached files
 
 ### Task Lifecycle
 - Simple 3-state workflow: `todo` → `in_progress` → `done`
@@ -189,7 +192,7 @@ A task can have zero or more free-form named text files attached to it (e.g. res
 ### Task Management
 | Tool | Description |
 |------|-------------|
-| `create_task` | Create a new task with title, description, priority, type, and optional `parent_id` for subtasks |
+| `create_task` | Create a new task with title, description, priority, type, optional `parent_id` for subtasks, and optional `id` for a caller-supplied custom task id |
 | `update_task` | Modify task fields |
 | `list_tasks` | List tasks with optional filters (status, priority, type, parent_id, archived); top-level tasks by default |
 | `get_task` | Get full details of a task by ID (includes subtasks for parent tasks; falls back to archive) |
@@ -297,7 +300,7 @@ mcp-task-manager/
 - File writes are atomic (write to temp file, then rename)
 
 ### Validation
-- Task IDs: positive integers
+- Task IDs: strings, format-validated the same way attached filenames are (non-empty, no `/` or `\`, not `..`), plus three reserved names (`"0"`, `"archive"`, `".index.json"`) rejected for a caller-supplied custom id
 - Status: `todo` | `in_progress` | `done`
 - Priority: `critical` | `high` | `medium` | `low`
 - Type: must be in configured list (default: `feature`, `bug`)

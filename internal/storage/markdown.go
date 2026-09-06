@@ -31,13 +31,13 @@ func (s *MarkdownStorage) EnsureDir() error {
 
 // taskPath returns the file path for a task ID
 // taskDir returns the per-task directory path for a task ID
-func (s *MarkdownStorage) taskDir(id int) string {
-	return filepath.Join(s.dir, fmt.Sprintf("%03d", id))
+func (s *MarkdownStorage) taskDir(id string) string {
+	return filepath.Join(s.dir, id)
 }
 
 // taskPath returns the file path for a task ID
-func (s *MarkdownStorage) taskPath(id int) string {
-	return filepath.Join(s.taskDir(id), fmt.Sprintf("%03d.md", id))
+func (s *MarkdownStorage) taskPath(id string) string {
+	return filepath.Join(s.taskDir(id), fmt.Sprintf("%s.md", id))
 }
 
 // Save writes a task to a markdown file
@@ -45,8 +45,8 @@ func (s *MarkdownStorage) taskPath(id int) string {
 func (s *MarkdownStorage) Save(t *task.Task) error {
 	// Build frontmatter
 	frontmatter := struct {
-		ID        int             `yaml:"id"`
-		ParentID  *int            `yaml:"parent_id,omitempty"`
+		ID        string          `yaml:"id"`
+		ParentID  string          `yaml:"parent_id,omitempty"`
 		Title     string          `yaml:"title"`
 		Status    task.Status     `yaml:"status"`
 		Priority  task.Priority   `yaml:"priority"`
@@ -89,7 +89,7 @@ func (s *MarkdownStorage) Save(t *task.Task) error {
 }
 
 // Load reads a task from a markdown file
-func (s *MarkdownStorage) Load(id int) (*task.Task, error) {
+func (s *MarkdownStorage) Load(id string) (*task.Task, error) {
 	data, err := os.ReadFile(s.taskPath(id))
 	if err != nil {
 		return nil, err
@@ -99,7 +99,7 @@ func (s *MarkdownStorage) Load(id int) (*task.Task, error) {
 
 // Delete removes a task file
 // Delete removes a task's directory (the task's .md file and any attached files)
-func (s *MarkdownStorage) Delete(id int) error {
+func (s *MarkdownStorage) Delete(id string) error {
 	return os.RemoveAll(s.taskDir(id))
 }
 
@@ -116,11 +116,7 @@ func (s *MarkdownStorage) LoadAll() ([]*task.Task, error) {
 
 	var tasks []*task.Task
 	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		id, err := strconv.Atoi(entry.Name())
-		if err != nil || id <= 0 {
+		if !entry.IsDir() || entry.Name() == "archive" {
 			continue
 		}
 
@@ -161,8 +157,8 @@ func (s *MarkdownStorage) parse(data []byte) (*task.Task, error) {
 
 	// Parse frontmatter
 	var fm struct {
-		ID        int             `yaml:"id"`
-		ParentID  *int            `yaml:"parent_id"`
+		ID        string          `yaml:"id"`
+		ParentID  string          `yaml:"parent_id"`
 		Title     string          `yaml:"title"`
 		Status    string          `yaml:"status"`
 		Priority  string          `yaml:"priority"`
@@ -219,18 +215,18 @@ func parseTime(s string) (t time.Time, err error) {
 
 // archivePath returns the file path for an archived task ID
 // archiveTaskDir returns the per-task archive directory path for a task ID
-func (s *MarkdownStorage) archiveTaskDir(id int) string {
-	return filepath.Join(s.dir, "archive", fmt.Sprintf("%03d", id))
+func (s *MarkdownStorage) archiveTaskDir(id string) string {
+	return filepath.Join(s.dir, "archive", id)
 }
 
 // archivePath returns the file path for an archived task ID
-func (s *MarkdownStorage) archivePath(id int) string {
-	return filepath.Join(s.archiveTaskDir(id), fmt.Sprintf("%03d.md", id))
+func (s *MarkdownStorage) archivePath(id string) string {
+	return filepath.Join(s.archiveTaskDir(id), fmt.Sprintf("%s.md", id))
 }
 
 // Archive moves a task file from the tasks directory to the archive subdirectory
 // Archive moves a task's directory from the tasks directory to the archive subdirectory
-func (s *MarkdownStorage) Archive(id int) error {
+func (s *MarkdownStorage) Archive(id string) error {
 	archiveDir := filepath.Join(s.dir, "archive")
 	if err := os.MkdirAll(archiveDir, 0755); err != nil {
 		return err
@@ -239,7 +235,7 @@ func (s *MarkdownStorage) Archive(id int) error {
 }
 
 // LoadArchived reads an archived task from the archive directory
-func (s *MarkdownStorage) LoadArchived(id int) (*task.Task, error) {
+func (s *MarkdownStorage) LoadArchived(id string) (*task.Task, error) {
 	data, err := os.ReadFile(s.archivePath(id))
 	if err != nil {
 		return nil, err
@@ -264,10 +260,6 @@ func (s *MarkdownStorage) LoadAllArchived() ([]*task.Task, error) {
 		if !entry.IsDir() {
 			continue
 		}
-		id, err := strconv.Atoi(entry.Name())
-		if err != nil || id <= 0 {
-			continue
-		}
 
 		data, err := os.ReadFile(filepath.Join(archiveDir, entry.Name(), entry.Name()+".md"))
 		if err != nil {
@@ -285,7 +277,7 @@ func (s *MarkdownStorage) LoadAllArchived() ([]*task.Task, error) {
 }
 
 // IsArchived checks whether a task exists in the archive directory
-func (s *MarkdownStorage) IsArchived(id int) bool {
+func (s *MarkdownStorage) IsArchived(id string) bool {
 	_, err := os.Stat(s.archivePath(id))
 	return err == nil
 }

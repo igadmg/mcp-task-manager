@@ -18,7 +18,7 @@ func registerWorkflowTools(s *server.MCPServer, svc *task.Service) {
 	// start_task
 	startTool := mcp.NewTool("start_task",
 		mcp.WithDescription("Move a task from todo to in_progress"),
-		mcp.WithNumber("id",
+		mcp.WithString("id",
 			mcp.Required(),
 			mcp.Description("Task ID to start"),
 		),
@@ -28,7 +28,7 @@ func registerWorkflowTools(s *server.MCPServer, svc *task.Service) {
 	// complete_task
 	completeTool := mcp.NewTool("complete_task",
 		mcp.WithDescription("Move a task from in_progress to done"),
-		mcp.WithNumber("id",
+		mcp.WithString("id",
 			mcp.Required(),
 			mcp.Description("Task ID to complete"),
 		),
@@ -53,7 +53,7 @@ func getNextTaskHandler(svc *task.Service) server.ToolHandlerFunc {
 
 func startTaskHandler(svc *task.Service) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		id := req.GetInt("id", 0)
+		id := req.GetString("id", "")
 
 		t, err := svc.StartTask(id)
 		if err != nil {
@@ -66,7 +66,7 @@ func startTaskHandler(svc *task.Service) server.ToolHandlerFunc {
 
 func completeTaskHandler(svc *task.Service) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		id := req.GetInt("id", 0)
+		id := req.GetString("id", "")
 
 		t, err := svc.CompleteTask(id)
 		if err != nil {

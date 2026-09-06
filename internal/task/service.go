@@ -16,20 +16,28 @@ var ErrNoProjectFound = errors.New("no tasks directory found. Create a task to i
 // Storage interface for task persistence
 type Storage interface {
 	Save(t *Task) error
-	Load(id int) (*Task, error)
-	Delete(id int) error
+	Load(id string) (*Task, error)
+	Delete(id string) error
 	EnsureDir() error
 	// MigrateFlatLayout migrates any task still stored in the legacy flat
 	// file layout into the current per-task directory layout. Called once
 	// by Service.Initialize(), before the index loads.
 	MigrateFlatLayout() error
+	// ValidateID checks a task id is safe to use as a directory/file name
+	// and does not collide with a name this package's layout already
+	// reserves. It does not check uniqueness against existing tasks - see
+	// Exists / ArchiveStorage.IsArchived for that (requires I/O, format
+	// doesn't).
+	ValidateID(id string) error
+	// Exists reports whether an active task directory with this id exists.
+	Exists(id string) bool
 }
 
 // RelationEdge represents a directed relation between two tasks in the index
 type RelationEdge struct {
 	Type   string `json:"type"`
-	Source int    `json:"source"`
-	Target int    `json:"target"`
+	Source string `json:"source"`
+	Target string `json:"target"`
 }
 
 // Index interface for task indexing
@@ -42,31 +50,31 @@ type RelationEdge struct {
 type Index interface {
 	Load() error
 	Save() error
-	Get(id int) (*Task, bool) // Loads full task with description from disk
+	Get(id string) (*Task, bool) // Loads full task with description from disk
 	Set(t *Task)
-	Delete(id int)
-	All() []*Task                                                                       // Returns tasks without descriptions (from index)
-	Filter(status *Status, priority *Priority, taskType *string, parentID *int) []*Task // Returns tasks without descriptions
-	NextTodo() *Task                                                                    // Returns task without description (from index)
-	NextID() int
+	Delete(id string)
+	All() []*Task                                                                          // Returns tasks without descriptions (from index)
+	Filter(status *Status, priority *Priority, taskType *string, parentID *string) []*Task // Returns tasks without descriptions
+	NextTodo() *Task                                                                       // Returns task without description (from index)
+	NextID() string
 	// Subtask methods
-	GetSubtasks(parentID int) []*Task // Returns tasks without descriptions (from index)
-	HasSubtasks(taskID int) bool
-	SubtaskCounts(parentID int) (total int, done int)
+	GetSubtasks(parentID string) []*Task // Returns tasks without descriptions (from index)
+	HasSubtasks(taskID string) bool
+	SubtaskCounts(parentID string) (total int, done int)
 	// Relation methods
 	AddRelation(edge RelationEdge)
 	RemoveRelation(edge RelationEdge)
-	GetRelationsForTask(taskID int) []RelationEdge
-	GetBlockers(taskID int) []int
-	RemoveAllRelationsForTask(taskID int) []RelationEdge
+	GetRelationsForTask(taskID string) []RelationEdge
+	GetBlockers(taskID string) []string
+	RemoveAllRelationsForTask(taskID string) []RelationEdge
 }
 
 // ArchiveStorage extends Storage with archive-specific operations
 type ArchiveStorage interface {
-	Archive(id int) error
-	LoadArchived(id int) (*Task, error)
+	Archive(id string) error
+	LoadArchived(id string) (*Task, error)
 	LoadAllArchived() ([]*Task, error)
-	IsArchived(id int) bool
+	IsArchived(id string) bool
 }
 
 // FileStorage manages free-form named text files attached to a task,
@@ -75,9 +83,9 @@ type ArchiveStorage interface {
 // move or remove them as a side effect of moving/removing the directory -
 // no separate cascade logic is needed here.
 type FileStorage interface {
-	WriteFile(taskID int, filename, content string) error
-	ReadFile(taskID int, filename string) (string, error)
-	ListFiles(taskID int) ([]string, error)
+	WriteFile(taskID string, filename, content string) error
+	ReadFile(taskID string, filename string) (string, error)
+	ListFiles(taskID string) ([]string, error)
 }
 
 // Service provides task management operations
@@ -138,8 +146,11 @@ func (s *Service) Initialize() error {
 	return nil
 }
 
-// Create creates a new task (optionally as a subtask)
-func (s *Service) Create(title, description string, priority Priority, taskType string, parentID *int) (*Task, error) {
+// Create creates a new task (optionally as a subtask). If id is non-empty,
+// it is validated and used verbatim as the task's id and directory name,
+// bypassing (and not advancing) the numeric auto-increment counter. If id
+// is empty, the next auto-increment id is allocated as before.
+func (s *Service) Create(title, description string, priority Priority, taskType string, parentID string, id string) (*Task, error) {
 	if title == "" {
 		return nil, fmt.Errorf("title is required")
 	}
@@ -151,12 +162,12 @@ func (s *Service) Create(title, description string, priority Priority, taskType 
 	}
 
 	// Validate parent if provided
-	if parentID != nil {
-		parent, ok := s.index.Get(*parentID)
+	if parentID != "" {
+		parent, ok := s.index.Get(parentID)
 		if !ok {
-			return nil, fmt.Errorf("parent task not found: %d", *parentID)
+			return nil, fmt.Errorf("parent task not found: %s", parentID)
 		}
-		if parent.ParentID != nil {
+		if parent.ParentID != "" {
 			return nil, fmt.Errorf("cannot create subtask under a subtask (single level only)")
 		}
 	}
@@ -166,9 +177,25 @@ func (s *Service) Create(title, description string, priority Priority, taskType 
 		return nil, err
 	}
 
+	var taskID string
+	if id != "" {
+		if err := s.storage.ValidateID(id); err != nil {
+			return nil, err
+		}
+		if s.storage.Exists(id) {
+			return nil, fmt.Errorf("task id already exists: %s", id)
+		}
+		if s.archiveStorage != nil && s.archiveStorage.IsArchived(id) {
+			return nil, fmt.Errorf("task id already exists in archive: %s", id)
+		}
+		taskID = id
+	} else {
+		taskID = s.index.NextID()
+	}
+
 	now := time.Now().UTC()
 	t := &Task{
-		ID:          s.index.NextID(),
+		ID:          taskID,
 		ParentID:    parentID,
 		Title:       title,
 		Description: description,
@@ -192,13 +219,13 @@ func (s *Service) Create(title, description string, priority Priority, taskType 
 }
 
 // CreateSubtask creates a subtask under a parent
-func (s *Service) CreateSubtask(title, description string, priority Priority, taskType string, parentID int) (*Task, error) {
-	return s.Create(title, description, priority, taskType, &parentID)
+func (s *Service) CreateSubtask(title, description string, priority Priority, taskType string, parentID string) (*Task, error) {
+	return s.Create(title, description, priority, taskType, parentID, "")
 }
 
 // Get returns a task by ID with full description loaded from disk.
 // Falls back to the archive if the task is not found in the active index.
-func (s *Service) Get(id int) (*Task, error) {
+func (s *Service) Get(id string) (*Task, error) {
 	t, ok := s.index.Get(id)
 	if ok {
 		return t, nil
@@ -209,11 +236,11 @@ func (s *Service) Get(id int) (*Task, error) {
 			return archived, nil
 		}
 	}
-	return nil, fmt.Errorf("task not found: %d", id)
+	return nil, fmt.Errorf("task not found: %s", id)
 }
 
 // GetWithSubtasks returns a task and its subtasks in one call
-func (s *Service) GetWithSubtasks(id int) (*Task, []*Task, error) {
+func (s *Service) GetWithSubtasks(id string) (*Task, []*Task, error) {
 	t, err := s.Get(id)
 	if err != nil {
 		return nil, nil, err
@@ -224,19 +251,19 @@ func (s *Service) GetWithSubtasks(id int) (*Task, []*Task, error) {
 
 // WriteTaskFile creates or overwrites a named file attached to the given
 // task. Only active tasks accept writes - archived tasks are read-only.
-func (s *Service) WriteTaskFile(taskID int, filename, content string) error {
+func (s *Service) WriteTaskFile(taskID string, filename, content string) error {
 	if _, ok := s.index.Get(taskID); !ok {
 		if s.archiveStorage != nil && s.archiveStorage.IsArchived(taskID) {
-			return fmt.Errorf("task %d is archived; files are read-only", taskID)
+			return fmt.Errorf("task %s is archived; files are read-only", taskID)
 		}
-		return fmt.Errorf("task not found: %d", taskID)
+		return fmt.Errorf("task not found: %s", taskID)
 	}
 	return s.fileStorage.WriteFile(taskID, filename, content)
 }
 
 // ReadTaskFile returns the content of a named file attached to the given
 // task. Works for both active and archived tasks.
-func (s *Service) ReadTaskFile(taskID int, filename string) (string, error) {
+func (s *Service) ReadTaskFile(taskID string, filename string) (string, error) {
 	if _, err := s.Get(taskID); err != nil {
 		return "", err
 	}
@@ -245,7 +272,7 @@ func (s *Service) ReadTaskFile(taskID int, filename string) (string, error) {
 
 // ListTaskFiles returns the names of all files attached to the given task.
 // Works for both active and archived tasks.
-func (s *Service) ListTaskFiles(taskID int) ([]string, error) {
+func (s *Service) ListTaskFiles(taskID string) ([]string, error) {
 	if _, err := s.Get(taskID); err != nil {
 		return nil, err
 	}
@@ -253,12 +280,12 @@ func (s *Service) ListTaskFiles(taskID int) ([]string, error) {
 }
 
 // GetSubtaskCounts returns the count of subtasks for a task
-func (s *Service) GetSubtaskCounts(taskID int) (total, done int) {
+func (s *Service) GetSubtaskCounts(taskID string) (total, done int) {
 	return s.index.SubtaskCounts(taskID)
 }
 
 // Update modifies a task
-func (s *Service) Update(id int, title, description *string, status *Status, priority *Priority, taskType *string) (*Task, error) {
+func (s *Service) Update(id string, title, description *string, status *Status, priority *Priority, taskType *string) (*Task, error) {
 	t, err := s.Get(id)
 	if err != nil {
 		return nil, err
@@ -307,7 +334,7 @@ func (s *Service) Update(id int, title, description *string, status *Status, pri
 }
 
 // Delete removes a task
-func (s *Service) Delete(id int, deleteSubtasks bool) error {
+func (s *Service) Delete(id string, deleteSubtasks bool) error {
 	t, err := s.Get(id)
 	if err != nil {
 		return err
@@ -317,14 +344,14 @@ func (s *Service) Delete(id int, deleteSubtasks bool) error {
 	if s.index.HasSubtasks(id) {
 		if !deleteSubtasks {
 			total, _ := s.index.SubtaskCounts(id)
-			return fmt.Errorf("cannot delete task %d: has %d subtask(s). Use --force to delete this tasks and its subtasks", id, total)
+			return fmt.Errorf("cannot delete task %s: has %d subtask(s). Use --force to delete this tasks and its subtasks", id, total)
 		}
 
 		// Delete all subtasks first
 		subtasks := s.index.GetSubtasks(id)
 		for _, sub := range subtasks {
 			if err := s.storage.Delete(sub.ID); err != nil {
-				return fmt.Errorf("failed to delete subtask %d: %w", sub.ID, err)
+				return fmt.Errorf("failed to delete subtask %s: %w", sub.ID, err)
 			}
 			s.index.Delete(sub.ID)
 		}
@@ -334,7 +361,7 @@ func (s *Service) Delete(id int, deleteSubtasks bool) error {
 	removedEdges := s.index.RemoveAllRelationsForTask(id)
 
 	// Update other tasks' frontmatter to remove relations pointing to this task
-	affectedTasks := make(map[int]bool)
+	affectedTasks := make(map[string]bool)
 	for _, edge := range removedEdges {
 		// Only update frontmatter for edges where the other task is the source
 		// (relations are stored in the source task's frontmatter)
@@ -356,7 +383,7 @@ func (s *Service) Delete(id int, deleteSubtasks bool) error {
 		affected.Relations = newRelations
 		affected.UpdatedAt = time.Now().UTC()
 		if err := s.storage.Save(affected); err != nil {
-			return fmt.Errorf("failed to update relations in task %d: %w", affectedID, err)
+			return fmt.Errorf("failed to update relations in task %s: %w", affectedID, err)
 		}
 		s.index.Set(affected)
 	}
@@ -371,7 +398,7 @@ func (s *Service) Delete(id int, deleteSubtasks bool) error {
 
 // List returns all tasks, optionally filtered
 // Note: Tasks returned do not include descriptions for performance (use Get for full task data)
-func (s *Service) List(status *Status, priority *Priority, taskType *string, parentID *int) []*Task {
+func (s *Service) List(status *Status, priority *Priority, taskType *string, parentID *string) []*Task {
 	return s.index.Filter(status, priority, taskType, parentID)
 }
 
@@ -382,34 +409,34 @@ func (s *Service) GetNextTask() *Task {
 }
 
 // StartTask moves a task from todo to in_progress
-func (s *Service) StartTask(id int) (*Task, error) {
+func (s *Service) StartTask(id string) (*Task, error) {
 	t, err := s.Get(id)
 	if err != nil {
 		return nil, err
 	}
 
 	if t.Status != StatusTodo {
-		return nil, fmt.Errorf("task %d is not in todo status (current: %s)", id, t.Status)
+		return nil, fmt.Errorf("task %s is not in todo status (current: %s)", id, t.Status)
 	}
 
 	// Check if task is blocked
 	if blocked, blockers := s.IsBlocked(id); blocked {
 		var parts []string
 		for _, b := range blockers {
-			parts = append(parts, fmt.Sprintf("%d (%s)", b.TaskID, b.Status))
+			parts = append(parts, fmt.Sprintf("%s (%s)", b.TaskID, b.Status))
 		}
-		return nil, fmt.Errorf("task %d is blocked by tasks: %s", id, strings.Join(parts, ", "))
+		return nil, fmt.Errorf("task %s is blocked by tasks: %s", id, strings.Join(parts, ", "))
 	}
 
 	// Auto-start parent if this is a subtask
-	if t.ParentID != nil {
-		parent, err := s.Get(*t.ParentID)
+	if t.ParentID != "" {
+		parent, err := s.Get(t.ParentID)
 		if err != nil {
-			return nil, fmt.Errorf("parent task not found: %d", *t.ParentID)
+			return nil, fmt.Errorf("parent task not found: %s", t.ParentID)
 		}
 		if parent.Status == StatusTodo {
 			status := StatusInProgress
-			if _, err := s.Update(*t.ParentID, nil, nil, &status, nil, nil); err != nil {
+			if _, err := s.Update(t.ParentID, nil, nil, &status, nil, nil); err != nil {
 				return nil, fmt.Errorf("failed to start parent task: %w", err)
 			}
 		}
@@ -420,14 +447,14 @@ func (s *Service) StartTask(id int) (*Task, error) {
 }
 
 // CompleteTask moves a task from in_progress to done
-func (s *Service) CompleteTask(id int) (*Task, error) {
+func (s *Service) CompleteTask(id string) (*Task, error) {
 	t, err := s.Get(id)
 	if err != nil {
 		return nil, err
 	}
 
 	if t.Status != StatusInProgress {
-		return nil, fmt.Errorf("task %d is not in progress (current: %s)", id, t.Status)
+		return nil, fmt.Errorf("task %s is not in progress (current: %s)", id, t.Status)
 	}
 
 	// Check if this task has incomplete subtasks
@@ -439,7 +466,7 @@ func (s *Service) CompleteTask(id int) (*Task, error) {
 		}
 	}
 	if incompleteCount > 0 {
-		return nil, fmt.Errorf("cannot complete task %d: has %d incomplete subtask(s)", id, incompleteCount)
+		return nil, fmt.Errorf("cannot complete task %s: has %d incomplete subtask(s)", id, incompleteCount)
 	}
 
 	// Complete this task
@@ -450,8 +477,8 @@ func (s *Service) CompleteTask(id int) (*Task, error) {
 	}
 
 	// If this is a subtask, check if all siblings are done -> auto-complete parent
-	if t.ParentID != nil {
-		siblings := s.index.GetSubtasks(*t.ParentID)
+	if t.ParentID != "" {
+		siblings := s.index.GetSubtasks(t.ParentID)
 		allDone := true
 		for _, sib := range siblings {
 			if sib.Status != StatusDone {
@@ -460,7 +487,7 @@ func (s *Service) CompleteTask(id int) (*Task, error) {
 			}
 		}
 		if allDone {
-			if _, err := s.Update(*t.ParentID, nil, nil, &status, nil, nil); err != nil {
+			if _, err := s.Update(t.ParentID, nil, nil, &status, nil, nil); err != nil {
 				return nil, fmt.Errorf("failed to auto-complete parent: %w", err)
 			}
 		}
@@ -471,16 +498,16 @@ func (s *Service) CompleteTask(id int) (*Task, error) {
 
 // BlockingInfo describes a task that is blocking another
 type BlockingInfo struct {
-	TaskID int    `json:"task_id"`
+	TaskID string `json:"task_id"`
 	Status Status `json:"status"`
 	Title  string `json:"title"`
 }
 
 // AddRelation adds a relation between two tasks
-func (s *Service) AddRelation(source int, relationType string, target int) error {
+func (s *Service) AddRelation(source string, relationType string, target string) error {
 	// Validate no self-reference
 	if source == target {
-		return fmt.Errorf("cannot create relation: source and target are the same task (%d)", source)
+		return fmt.Errorf("cannot create relation: source and target are the same task (%s)", source)
 	}
 
 	// Validate relation type
@@ -491,18 +518,18 @@ func (s *Service) AddRelation(source int, relationType string, target int) error
 	// Validate source task exists
 	srcTask, err := s.Get(source)
 	if err != nil {
-		return fmt.Errorf("source task not found: %d", source)
+		return fmt.Errorf("source task not found: %s", source)
 	}
 
 	// Validate target task exists
 	if _, err := s.Get(target); err != nil {
-		return fmt.Errorf("target task not found: %d", target)
+		return fmt.Errorf("target task not found: %s", target)
 	}
 
 	// Check for duplicate
 	for _, rel := range srcTask.Relations {
 		if rel.Type == relationType && rel.Task == target {
-			return fmt.Errorf("relation already exists: %s from %d to %d", relationType, source, target)
+			return fmt.Errorf("relation already exists: %s from %s to %s", relationType, source, target)
 		}
 	}
 
@@ -528,10 +555,10 @@ func (s *Service) AddRelation(source int, relationType string, target int) error
 }
 
 // RemoveRelation removes a relation between two tasks
-func (s *Service) RemoveRelation(source int, relationType string, target int) error {
+func (s *Service) RemoveRelation(source string, relationType string, target string) error {
 	srcTask, err := s.Get(source)
 	if err != nil {
-		return fmt.Errorf("source task not found: %d", source)
+		return fmt.Errorf("source task not found: %s", source)
 	}
 
 	// Find and remove the relation from frontmatter
@@ -546,7 +573,7 @@ func (s *Service) RemoveRelation(source int, relationType string, target int) er
 	}
 
 	if !found {
-		return fmt.Errorf("relation not found: %s from %d to %d", relationType, source, target)
+		return fmt.Errorf("relation not found: %s from %s to %s", relationType, source, target)
 	}
 
 	srcTask.Relations = newRelations
@@ -565,7 +592,7 @@ func (s *Service) RemoveRelation(source int, relationType string, target int) er
 }
 
 // IsBlocked checks if a task has unresolved blocked_by relations
-func (s *Service) IsBlocked(taskID int) (bool, []BlockingInfo) {
+func (s *Service) IsBlocked(taskID string) (bool, []BlockingInfo) {
 	blockerIDs := s.index.GetBlockers(taskID)
 	if len(blockerIDs) == 0 {
 		return false, nil
@@ -590,13 +617,13 @@ func (s *Service) IsBlocked(taskID int) (bool, []BlockingInfo) {
 }
 
 // ArchiveTask moves a done task (and its subtasks) to the archive
-func (s *Service) ArchiveTask(id int) error {
+func (s *Service) ArchiveTask(id string) error {
 	t, ok := s.index.Get(id)
 	if !ok {
-		return fmt.Errorf("task not found: %d", id)
+		return fmt.Errorf("task not found: %s", id)
 	}
 	if t.Status != StatusDone {
-		return fmt.Errorf("task %d is not done (current: %s); only done tasks can be archived", id, t.Status)
+		return fmt.Errorf("task %s is not done (current: %s); only done tasks can be archived", id, t.Status)
 	}
 	if s.archiveStorage == nil {
 		return fmt.Errorf("archive storage not available")
@@ -607,7 +634,7 @@ func (s *Service) ArchiveTask(id int) error {
 		subtasks := s.index.GetSubtasks(id)
 		for _, sub := range subtasks {
 			if sub.Status != StatusDone {
-				return fmt.Errorf("cannot archive task %d: subtask %d is not done (current: %s)", id, sub.ID, sub.Status)
+				return fmt.Errorf("cannot archive task %s: subtask %s is not done (current: %s)", id, sub.ID, sub.Status)
 			}
 		}
 		// Archive all subtasks first
@@ -618,7 +645,7 @@ func (s *Service) ArchiveTask(id int) error {
 				return err
 			}
 			if err := s.archiveStorage.Archive(sub.ID); err != nil {
-				return fmt.Errorf("failed to archive subtask %d: %w", sub.ID, err)
+				return fmt.Errorf("failed to archive subtask %s: %w", sub.ID, err)
 			}
 			s.index.Delete(sub.ID)
 		}
@@ -632,7 +659,7 @@ func (s *Service) ArchiveTask(id int) error {
 
 	// Move the file to archive
 	if err := s.archiveStorage.Archive(id); err != nil {
-		return fmt.Errorf("failed to archive task %d: %w", id, err)
+		return fmt.Errorf("failed to archive task %s: %w", id, err)
 	}
 
 	s.index.Delete(id)
@@ -640,8 +667,8 @@ func (s *Service) ArchiveTask(id int) error {
 }
 
 // updateAffectedRelationTasks updates frontmatter of tasks whose relations pointed to taskID
-func (s *Service) updateAffectedRelationTasks(taskID int, removedEdges []RelationEdge) error {
-	affectedTasks := make(map[int]bool)
+func (s *Service) updateAffectedRelationTasks(taskID string, removedEdges []RelationEdge) error {
+	affectedTasks := make(map[string]bool)
 	for _, edge := range removedEdges {
 		if edge.Source != taskID {
 			affectedTasks[edge.Source] = true
@@ -661,7 +688,7 @@ func (s *Service) updateAffectedRelationTasks(taskID int, removedEdges []Relatio
 		affected.Relations = newRelations
 		affected.UpdatedAt = time.Now().UTC()
 		if err := s.storage.Save(affected); err != nil {
-			return fmt.Errorf("failed to update relations in task %d: %w", affectedID, err)
+			return fmt.Errorf("failed to update relations in task %s: %w", affectedID, err)
 		}
 		s.index.Set(affected)
 	}
@@ -682,8 +709,8 @@ func (s *Service) GetAutoArchiveCandidates() []*Task {
 			continue
 		}
 		// Only return top-level tasks or subtasks whose parent is also done
-		if t.ParentID != nil {
-			parent, ok := s.index.Get(*t.ParentID)
+		if t.ParentID != "" {
+			parent, ok := s.index.Get(t.ParentID)
 			if !ok || parent.Status != StatusDone {
 				continue
 			}
@@ -705,7 +732,7 @@ func (s *Service) RunAutoArchive() error {
 			continue
 		}
 		if err := s.ArchiveTask(t.ID); err != nil {
-			log.Printf("auto-archive: failed to archive task %d: %v", t.ID, err)
+			log.Printf("auto-archive: failed to archive task %s: %v", t.ID, err)
 		}
 	}
 	return nil

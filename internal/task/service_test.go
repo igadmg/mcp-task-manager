@@ -2,6 +2,8 @@ package task
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,27 +14,27 @@ import (
 // It requires a reference to the mockStorage so it can move tasks on Archive().
 type mockArchiveStorage struct {
 	active   *mockStorage
-	archived map[int]*Task
+	archived map[string]*Task
 }
 
 func newMockArchiveStorage(active *mockStorage) *mockArchiveStorage {
-	return &mockArchiveStorage{active: active, archived: make(map[int]*Task)}
+	return &mockArchiveStorage{active: active, archived: make(map[string]*Task)}
 }
 
-func (m *mockArchiveStorage) Archive(id int) error {
+func (m *mockArchiveStorage) Archive(id string) error {
 	t, ok := m.active.tasks[id]
 	if !ok {
-		return fmt.Errorf("active task not found for archiving: %d", id)
+		return fmt.Errorf("active task not found for archiving: %s", id)
 	}
 	m.archived[id] = t
 	delete(m.active.tasks, id)
 	return nil
 }
 
-func (m *mockArchiveStorage) LoadArchived(id int) (*Task, error) {
+func (m *mockArchiveStorage) LoadArchived(id string) (*Task, error) {
 	t, ok := m.archived[id]
 	if !ok {
-		return nil, fmt.Errorf("archived task not found: %d", id)
+		return nil, fmt.Errorf("archived task not found: %s", id)
 	}
 	return t, nil
 }
@@ -45,18 +47,18 @@ func (m *mockArchiveStorage) LoadAllArchived() ([]*Task, error) {
 	return result, nil
 }
 
-func (m *mockArchiveStorage) IsArchived(id int) bool {
+func (m *mockArchiveStorage) IsArchived(id string) bool {
 	_, ok := m.archived[id]
 	return ok
 }
 
 // mockStorage implements Storage interface for testing
 type mockStorage struct {
-	tasks map[int]*Task
+	tasks map[string]*Task
 }
 
 func newMockStorage() *mockStorage {
-	return &mockStorage{tasks: make(map[int]*Task)}
+	return &mockStorage{tasks: make(map[string]*Task)}
 }
 
 func (m *mockStorage) Save(t *Task) error {
@@ -64,11 +66,11 @@ func (m *mockStorage) Save(t *Task) error {
 	return nil
 }
 
-func (m *mockStorage) Load(id int) (*Task, error) {
+func (m *mockStorage) Load(id string) (*Task, error) {
 	return m.tasks[id], nil
 }
 
-func (m *mockStorage) Delete(id int) error {
+func (m *mockStorage) Delete(id string) error {
 	delete(m.tasks, id)
 	return nil
 }
@@ -81,17 +83,46 @@ func (m *mockStorage) MigrateFlatLayout() error {
 	return nil
 }
 
+// mockReservedTaskIDs mirrors internal/storage's reserved on-disk names,
+// kept independent so this package's tests don't couple to internal/storage.
+var mockReservedTaskIDs = map[string]string{
+	"0":           `reserved as the "top-level" filter sentinel`,
+	"archive":     "reserved for the archive subdirectory",
+	".index.json": "reserved for the index cache file",
+}
+
+func (m *mockStorage) ValidateID(id string) error {
+	if strings.TrimSpace(id) == "" {
+		return fmt.Errorf("task id cannot be empty")
+	}
+	if strings.ContainsAny(id, "/\\") {
+		return fmt.Errorf("task id %q must not contain a path separator", id)
+	}
+	if id == ".." {
+		return fmt.Errorf("task id %q is not allowed", id)
+	}
+	if reason, ok := mockReservedTaskIDs[id]; ok {
+		return fmt.Errorf("task id %q is reserved (%s)", id, reason)
+	}
+	return nil
+}
+
+func (m *mockStorage) Exists(id string) bool {
+	_, ok := m.tasks[id]
+	return ok
+}
+
 // mockIndex implements Index interface for testing
 // mockFileStorage implements FileStorage interface for testing
 type mockFileStorage struct {
-	files map[int]map[string]string
+	files map[string]map[string]string
 }
 
 func newMockFileStorage() *mockFileStorage {
-	return &mockFileStorage{files: make(map[int]map[string]string)}
+	return &mockFileStorage{files: make(map[string]map[string]string)}
 }
 
-func (m *mockFileStorage) WriteFile(taskID int, filename, content string) error {
+func (m *mockFileStorage) WriteFile(taskID string, filename, content string) error {
 	if m.files[taskID] == nil {
 		m.files[taskID] = make(map[string]string)
 	}
@@ -99,15 +130,15 @@ func (m *mockFileStorage) WriteFile(taskID int, filename, content string) error 
 	return nil
 }
 
-func (m *mockFileStorage) ReadFile(taskID int, filename string) (string, error) {
+func (m *mockFileStorage) ReadFile(taskID string, filename string) (string, error) {
 	content, ok := m.files[taskID][filename]
 	if !ok {
-		return "", fmt.Errorf("file %q not found on task %d", filename, taskID)
+		return "", fmt.Errorf("file %q not found on task %s", filename, taskID)
 	}
 	return content, nil
 }
 
-func (m *mockFileStorage) ListFiles(taskID int) ([]string, error) {
+func (m *mockFileStorage) ListFiles(taskID string) ([]string, error) {
 	names := make([]string, 0, len(m.files[taskID]))
 	for name := range m.files[taskID] {
 		names = append(names, name)
@@ -116,37 +147,37 @@ func (m *mockFileStorage) ListFiles(taskID int) ([]string, error) {
 }
 
 type mockIndex struct {
-	tasks             map[int]*Task
+	tasks             map[string]*Task
 	nextID            int
-	relationsBySource map[int][]RelationEdge
-	relationsByTarget map[int][]RelationEdge
+	relationsBySource map[string][]RelationEdge
+	relationsByTarget map[string][]RelationEdge
 }
 
 func newMockIndex() *mockIndex {
 	return &mockIndex{
-		tasks:             make(map[int]*Task),
+		tasks:             make(map[string]*Task),
 		nextID:            1,
-		relationsBySource: make(map[int][]RelationEdge),
-		relationsByTarget: make(map[int][]RelationEdge),
+		relationsBySource: make(map[string][]RelationEdge),
+		relationsByTarget: make(map[string][]RelationEdge),
 	}
 }
 
 func (m *mockIndex) Load() error { return nil }
 func (m *mockIndex) Save() error { return nil }
 
-func (m *mockIndex) Get(id int) (*Task, bool) {
+func (m *mockIndex) Get(id string) (*Task, bool) {
 	t, ok := m.tasks[id]
 	return t, ok
 }
 
 func (m *mockIndex) Set(t *Task) {
 	m.tasks[t.ID] = t
-	if t.ID >= m.nextID {
-		m.nextID = t.ID + 1
+	if n, err := strconv.Atoi(t.ID); err == nil && n >= m.nextID {
+		m.nextID = n + 1
 	}
 }
 
-func (m *mockIndex) Delete(id int) {
+func (m *mockIndex) Delete(id string) {
 	delete(m.tasks, id)
 }
 
@@ -158,7 +189,7 @@ func (m *mockIndex) All() []*Task {
 	return result
 }
 
-func (m *mockIndex) Filter(status *Status, priority *Priority, taskType *string, parentID *int) []*Task {
+func (m *mockIndex) Filter(status *Status, priority *Priority, taskType *string, parentID *string) []*Task {
 	var result []*Task
 	for _, t := range m.tasks {
 		if status != nil && t.Status != *status {
@@ -171,12 +202,12 @@ func (m *mockIndex) Filter(status *Status, priority *Priority, taskType *string,
 			continue
 		}
 		if parentID != nil {
-			if *parentID == 0 {
-				if t.ParentID != nil {
+			if *parentID == "0" {
+				if t.ParentID != "" {
 					continue
 				}
 			} else {
-				if t.ParentID == nil || *t.ParentID != *parentID {
+				if t.ParentID != *parentID {
 					continue
 				}
 			}
@@ -200,32 +231,32 @@ func (m *mockIndex) NextTodo() *Task {
 	return best
 }
 
-func (m *mockIndex) NextID() int {
-	return m.nextID
+func (m *mockIndex) NextID() string {
+	return strconv.Itoa(m.nextID)
 }
 
-func (m *mockIndex) GetSubtasks(parentID int) []*Task {
+func (m *mockIndex) GetSubtasks(parentID string) []*Task {
 	var result []*Task
 	for _, t := range m.tasks {
-		if t.ParentID != nil && *t.ParentID == parentID {
+		if t.ParentID == parentID {
 			result = append(result, t)
 		}
 	}
 	return result
 }
 
-func (m *mockIndex) HasSubtasks(taskID int) bool {
+func (m *mockIndex) HasSubtasks(taskID string) bool {
 	for _, t := range m.tasks {
-		if t.ParentID != nil && *t.ParentID == taskID {
+		if t.ParentID == taskID {
 			return true
 		}
 	}
 	return false
 }
 
-func (m *mockIndex) SubtaskCounts(parentID int) (total int, done int) {
+func (m *mockIndex) SubtaskCounts(parentID string) (total int, done int) {
 	for _, t := range m.tasks {
-		if t.ParentID != nil && *t.ParentID == parentID {
+		if t.ParentID == parentID {
 			total++
 			if t.Status == StatusDone {
 				done++
@@ -270,7 +301,7 @@ func (m *mockIndex) RemoveRelation(edge RelationEdge) {
 	}
 }
 
-func (m *mockIndex) GetRelationsForTask(taskID int) []RelationEdge {
+func (m *mockIndex) GetRelationsForTask(taskID string) []RelationEdge {
 	seen := make(map[RelationEdge]bool)
 	var result []RelationEdge
 	for _, e := range m.relationsBySource[taskID] {
@@ -288,8 +319,8 @@ func (m *mockIndex) GetRelationsForTask(taskID int) []RelationEdge {
 	return result
 }
 
-func (m *mockIndex) GetBlockers(taskID int) []int {
-	var blockers []int
+func (m *mockIndex) GetBlockers(taskID string) []string {
+	var blockers []string
 	for _, e := range m.relationsBySource[taskID] {
 		if e.Type == "blocked_by" {
 			blockers = append(blockers, e.Target)
@@ -298,7 +329,7 @@ func (m *mockIndex) GetBlockers(taskID int) []int {
 	return blockers
 }
 
-func (m *mockIndex) RemoveAllRelationsForTask(taskID int) []RelationEdge {
+func (m *mockIndex) RemoveAllRelationsForTask(taskID string) []RelationEdge {
 	var removed []RelationEdge
 	for _, e := range m.relationsBySource[taskID] {
 		removed = append(removed, e)
@@ -333,19 +364,107 @@ func TestService_Create(t *testing.T) {
 		t.Fatalf("Initialize() error = %v", err)
 	}
 
-	task, err := svc.Create("Test Task", "Description", PriorityHigh, "feature", nil)
+	task, err := svc.Create("Test Task", "Description", PriorityHigh, "feature", "", "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 
-	if task.ID != 1 {
-		t.Errorf("ID = %d, want 1", task.ID)
+	if task.ID != "1" {
+		t.Errorf("ID = %s, want 1", task.ID)
 	}
 	if task.Title != "Test Task" {
 		t.Errorf("Title = %q, want %q", task.Title, "Test Task")
 	}
 	if task.Status != StatusTodo {
 		t.Errorf("Status = %q, want %q", task.Status, StatusTodo)
+	}
+}
+
+func TestService_Create_WithCustomID(t *testing.T) {
+	idx := newMockIndex()
+	svc := NewService(newMockStorage(), nil, nil, idx, []string{"feature", "bug"}, nil)
+	svc.Initialize()
+
+	task, err := svc.Create("Custom", "Desc", PriorityHigh, "feature", "", "my-feature")
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if task.ID != "my-feature" {
+		t.Errorf("ID = %q, want %q", task.ID, "my-feature")
+	}
+
+	// The auto-increment counter must be untouched by a custom id: the next
+	// plain Create() should still produce "1", not skip ahead or collide.
+	next, err := svc.Create("Auto", "Desc", PriorityHigh, "feature", "", "")
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if next.ID != "1" {
+		t.Errorf("next auto-increment ID = %q, want %q", next.ID, "1")
+	}
+}
+
+func TestService_Create_WithCustomID_Collision(t *testing.T) {
+	t.Run("active", func(t *testing.T) {
+		svc := NewService(newMockStorage(), nil, nil, newMockIndex(), []string{"feature", "bug"}, nil)
+		svc.Initialize()
+
+		if _, err := svc.Create("First", "Desc", PriorityHigh, "feature", "", "dup"); err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+		if _, err := svc.Create("Second", "Desc", PriorityHigh, "feature", "", "dup"); err == nil {
+			t.Error("Create() with a colliding active custom id should fail")
+		}
+	})
+
+	t.Run("archived", func(t *testing.T) {
+		svc, _, as := newServiceWithArchive()
+
+		task, err := svc.Create("Archived Task", "Desc", PriorityHigh, "feature", "", "dup")
+		if err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+		svc.StartTask(task.ID)
+		svc.CompleteTask(task.ID)
+		if err := svc.ArchiveTask(task.ID); err != nil {
+			t.Fatalf("ArchiveTask() error = %v", err)
+		}
+		if !as.IsArchived("dup") {
+			t.Fatalf("expected task %q to be archived", "dup")
+		}
+
+		if _, err := svc.Create("Reuse", "Desc", PriorityHigh, "feature", "", "dup"); err == nil {
+			t.Error("Create() with a custom id colliding with an archived task should fail")
+		}
+	})
+}
+
+func TestService_Create_WithCustomID_InvalidFormat(t *testing.T) {
+	tests := []struct {
+		name string
+		id   string
+	}{
+		{"empty", ""},
+		{"whitespace", "   "},
+		{"forward slash", "foo/bar"},
+		{"backslash", "foo\\bar"},
+		{"dotdot", ".."},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.id == "" {
+				// An empty id means "no custom id" - Create should succeed
+				// via auto-increment rather than reject it, so this case is
+				// exercised via a non-empty invalid id instead.
+				return
+			}
+			svc := NewService(newMockStorage(), nil, nil, newMockIndex(), []string{"feature", "bug"}, nil)
+			svc.Initialize()
+			if _, err := svc.Create("Task", "Desc", PriorityHigh, "feature", "", tt.id); err == nil {
+				t.Errorf("Create() with invalid custom id %q should fail", tt.id)
+			}
+		})
 	}
 }
 
@@ -382,7 +501,7 @@ func TestService_Create_EnsuresDirOnWrite(t *testing.T) {
 	storage.ensureDirCalled = false
 
 	// Create should call EnsureDir before writing
-	_, err := svc.Create("Test Task", "Description", PriorityHigh, "feature", nil)
+	_, err := svc.Create("Test Task", "Description", PriorityHigh, "feature", "", "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -437,7 +556,7 @@ func TestService_Create_Validation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := svc.Create(tt.title, "desc", tt.priority, tt.taskType, nil)
+			_, err := svc.Create(tt.title, "desc", tt.priority, tt.taskType, "", "")
 			if (err != nil) != tt.wantErr {
 				t.Errorf("Create() error = %v, wantErr = %v", err, tt.wantErr)
 			}
@@ -449,7 +568,7 @@ func TestService_Update(t *testing.T) {
 	svc := NewService(newMockStorage(), nil, nil, newMockIndex(), []string{"feature", "bug"}, nil)
 	svc.Initialize()
 
-	task, _ := svc.Create("Original", "Desc", PriorityMedium, "feature", nil)
+	task, _ := svc.Create("Original", "Desc", PriorityMedium, "feature", "", "")
 
 	newTitle := "Updated"
 	newStatus := StatusInProgress
@@ -470,7 +589,7 @@ func TestService_Delete(t *testing.T) {
 	svc := NewService(newMockStorage(), nil, nil, newMockIndex(), []string{"feature", "bug"}, nil)
 	svc.Initialize()
 
-	task, _ := svc.Create("To Delete", "Desc", PriorityMedium, "feature", nil)
+	task, _ := svc.Create("To Delete", "Desc", PriorityMedium, "feature", "", "")
 
 	if err := svc.Delete(task.ID, false); err != nil {
 		t.Fatalf("Delete() error = %v", err)
@@ -486,7 +605,7 @@ func TestService_TaskWorkflow(t *testing.T) {
 	svc.Initialize()
 
 	// Create
-	task, _ := svc.Create("Workflow Test", "Desc", PriorityHigh, "feature", nil)
+	task, _ := svc.Create("Workflow Test", "Desc", PriorityHigh, "feature", "", "")
 	if task.Status != StatusTodo {
 		t.Fatalf("initial status = %q, want todo", task.Status)
 	}
@@ -514,7 +633,7 @@ func TestService_StartTask_InvalidState(t *testing.T) {
 	svc := NewService(newMockStorage(), nil, nil, newMockIndex(), []string{"feature", "bug"}, nil)
 	svc.Initialize()
 
-	task, _ := svc.Create("Test", "Desc", PriorityHigh, "feature", nil)
+	task, _ := svc.Create("Test", "Desc", PriorityHigh, "feature", "", "")
 
 	// Start the task
 	svc.StartTask(task.ID)
@@ -530,7 +649,7 @@ func TestService_CompleteTask_InvalidState(t *testing.T) {
 	svc := NewService(newMockStorage(), nil, nil, newMockIndex(), []string{"feature", "bug"}, nil)
 	svc.Initialize()
 
-	task, _ := svc.Create("Test", "Desc", PriorityHigh, "feature", nil)
+	task, _ := svc.Create("Test", "Desc", PriorityHigh, "feature", "", "")
 
 	// Try to complete without starting - should fail
 	_, err := svc.CompleteTask(task.ID)
@@ -549,9 +668,9 @@ func TestService_GetNextTask(t *testing.T) {
 	}
 
 	// Add tasks with different priorities
-	svc.Create("Low", "Desc", PriorityLow, "feature", nil)
+	svc.Create("Low", "Desc", PriorityLow, "feature", "", "")
 	time.Sleep(time.Millisecond) // Ensure different timestamps
-	svc.Create("Critical", "Desc", PriorityCritical, "bug", nil)
+	svc.Create("Critical", "Desc", PriorityCritical, "bug", "", "")
 
 	next := svc.GetNextTask()
 	if next == nil {
@@ -566,9 +685,9 @@ func TestService_List(t *testing.T) {
 	svc := NewService(newMockStorage(), nil, nil, newMockIndex(), []string{"feature", "bug"}, nil)
 	svc.Initialize()
 
-	svc.Create("Task 1", "Desc", PriorityHigh, "feature", nil)
-	svc.Create("Task 2", "Desc", PriorityLow, "bug", nil)
-	svc.Create("Task 3", "Desc", PriorityMedium, "feature", nil)
+	svc.Create("Task 1", "Desc", PriorityHigh, "feature", "", "")
+	svc.Create("Task 2", "Desc", PriorityLow, "bug", "", "")
+	svc.Create("Task 3", "Desc", PriorityMedium, "feature", "", "")
 
 	// All
 	all := svc.List(nil, nil, nil, nil)
@@ -589,7 +708,7 @@ func TestService_CreateSubtask(t *testing.T) {
 	svc.Initialize()
 
 	// Create parent
-	parent, _ := svc.Create("Parent", "Desc", PriorityHigh, "feature", nil)
+	parent, _ := svc.Create("Parent", "Desc", PriorityHigh, "feature", "", "")
 
 	// Create subtask
 	subtask, err := svc.CreateSubtask("Subtask", "Desc", PriorityMedium, "feature", parent.ID)
@@ -597,8 +716,8 @@ func TestService_CreateSubtask(t *testing.T) {
 		t.Fatalf("CreateSubtask() error = %v", err)
 	}
 
-	if subtask.ParentID == nil || *subtask.ParentID != parent.ID {
-		t.Errorf("ParentID = %v, want %d", subtask.ParentID, parent.ID)
+	if subtask.ParentID != parent.ID {
+		t.Errorf("ParentID = %v, want %s", subtask.ParentID, parent.ID)
 	}
 }
 
@@ -607,7 +726,7 @@ func TestService_CreateSubtask_InvalidParent(t *testing.T) {
 	svc.Initialize()
 
 	// Try to create subtask with non-existent parent
-	_, err := svc.CreateSubtask("Subtask", "Desc", PriorityMedium, "feature", 999)
+	_, err := svc.CreateSubtask("Subtask", "Desc", PriorityMedium, "feature", "999")
 	if err == nil {
 		t.Error("CreateSubtask() with invalid parent should fail")
 	}
@@ -617,7 +736,7 @@ func TestService_CreateSubtask_NestedSubtask(t *testing.T) {
 	svc := NewService(newMockStorage(), nil, nil, newMockIndex(), []string{"feature", "bug"}, nil)
 	svc.Initialize()
 
-	parent, _ := svc.Create("Parent", "Desc", PriorityHigh, "feature", nil)
+	parent, _ := svc.Create("Parent", "Desc", PriorityHigh, "feature", "", "")
 	subtask, _ := svc.CreateSubtask("Subtask", "Desc", PriorityMedium, "feature", parent.ID)
 
 	// Try to create subtask under subtask (should fail - single level only)
@@ -631,7 +750,7 @@ func TestService_StartTask_AutoStartsParent(t *testing.T) {
 	svc := NewService(newMockStorage(), nil, nil, newMockIndex(), []string{"feature", "bug"}, nil)
 	svc.Initialize()
 
-	parent, _ := svc.Create("Parent", "Desc", PriorityHigh, "feature", nil)
+	parent, _ := svc.Create("Parent", "Desc", PriorityHigh, "feature", "", "")
 	subtask, _ := svc.CreateSubtask("Subtask", "Desc", PriorityMedium, "feature", parent.ID)
 
 	// Start subtask
@@ -651,7 +770,7 @@ func TestService_StartTask_ParentAlreadyStarted(t *testing.T) {
 	svc := NewService(newMockStorage(), nil, nil, newMockIndex(), []string{"feature", "bug"}, nil)
 	svc.Initialize()
 
-	parent, _ := svc.Create("Parent", "Desc", PriorityHigh, "feature", nil)
+	parent, _ := svc.Create("Parent", "Desc", PriorityHigh, "feature", "", "")
 	svc.StartTask(parent.ID) // Start parent first
 	subtask, _ := svc.CreateSubtask("Subtask", "Desc", PriorityMedium, "feature", parent.ID)
 
@@ -666,7 +785,7 @@ func TestService_CompleteTask_BlocksIfSubtasksIncomplete(t *testing.T) {
 	svc := NewService(newMockStorage(), nil, nil, newMockIndex(), []string{"feature", "bug"}, nil)
 	svc.Initialize()
 
-	parent, _ := svc.Create("Parent", "Desc", PriorityHigh, "feature", nil)
+	parent, _ := svc.Create("Parent", "Desc", PriorityHigh, "feature", "", "")
 	svc.CreateSubtask("Subtask", "Desc", PriorityMedium, "feature", parent.ID)
 
 	// Start parent
@@ -683,7 +802,7 @@ func TestService_CompleteTask_AutoCompletesParent(t *testing.T) {
 	svc := NewService(newMockStorage(), nil, nil, newMockIndex(), []string{"feature", "bug"}, nil)
 	svc.Initialize()
 
-	parent, _ := svc.Create("Parent", "Desc", PriorityHigh, "feature", nil)
+	parent, _ := svc.Create("Parent", "Desc", PriorityHigh, "feature", "", "")
 	sub1, _ := svc.CreateSubtask("Sub 1", "Desc", PriorityMedium, "feature", parent.ID)
 	sub2, _ := svc.CreateSubtask("Sub 2", "Desc", PriorityMedium, "feature", parent.ID)
 
@@ -712,7 +831,7 @@ func TestService_Delete_BlocksIfHasSubtasks(t *testing.T) {
 	svc := NewService(newMockStorage(), nil, nil, newMockIndex(), []string{"feature", "bug"}, nil)
 	svc.Initialize()
 
-	parent, _ := svc.Create("Parent", "Desc", PriorityHigh, "feature", nil)
+	parent, _ := svc.Create("Parent", "Desc", PriorityHigh, "feature", "", "")
 	svc.CreateSubtask("Subtask", "Desc", PriorityMedium, "feature", parent.ID)
 
 	// Try to delete parent - should fail
@@ -726,7 +845,7 @@ func TestService_Delete_ForceDeletesSubtasks(t *testing.T) {
 	svc := NewService(newMockStorage(), nil, nil, newMockIndex(), []string{"feature", "bug"}, nil)
 	svc.Initialize()
 
-	parent, _ := svc.Create("Parent", "Desc", PriorityHigh, "feature", nil)
+	parent, _ := svc.Create("Parent", "Desc", PriorityHigh, "feature", "", "")
 	sub, _ := svc.CreateSubtask("Subtask", "Desc", PriorityMedium, "feature", parent.ID)
 
 	// Force delete parent
@@ -748,7 +867,7 @@ func TestService_Delete_SubtaskAllowed(t *testing.T) {
 	svc := NewService(newMockStorage(), nil, nil, newMockIndex(), []string{"feature", "bug"}, nil)
 	svc.Initialize()
 
-	parent, _ := svc.Create("Parent", "Desc", PriorityHigh, "feature", nil)
+	parent, _ := svc.Create("Parent", "Desc", PriorityHigh, "feature", "", "")
 	sub, _ := svc.CreateSubtask("Subtask", "Desc", PriorityMedium, "feature", parent.ID)
 
 	// Delete subtask - should work
@@ -763,7 +882,7 @@ func TestService_GetWithSubtasks(t *testing.T) {
 	svc.Initialize()
 
 	// Create parent with subtasks
-	parent, _ := svc.Create("Parent", "Desc", PriorityHigh, "feature", nil)
+	parent, _ := svc.Create("Parent", "Desc", PriorityHigh, "feature", "", "")
 	sub1, _ := svc.CreateSubtask("Sub 1", "Desc", PriorityMedium, "feature", parent.ID)
 	sub2, _ := svc.CreateSubtask("Sub 2", "Desc", PriorityLow, "feature", parent.ID)
 
@@ -774,19 +893,19 @@ func TestService_GetWithSubtasks(t *testing.T) {
 	}
 
 	if task.ID != parent.ID {
-		t.Errorf("task.ID = %d, want %d", task.ID, parent.ID)
+		t.Errorf("task.ID = %s, want %s", task.ID, parent.ID)
 	}
 	if len(subtasks) != 2 {
 		t.Errorf("len(subtasks) = %d, want 2", len(subtasks))
 	}
 
 	// Verify subtask IDs are correct
-	subtaskIDs := make(map[int]bool)
+	subtaskIDs := make(map[string]bool)
 	for _, s := range subtasks {
 		subtaskIDs[s.ID] = true
 	}
 	if !subtaskIDs[sub1.ID] || !subtaskIDs[sub2.ID] {
-		t.Errorf("subtasks should contain IDs %d and %d", sub1.ID, sub2.ID)
+		t.Errorf("subtasks should contain IDs %s and %s", sub1.ID, sub2.ID)
 	}
 }
 
@@ -795,7 +914,7 @@ func TestService_GetWithSubtasks_NoSubtasks(t *testing.T) {
 	svc.Initialize()
 
 	// Create task without subtasks
-	task, _ := svc.Create("Standalone", "Desc", PriorityHigh, "feature", nil)
+	task, _ := svc.Create("Standalone", "Desc", PriorityHigh, "feature", "", "")
 
 	// Get with subtasks - should return empty slice
 	got, subtasks, err := svc.GetWithSubtasks(task.ID)
@@ -804,7 +923,7 @@ func TestService_GetWithSubtasks_NoSubtasks(t *testing.T) {
 	}
 
 	if got.ID != task.ID {
-		t.Errorf("task.ID = %d, want %d", got.ID, task.ID)
+		t.Errorf("task.ID = %s, want %s", got.ID, task.ID)
 	}
 	if len(subtasks) != 0 {
 		t.Errorf("len(subtasks) = %d, want 0", len(subtasks))
@@ -816,7 +935,7 @@ func TestService_GetWithSubtasks_NotFound(t *testing.T) {
 	svc.Initialize()
 
 	// Get non-existent task
-	_, _, err := svc.GetWithSubtasks(999)
+	_, _, err := svc.GetWithSubtasks("999")
 	if err == nil {
 		t.Error("GetWithSubtasks() on non-existent task should fail")
 	}
@@ -897,18 +1016,18 @@ func TestSubtaskLifecycle(t *testing.T) {
 	// ===========================================================================
 	t.Log("Phase 1: Creating parent task")
 
-	parent, err := svc.Create("Parent Task", "A parent task with subtasks", PriorityHigh, "feature", nil)
+	parent, err := svc.Create("Parent Task", "A parent task with subtasks", PriorityHigh, "feature", "", "")
 	if err != nil {
 		t.Fatalf("Create(parent) error = %v", err)
 	}
-	if parent.ID != 1 {
-		t.Errorf("parent.ID = %d, want 1", parent.ID)
+	if parent.ID != "1" {
+		t.Errorf("parent.ID = %s, want 1", parent.ID)
 	}
 	if parent.Status != StatusTodo {
 		t.Errorf("parent.Status = %q, want %q", parent.Status, StatusTodo)
 	}
-	if parent.ParentID != nil {
-		t.Error("parent.ParentID should be nil")
+	if parent.ParentID != "" {
+		t.Error("parent.ParentID should be empty")
 	}
 
 	// ===========================================================================
@@ -920,8 +1039,8 @@ func TestSubtaskLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateSubtask(sub1) error = %v", err)
 	}
-	if sub1.ParentID == nil || *sub1.ParentID != parent.ID {
-		t.Errorf("sub1.ParentID = %v, want %d", sub1.ParentID, parent.ID)
+	if sub1.ParentID != parent.ID {
+		t.Errorf("sub1.ParentID = %v, want %s", sub1.ParentID, parent.ID)
 	}
 
 	time.Sleep(time.Millisecond) // Ensure different timestamps for ordering
@@ -945,19 +1064,19 @@ func TestSubtaskLifecycle(t *testing.T) {
 		t.Fatalf("GetWithSubtasks() error = %v", err)
 	}
 	if retrievedParent.ID != parent.ID {
-		t.Errorf("GetWithSubtasks() parent.ID = %d, want %d", retrievedParent.ID, parent.ID)
+		t.Errorf("GetWithSubtasks() parent.ID = %s, want %s", retrievedParent.ID, parent.ID)
 	}
 	if len(subtasks) != 3 {
 		t.Errorf("GetWithSubtasks() len(subtasks) = %d, want 3", len(subtasks))
 	}
 
 	// Verify all subtask IDs are present
-	subtaskIDs := make(map[int]bool)
+	subtaskIDs := make(map[string]bool)
 	for _, s := range subtasks {
 		subtaskIDs[s.ID] = true
 	}
 	if !subtaskIDs[sub1.ID] || !subtaskIDs[sub2.ID] || !subtaskIDs[sub3.ID] {
-		t.Errorf("GetWithSubtasks() missing subtask IDs; got %v, want %d, %d, %d",
+		t.Errorf("GetWithSubtasks() missing subtask IDs; got %v, want %s, %s, %s",
 			subtaskIDs, sub1.ID, sub2.ID, sub3.ID)
 	}
 
@@ -974,7 +1093,7 @@ func TestSubtaskLifecycle(t *testing.T) {
 		t.Fatal("GetNextTask() returned nil, expected a task")
 	}
 	// Verify it's a subtask by checking ParentID is set
-	if next.ParentID == nil {
+	if next.ParentID == "" {
 		// This is the parent - which means the mock doesn't implement subtask skipping
 		// The real index should skip parents with subtasks, but the mock may not
 		t.Log("Note: mock NextTodo returned parent; real implementation should skip parents with subtasks")
@@ -1077,7 +1196,7 @@ func TestSubtaskLifecycle(t *testing.T) {
 	// ===========================================================================
 	t.Log("Phase 8: Testing delete protection")
 
-	parent2, err := svc.Create("Parent Task 2", "Another parent", PriorityMedium, "feature", nil)
+	parent2, err := svc.Create("Parent Task 2", "Another parent", PriorityMedium, "feature", "", "")
 	if err != nil {
 		t.Fatalf("Create(parent2) error = %v", err)
 	}
@@ -1124,7 +1243,7 @@ func TestSubtaskLifecycle(t *testing.T) {
 	// ===========================================================================
 	t.Log("Phase 10: Testing individual subtask deletion")
 
-	parent3, _ := svc.Create("Parent Task 3", "Third parent", PriorityLow, "feature", nil)
+	parent3, _ := svc.Create("Parent Task 3", "Third parent", PriorityLow, "feature", "", "")
 	sub5, _ := svc.CreateSubtask("Subtask 5", "Will be deleted", PriorityLow, "feature", parent3.ID)
 	sub6, _ := svc.CreateSubtask("Subtask 6", "Will remain", PriorityLow, "feature", parent3.ID)
 
@@ -1151,7 +1270,7 @@ func TestSubtaskLifecycle(t *testing.T) {
 		t.Errorf("len(subtasks) after deletion = %d, want 1", len(remainingSubtasks))
 	}
 	if remainingSubtasks[0].ID != sub6.ID {
-		t.Errorf("remaining subtask ID = %d, want %d", remainingSubtasks[0].ID, sub6.ID)
+		t.Errorf("remaining subtask ID = %s, want %s", remainingSubtasks[0].ID, sub6.ID)
 	}
 
 	t.Log("Subtask lifecycle integration test completed successfully")
@@ -1167,8 +1286,8 @@ func TestService_AddRelation(t *testing.T) {
 	svc := NewService(newMockStorage(), nil, nil, newMockIndex(), cfg.TaskTypes, cfg)
 	svc.Initialize()
 
-	task1, _ := svc.Create("Task 1", "", PriorityHigh, "feature", nil)
-	task2, _ := svc.Create("Task 2", "", PriorityHigh, "feature", nil)
+	task1, _ := svc.Create("Task 1", "", PriorityHigh, "feature", "", "")
+	task2, _ := svc.Create("Task 2", "", PriorityHigh, "feature", "", "")
 
 	err := svc.AddRelation(task2.ID, "blocked_by", task1.ID)
 	if err != nil {
@@ -1181,7 +1300,7 @@ func TestService_AddRelation(t *testing.T) {
 		t.Fatalf("task2 relations count = %d, want 1", len(t2.Relations))
 	}
 	if t2.Relations[0].Type != "blocked_by" || t2.Relations[0].Task != task1.ID {
-		t.Errorf("task2 relation = %v, want {blocked_by, %d}", t2.Relations[0], task1.ID)
+		t.Errorf("task2 relation = %v, want {blocked_by, %s}", t2.Relations[0], task1.ID)
 	}
 }
 
@@ -1193,8 +1312,8 @@ func TestService_AddRelation_Validation(t *testing.T) {
 	svc := NewService(newMockStorage(), nil, nil, newMockIndex(), cfg.TaskTypes, cfg)
 	svc.Initialize()
 
-	task1, _ := svc.Create("Task 1", "", PriorityHigh, "feature", nil)
-	task2, _ := svc.Create("Task 2", "", PriorityHigh, "feature", nil)
+	task1, _ := svc.Create("Task 1", "", PriorityHigh, "feature", "", "")
+	task2, _ := svc.Create("Task 2", "", PriorityHigh, "feature", "", "")
 
 	// Self-reference
 	if err := svc.AddRelation(task1.ID, "blocked_by", task1.ID); err == nil {
@@ -1207,12 +1326,12 @@ func TestService_AddRelation_Validation(t *testing.T) {
 	}
 
 	// Non-existent source
-	if err := svc.AddRelation(999, "blocked_by", task1.ID); err == nil {
+	if err := svc.AddRelation("999", "blocked_by", task1.ID); err == nil {
 		t.Error("AddRelation() with non-existent source should fail")
 	}
 
 	// Non-existent target
-	if err := svc.AddRelation(task1.ID, "blocked_by", 999); err == nil {
+	if err := svc.AddRelation(task1.ID, "blocked_by", "999"); err == nil {
 		t.Error("AddRelation() with non-existent target should fail")
 	}
 
@@ -1231,8 +1350,8 @@ func TestService_RemoveRelation(t *testing.T) {
 	svc := NewService(newMockStorage(), nil, nil, newMockIndex(), cfg.TaskTypes, cfg)
 	svc.Initialize()
 
-	task1, _ := svc.Create("Task 1", "", PriorityHigh, "feature", nil)
-	task2, _ := svc.Create("Task 2", "", PriorityHigh, "feature", nil)
+	task1, _ := svc.Create("Task 1", "", PriorityHigh, "feature", "", "")
+	task2, _ := svc.Create("Task 2", "", PriorityHigh, "feature", "", "")
 
 	svc.AddRelation(task2.ID, "blocked_by", task1.ID)
 
@@ -1255,10 +1374,10 @@ func TestService_RemoveRelation_NotFound(t *testing.T) {
 	svc := NewService(newMockStorage(), nil, nil, newMockIndex(), cfg.TaskTypes, cfg)
 	svc.Initialize()
 
-	task1, _ := svc.Create("Task 1", "", PriorityHigh, "feature", nil)
-	svc.Create("Task 2", "", PriorityHigh, "feature", nil)
+	task1, _ := svc.Create("Task 1", "", PriorityHigh, "feature", "", "")
+	svc.Create("Task 2", "", PriorityHigh, "feature", "", "")
 
-	err := svc.RemoveRelation(task1.ID, "blocked_by", 2)
+	err := svc.RemoveRelation(task1.ID, "blocked_by", "2")
 	if err == nil {
 		t.Error("RemoveRelation() on non-existent relation should fail")
 	}
@@ -1272,8 +1391,8 @@ func TestService_IsBlocked(t *testing.T) {
 	svc := NewService(newMockStorage(), nil, nil, newMockIndex(), cfg.TaskTypes, cfg)
 	svc.Initialize()
 
-	task1, _ := svc.Create("Blocker", "", PriorityHigh, "feature", nil)
-	task2, _ := svc.Create("Blocked", "", PriorityHigh, "feature", nil)
+	task1, _ := svc.Create("Blocker", "", PriorityHigh, "feature", "", "")
+	task2, _ := svc.Create("Blocked", "", PriorityHigh, "feature", "", "")
 
 	svc.AddRelation(task2.ID, "blocked_by", task1.ID)
 
@@ -1285,7 +1404,7 @@ func TestService_IsBlocked(t *testing.T) {
 		t.Fatalf("blockers count = %d, want 1", len(blockers))
 	}
 	if blockers[0].TaskID != task1.ID {
-		t.Errorf("blocker ID = %d, want %d", blockers[0].TaskID, task1.ID)
+		t.Errorf("blocker ID = %s, want %s", blockers[0].TaskID, task1.ID)
 	}
 
 	// Unblocked task
@@ -1306,8 +1425,8 @@ func TestService_StartTask_Blocked(t *testing.T) {
 	svc := NewService(newMockStorage(), nil, nil, newMockIndex(), cfg.TaskTypes, cfg)
 	svc.Initialize()
 
-	task1, _ := svc.Create("Blocker", "", PriorityHigh, "feature", nil)
-	task2, _ := svc.Create("Blocked", "", PriorityHigh, "feature", nil)
+	task1, _ := svc.Create("Blocker", "", PriorityHigh, "feature", "", "")
+	task2, _ := svc.Create("Blocked", "", PriorityHigh, "feature", "", "")
 
 	svc.AddRelation(task2.ID, "blocked_by", task1.ID)
 
@@ -1334,8 +1453,8 @@ func TestService_Delete_CascadesRelations(t *testing.T) {
 	svc := NewService(newMockStorage(), nil, nil, newMockIndex(), cfg.TaskTypes, cfg)
 	svc.Initialize()
 
-	task1, _ := svc.Create("Task 1", "", PriorityHigh, "feature", nil)
-	task2, _ := svc.Create("Task 2", "", PriorityHigh, "feature", nil)
+	task1, _ := svc.Create("Task 1", "", PriorityHigh, "feature", "", "")
+	task2, _ := svc.Create("Task 2", "", PriorityHigh, "feature", "", "")
 
 	svc.AddRelation(task2.ID, "blocked_by", task1.ID)
 
@@ -1371,7 +1490,7 @@ func TestService_ArchiveTask_Basic(t *testing.T) {
 	svc, _, as := newServiceWithArchive()
 
 	// Create a task, complete it, then archive it
-	task1, _ := svc.Create("Archive Me", "desc", PriorityHigh, "feature", nil)
+	task1, _ := svc.Create("Archive Me", "desc", PriorityHigh, "feature", "", "")
 	svc.StartTask(task1.ID)
 	svc.CompleteTask(task1.ID)
 
@@ -1391,7 +1510,7 @@ func TestService_ArchiveTask_Basic(t *testing.T) {
 func TestService_ArchiveTask_NotDone(t *testing.T) {
 	svc, _, _ := newServiceWithArchive()
 
-	task1, _ := svc.Create("Not Done", "desc", PriorityHigh, "feature", nil)
+	task1, _ := svc.Create("Not Done", "desc", PriorityHigh, "feature", "", "")
 	err := svc.ArchiveTask(task1.ID)
 	if err == nil {
 		t.Error("ArchiveTask() should fail for non-done task")
@@ -1401,7 +1520,7 @@ func TestService_ArchiveTask_NotDone(t *testing.T) {
 func TestService_ArchiveTask_InProgress(t *testing.T) {
 	svc, _, _ := newServiceWithArchive()
 
-	task1, _ := svc.Create("In Progress", "desc", PriorityHigh, "feature", nil)
+	task1, _ := svc.Create("In Progress", "desc", PriorityHigh, "feature", "", "")
 	svc.StartTask(task1.ID)
 	err := svc.ArchiveTask(task1.ID)
 	if err == nil {
@@ -1411,7 +1530,7 @@ func TestService_ArchiveTask_InProgress(t *testing.T) {
 
 func TestService_ArchiveTask_NotFound(t *testing.T) {
 	svc, _, _ := newServiceWithArchive()
-	err := svc.ArchiveTask(999)
+	err := svc.ArchiveTask("999")
 	if err == nil {
 		t.Error("ArchiveTask() should fail for non-existent task")
 	}
@@ -1420,7 +1539,7 @@ func TestService_ArchiveTask_NotFound(t *testing.T) {
 func TestService_ArchiveTask_WithSubtasks_AllDone(t *testing.T) {
 	svc, _, as := newServiceWithArchive()
 
-	parent, _ := svc.Create("Parent", "desc", PriorityHigh, "feature", nil)
+	parent, _ := svc.Create("Parent", "desc", PriorityHigh, "feature", "", "")
 	sub1, _ := svc.CreateSubtask("Sub 1", "desc", PriorityMedium, "feature", parent.ID)
 	sub2, _ := svc.CreateSubtask("Sub 2", "desc", PriorityMedium, "feature", parent.ID)
 
@@ -1450,7 +1569,7 @@ func TestService_ArchiveTask_WithSubtasks_AllDone(t *testing.T) {
 func TestService_ArchiveTask_WithSubtasks_SomeNotDone(t *testing.T) {
 	svc, _, _ := newServiceWithArchive()
 
-	parent, _ := svc.Create("Parent", "desc", PriorityHigh, "feature", nil)
+	parent, _ := svc.Create("Parent", "desc", PriorityHigh, "feature", "", "")
 	sub1, _ := svc.CreateSubtask("Sub 1", "desc", PriorityMedium, "feature", parent.ID)
 	svc.CreateSubtask("Sub 2", "desc", PriorityMedium, "feature", parent.ID)
 
@@ -1477,8 +1596,8 @@ func TestService_ArchiveTask_CleansRelations(t *testing.T) {
 	svc := NewService(ms, as, nil, newMockIndex(), cfg.TaskTypes, cfg)
 	svc.Initialize()
 
-	task1, _ := svc.Create("Blocker", "", PriorityHigh, "feature", nil)
-	task2, _ := svc.Create("Blocked", "", PriorityHigh, "feature", nil)
+	task1, _ := svc.Create("Blocker", "", PriorityHigh, "feature", "", "")
+	task2, _ := svc.Create("Blocked", "", PriorityHigh, "feature", "", "")
 
 	svc.AddRelation(task2.ID, "blocked_by", task1.ID)
 
@@ -1499,7 +1618,7 @@ func TestService_ArchiveTask_CleansRelations(t *testing.T) {
 func TestService_Get_FallbackToArchive(t *testing.T) {
 	svc, _, as := newServiceWithArchive()
 
-	task1, _ := svc.Create("To Archive", "description text", PriorityHigh, "feature", nil)
+	task1, _ := svc.Create("To Archive", "description text", PriorityHigh, "feature", "", "")
 	svc.StartTask(task1.ID)
 	svc.CompleteTask(task1.ID)
 	svc.ArchiveTask(task1.ID)
@@ -1510,7 +1629,7 @@ func TestService_Get_FallbackToArchive(t *testing.T) {
 		t.Fatalf("Get() after archive should still find task, error = %v", err)
 	}
 	if got.ID != task1.ID {
-		t.Errorf("Get() ID = %d, want %d", got.ID, task1.ID)
+		t.Errorf("Get() ID = %s, want %s", got.ID, task1.ID)
 	}
 	if !as.IsArchived(task1.ID) {
 		t.Error("task should be in archive")
@@ -1520,9 +1639,9 @@ func TestService_Get_FallbackToArchive(t *testing.T) {
 func TestService_ListArchived(t *testing.T) {
 	svc, _, _ := newServiceWithArchive()
 
-	task1, _ := svc.Create("Task 1", "desc", PriorityHigh, "feature", nil)
-	task2, _ := svc.Create("Task 2", "desc", PriorityLow, "bug", nil)
-	svc.Create("Task 3", "desc", PriorityMedium, "feature", nil)
+	task1, _ := svc.Create("Task 1", "desc", PriorityHigh, "feature", "", "")
+	task2, _ := svc.Create("Task 2", "desc", PriorityLow, "bug", "", "")
+	svc.Create("Task 3", "desc", PriorityMedium, "feature", "", "")
 
 	// Complete and archive task1 and task2
 	svc.StartTask(task1.ID)
@@ -1557,7 +1676,7 @@ func TestService_GetAutoArchiveCandidates(t *testing.T) {
 	svc.Initialize()
 
 	// Create a task and manually set UpdatedAt to 31 days ago
-	task1, _ := svc.Create("Old Done Task", "desc", PriorityHigh, "feature", nil)
+	task1, _ := svc.Create("Old Done Task", "desc", PriorityHigh, "feature", "", "")
 	svc.StartTask(task1.ID)
 	svc.CompleteTask(task1.ID)
 
@@ -1567,13 +1686,13 @@ func TestService_GetAutoArchiveCandidates(t *testing.T) {
 	}
 
 	// Create a recent done task (should not be a candidate)
-	task2, _ := svc.Create("Recent Done Task", "desc", PriorityHigh, "feature", nil)
+	task2, _ := svc.Create("Recent Done Task", "desc", PriorityHigh, "feature", "", "")
 	svc.StartTask(task2.ID)
 	svc.CompleteTask(task2.ID)
 	// task2 has a recent UpdatedAt by default
 
 	// Create an active task (should not be a candidate)
-	svc.Create("Active Task", "desc", PriorityMedium, "feature", nil)
+	svc.Create("Active Task", "desc", PriorityMedium, "feature", "", "")
 
 	// The index entry needs the backdated time too
 	// Re-set in index via the mock
@@ -1586,7 +1705,7 @@ func TestService_GetAutoArchiveCandidates(t *testing.T) {
 		t.Errorf("GetAutoArchiveCandidates() count = %d, want 1", len(candidates))
 	}
 	if len(candidates) > 0 && candidates[0].ID != task1.ID {
-		t.Errorf("GetAutoArchiveCandidates() task ID = %d, want %d", candidates[0].ID, task1.ID)
+		t.Errorf("GetAutoArchiveCandidates() task ID = %s, want %s", candidates[0].ID, task1.ID)
 	}
 }
 
@@ -1603,7 +1722,7 @@ func TestService_RunAutoArchive_Disabled(t *testing.T) {
 	svc := NewService(ms, as, nil, newMockIndex(), cfg.TaskTypes, cfg)
 	svc.Initialize()
 
-	task1, _ := svc.Create("Done Task", "desc", PriorityHigh, "feature", nil)
+	task1, _ := svc.Create("Done Task", "desc", PriorityHigh, "feature", "", "")
 	svc.StartTask(task1.ID)
 	svc.CompleteTask(task1.ID)
 
@@ -1632,7 +1751,7 @@ func TestService_Initialize_RunsAutoArchive(t *testing.T) {
 	svc.Initialize()
 
 	// Create a done task that's old enough
-	task1, _ := svc.Create("Old Done", "desc", PriorityHigh, "feature", nil)
+	task1, _ := svc.Create("Old Done", "desc", PriorityHigh, "feature", "", "")
 	svc.StartTask(task1.ID)
 	svc.CompleteTask(task1.ID)
 
@@ -1657,7 +1776,7 @@ func TestService_WriteTaskFile_ActiveTask(t *testing.T) {
 	svc := NewService(newMockStorage(), nil, fs, newMockIndex(), []string{"feature", "bug"}, nil)
 	svc.Initialize()
 
-	tk, err := svc.Create("Task", "desc", PriorityHigh, "feature", nil)
+	tk, err := svc.Create("Task", "desc", PriorityHigh, "feature", "", "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -1675,17 +1794,17 @@ func TestService_WriteTaskFile_RejectsArchivedTask(t *testing.T) {
 	fs := newMockFileStorage()
 	svc.fileStorage = fs
 
-	tk := &Task{ID: 1, Title: "Task", Status: StatusDone, Priority: PriorityHigh, Type: "feature", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
-	ms.tasks[1] = tk
-	if err := as.Archive(1); err != nil {
+	tk := &Task{ID: "1", Title: "Task", Status: StatusDone, Priority: PriorityHigh, Type: "feature", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	ms.tasks["1"] = tk
+	if err := as.Archive("1"); err != nil {
 		t.Fatalf("Archive() error = %v", err)
 	}
 
-	err := svc.WriteTaskFile(1, "notes.md", "hello")
+	err := svc.WriteTaskFile("1", "notes.md", "hello")
 	if err == nil {
 		t.Fatal("expected WriteTaskFile() on an archived task to error")
 	}
-	if len(fs.files[1]) != 0 {
+	if len(fs.files["1"]) != 0 {
 		t.Error("fileStorage.WriteFile should not have been called for an archived task")
 	}
 }
@@ -1694,7 +1813,7 @@ func TestService_WriteTaskFile_RejectsUnknownTask(t *testing.T) {
 	svc := NewService(newMockStorage(), nil, newMockFileStorage(), newMockIndex(), []string{"feature", "bug"}, nil)
 	svc.Initialize()
 
-	if err := svc.WriteTaskFile(999, "notes.md", "hello"); err == nil {
+	if err := svc.WriteTaskFile("999", "notes.md", "hello"); err == nil {
 		t.Fatal("expected WriteTaskFile() on an unknown task to error")
 	}
 }
@@ -1704,12 +1823,12 @@ func TestService_ReadTaskFile_ActiveAndArchived(t *testing.T) {
 	fs := newMockFileStorage()
 	svc.fileStorage = fs
 
-	tk := &Task{ID: 1, Title: "Task", Status: StatusTodo, Priority: PriorityHigh, Type: "feature", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
-	ms.tasks[1] = tk
+	tk := &Task{ID: "1", Title: "Task", Status: StatusTodo, Priority: PriorityHigh, Type: "feature", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	ms.tasks["1"] = tk
 	svc.index.Set(tk)
-	fs.files[1] = map[string]string{"notes.md": "active content"}
+	fs.files["1"] = map[string]string{"notes.md": "active content"}
 
-	got, err := svc.ReadTaskFile(1, "notes.md")
+	got, err := svc.ReadTaskFile("1", "notes.md")
 	if err != nil {
 		t.Fatalf("ReadTaskFile() on active task error = %v", err)
 	}
@@ -1718,11 +1837,11 @@ func TestService_ReadTaskFile_ActiveAndArchived(t *testing.T) {
 	}
 
 	tk.Status = StatusDone
-	if err := as.Archive(1); err != nil {
+	if err := as.Archive("1"); err != nil {
 		t.Fatalf("Archive() error = %v", err)
 	}
 
-	got, err = svc.ReadTaskFile(1, "notes.md")
+	got, err = svc.ReadTaskFile("1", "notes.md")
 	if err != nil {
 		t.Fatalf("ReadTaskFile() on archived task error = %v", err)
 	}
@@ -1736,12 +1855,12 @@ func TestService_ListTaskFiles_ActiveAndArchived(t *testing.T) {
 	fs := newMockFileStorage()
 	svc.fileStorage = fs
 
-	tk := &Task{ID: 1, Title: "Task", Status: StatusDone, Priority: PriorityHigh, Type: "feature", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
-	ms.tasks[1] = tk
+	tk := &Task{ID: "1", Title: "Task", Status: StatusDone, Priority: PriorityHigh, Type: "feature", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	ms.tasks["1"] = tk
 	svc.index.Set(tk)
-	fs.files[1] = map[string]string{"notes.md": "a", "design.md": "b"}
+	fs.files["1"] = map[string]string{"notes.md": "a", "design.md": "b"}
 
-	names, err := svc.ListTaskFiles(1)
+	names, err := svc.ListTaskFiles("1")
 	if err != nil {
 		t.Fatalf("ListTaskFiles() on active task error = %v", err)
 	}
@@ -1749,11 +1868,11 @@ func TestService_ListTaskFiles_ActiveAndArchived(t *testing.T) {
 		t.Fatalf("ListTaskFiles() returned %d names, want 2", len(names))
 	}
 
-	if err := as.Archive(1); err != nil {
+	if err := as.Archive("1"); err != nil {
 		t.Fatalf("Archive() error = %v", err)
 	}
 
-	names, err = svc.ListTaskFiles(1)
+	names, err = svc.ListTaskFiles("1")
 	if err != nil {
 		t.Fatalf("ListTaskFiles() on archived task error = %v", err)
 	}
@@ -1767,7 +1886,7 @@ func TestService_ListTaskFiles_EmptyReturnsEmptySlice(t *testing.T) {
 	svc := NewService(newMockStorage(), nil, fs, newMockIndex(), []string{"feature", "bug"}, nil)
 	svc.Initialize()
 
-	tk, err := svc.Create("Task", "desc", PriorityHigh, "feature", nil)
+	tk, err := svc.Create("Task", "desc", PriorityHigh, "feature", "", "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -1786,11 +1905,11 @@ func TestService_ArchiveTask_DoesNotTouchFileStorage(t *testing.T) {
 	fs := newMockFileStorage()
 	svc.fileStorage = fs
 
-	tk := &Task{ID: 1, Title: "Task", Status: StatusDone, Priority: PriorityHigh, Type: "feature", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
-	ms.tasks[1] = tk
+	tk := &Task{ID: "1", Title: "Task", Status: StatusDone, Priority: PriorityHigh, Type: "feature", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	ms.tasks["1"] = tk
 	svc.index.Set(tk)
 
-	if err := svc.ArchiveTask(1); err != nil {
+	if err := svc.ArchiveTask("1"); err != nil {
 		t.Fatalf("ArchiveTask() error = %v", err)
 	}
 	if len(fs.files) != 0 {
@@ -1803,7 +1922,7 @@ func TestService_Delete_DoesNotTouchFileStorage(t *testing.T) {
 	svc := NewService(newMockStorage(), nil, fs, newMockIndex(), []string{"feature", "bug"}, nil)
 	svc.Initialize()
 
-	tk, err := svc.Create("Task", "desc", PriorityHigh, "feature", nil)
+	tk, err := svc.Create("Task", "desc", PriorityHigh, "feature", "", "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}

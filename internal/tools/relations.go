@@ -13,7 +13,7 @@ func registerRelationTools(s *server.MCPServer, svc *task.Service, relationTypes
 	// add_relation
 	addTool := mcp.NewTool("add_relation",
 		mcp.WithDescription("Add a relation between two tasks"),
-		mcp.WithNumber("source",
+		mcp.WithString("source",
 			mcp.Required(),
 			mcp.Description("Source task ID"),
 		),
@@ -22,7 +22,7 @@ func registerRelationTools(s *server.MCPServer, svc *task.Service, relationTypes
 			mcp.Description(allowedValuesDescription("Relation type.", relationTypes)),
 			mcp.Enum(relationTypes...),
 		),
-		mcp.WithNumber("target",
+		mcp.WithString("target",
 			mcp.Required(),
 			mcp.Description("Target task ID"),
 		),
@@ -32,7 +32,7 @@ func registerRelationTools(s *server.MCPServer, svc *task.Service, relationTypes
 	// remove_relation
 	removeTool := mcp.NewTool("remove_relation",
 		mcp.WithDescription("Remove a relation between two tasks"),
-		mcp.WithNumber("source",
+		mcp.WithString("source",
 			mcp.Required(),
 			mcp.Description("Source task ID"),
 		),
@@ -41,7 +41,7 @@ func registerRelationTools(s *server.MCPServer, svc *task.Service, relationTypes
 			mcp.Description(allowedValuesDescription("Relation type.", relationTypes)),
 			mcp.Enum(relationTypes...),
 		),
-		mcp.WithNumber("target",
+		mcp.WithString("target",
 			mcp.Required(),
 			mcp.Description("Target task ID"),
 		),
@@ -51,28 +51,28 @@ func registerRelationTools(s *server.MCPServer, svc *task.Service, relationTypes
 
 func addRelationHandler(svc *task.Service) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		source := req.GetInt("source", 0)
+		source := req.GetString("source", "")
 		relationType := req.GetString("type", "")
-		target := req.GetInt("target", 0)
+		target := req.GetString("target", "")
 
 		if err := svc.AddRelation(source, relationType, target); err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 
-		return mcp.NewToolResultText(fmt.Sprintf("Added %s relation from task %d to task %d", relationType, source, target)), nil
+		return mcp.NewToolResultText(fmt.Sprintf("Added %s relation from task %s to task %s", relationType, source, target)), nil
 	}
 }
 
 func removeRelationHandler(svc *task.Service) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		source := req.GetInt("source", 0)
+		source := req.GetString("source", "")
 		relationType := req.GetString("type", "")
-		target := req.GetInt("target", 0)
+		target := req.GetString("target", "")
 
 		if err := svc.RemoveRelation(source, relationType, target); err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 
-		return mcp.NewToolResultText(fmt.Sprintf("Removed %s relation from task %d to task %d", relationType, source, target)), nil
+		return mcp.NewToolResultText(fmt.Sprintf("Removed %s relation from task %s to task %s", relationType, source, target)), nil
 	}
 }

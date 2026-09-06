@@ -46,10 +46,24 @@ func getGitCommit(dir string) (string, error) {
 	}
 }
 
+// compareTaskIDs reports whether a sorts before b: numerically when both
+// are pure non-negative integers (preserving today's 1,2,...,9,10,11
+// ordering even though ids are now variable-width strings), falling back
+// to a plain string compare otherwise (a stable, deterministic ordering
+// for custom ids or a numeric-vs-custom pairing).
+func compareTaskIDs(a, b string) bool {
+	an, aerr := strconv.Atoi(a)
+	bn, berr := strconv.Atoi(b)
+	if aerr == nil && berr == nil {
+		return an < bn
+	}
+	return a < b
+}
+
 // IndexEntry contains task metadata without description (stored in index)
 type IndexEntry struct {
-	ID        int           `json:"id"`
-	ParentID  *int          `json:"parent_id,omitempty"`
+	ID        string        `json:"id"`
+	ParentID  string        `json:"parent_id,omitempty"`
 	Title     string        `json:"title"`
 	Status    task.Status   `json:"status"`
 	Priority  task.Priority `json:"priority"`
@@ -102,9 +116,9 @@ const BlockingRelationType = "blocked_by"
 
 // Index is an in-memory cache of all tasks
 type Index struct {
-	entries           map[int]*IndexEntry
-	relationsBySource map[int][]task.RelationEdge
-	relationsByTarget map[int][]task.RelationEdge
+	entries           map[string]*IndexEntry
+	relationsBySource map[string][]task.RelationEdge
+	relationsByTarget map[string][]task.RelationEdge
 	dir               string
 	storage           *MarkdownStorage
 	dirty             bool
@@ -113,9 +127,9 @@ type Index struct {
 // NewIndex creates a new index for the given directory
 func NewIndex(dir string, storage *MarkdownStorage) *Index {
 	return &Index{
-		entries:           make(map[int]*IndexEntry),
-		relationsBySource: make(map[int][]task.RelationEdge),
-		relationsByTarget: make(map[int][]task.RelationEdge),
+		entries:           make(map[string]*IndexEntry),
+		relationsBySource: make(map[string][]task.RelationEdge),
+		relationsByTarget: make(map[string][]task.RelationEdge),
 		dir:               dir,
 		storage:           storage,
 	}
@@ -127,9 +141,9 @@ func (idx *Index) indexPath() string {
 }
 
 func (idx *Index) reset() {
-	idx.entries = make(map[int]*IndexEntry)
-	idx.relationsBySource = make(map[int][]task.RelationEdge)
-	idx.relationsByTarget = make(map[int][]task.RelationEdge)
+	idx.entries = make(map[string]*IndexEntry)
+	idx.relationsBySource = make(map[string][]task.RelationEdge)
+	idx.relationsByTarget = make(map[string][]task.RelationEdge)
 	idx.dirty = false
 }
 
@@ -194,7 +208,7 @@ func (idx *Index) Save() error {
 		entries = append(entries, e)
 	}
 	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].ID < entries[j].ID
+		return compareTaskIDs(entries[i].ID, entries[j].ID)
 	})
 
 	// Build relations slice
@@ -204,10 +218,10 @@ func (idx *Index) Save() error {
 	}
 	sort.Slice(relations, func(i, j int) bool {
 		if relations[i].Source != relations[j].Source {
-			return relations[i].Source < relations[j].Source
+			return compareTaskIDs(relations[i].Source, relations[j].Source)
 		}
 		if relations[i].Target != relations[j].Target {
-			return relations[i].Target < relations[j].Target
+			return compareTaskIDs(relations[i].Target, relations[j].Target)
 		}
 		return relations[i].Type < relations[j].Type
 	})
@@ -261,14 +275,14 @@ func (idx *Index) Load() error {
 	}
 
 	// Load entries into memory
-	idx.entries = make(map[int]*IndexEntry)
+	idx.entries = make(map[string]*IndexEntry)
 	for _, e := range indexFile.Tasks {
 		idx.entries[e.ID] = e
 	}
 
 	// Load relations into memory
-	idx.relationsBySource = make(map[int][]task.RelationEdge)
-	idx.relationsByTarget = make(map[int][]task.RelationEdge)
+	idx.relationsBySource = make(map[string][]task.RelationEdge)
+	idx.relationsByTarget = make(map[string][]task.RelationEdge)
 	for _, edge := range indexFile.Relations {
 		idx.addEdge(edge)
 	}
@@ -304,10 +318,7 @@ func (idx *Index) isStaleOnDisk() (bool, error) {
 
 	taskCount := 0
 	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		if _, err := strconv.Atoi(entry.Name()); err != nil {
+		if !entry.IsDir() || entry.Name() == "archive" {
 			continue
 		}
 
@@ -343,14 +354,14 @@ func (idx *Index) isStaleOnDisk() (bool, error) {
 }
 
 // GetEntry returns an entry by ID (metadata only, no description)
-func (idx *Index) GetEntry(id int) (*IndexEntry, bool) {
+func (idx *Index) GetEntry(id string) (*IndexEntry, bool) {
 	idx.syncIfStale()
 	e, ok := idx.entries[id]
 	return e, ok
 }
 
 // Get returns a full task by ID (loads description from disk)
-func (idx *Index) Get(id int) (*task.Task, bool) {
+func (idx *Index) Get(id string) (*task.Task, bool) {
 	idx.syncIfStale()
 	if _, ok := idx.entries[id]; !ok {
 		return nil, false
@@ -369,7 +380,7 @@ func (idx *Index) Set(t *task.Task) {
 }
 
 // Delete removes a task from the index
-func (idx *Index) Delete(id int) {
+func (idx *Index) Delete(id string) {
 	delete(idx.entries, id)
 	idx.dirty = true
 }
@@ -382,14 +393,14 @@ func (idx *Index) All() []*task.Task {
 		tasks = append(tasks, entryToTask(e))
 	}
 	sort.Slice(tasks, func(i, j int) bool {
-		return tasks[i].ID < tasks[j].ID
+		return compareTaskIDs(tasks[i].ID, tasks[j].ID)
 	})
 	return tasks
 }
 
 // Filter returns tasks matching the given criteria
-// parentID: nil = all tasks, 0 = top-level only, >0 = subtasks of that parent
-func (idx *Index) Filter(status *task.Status, priority *task.Priority, taskType *string, parentID *int) []*task.Task {
+// parentID: nil = all tasks, "0" = top-level only, otherwise = subtasks of that parent
+func (idx *Index) Filter(status *task.Status, priority *task.Priority, taskType *string, parentID *string) []*task.Task {
 	idx.syncIfStale()
 	var result []*task.Task
 	for _, e := range idx.entries {
@@ -403,14 +414,14 @@ func (idx *Index) Filter(status *task.Status, priority *task.Priority, taskType 
 			continue
 		}
 		if parentID != nil {
-			if *parentID == 0 {
+			if *parentID == "0" {
 				// Top-level only
-				if e.ParentID != nil {
+				if e.ParentID != "" {
 					continue
 				}
 			} else {
 				// Subtasks of specific parent
-				if e.ParentID == nil || *e.ParentID != *parentID {
+				if e.ParentID != *parentID {
 					continue
 				}
 			}
@@ -418,7 +429,7 @@ func (idx *Index) Filter(status *task.Status, priority *task.Priority, taskType 
 		result = append(result, entryToTask(e))
 	}
 	sort.Slice(result, func(i, j int) bool {
-		return result[i].ID < result[j].ID
+		return compareTaskIDs(result[i].ID, result[j].ID)
 	})
 	return result
 }
@@ -426,7 +437,7 @@ func (idx *Index) Filter(status *task.Status, priority *task.Priority, taskType 
 type nextTodoGroupKey struct {
 	priorityOrder    int
 	createdAt        time.Time
-	id               int
+	id               string
 	inProgressParent bool
 }
 
@@ -445,7 +456,7 @@ func (idx *Index) isActionableForNextTodo(e *IndexEntry) bool {
 	return !idx.isBlocked(e.ID)
 }
 
-func (idx *Index) nextTodoGroupForEntry(e *IndexEntry) (int, nextTodoGroupKey) {
+func (idx *Index) nextTodoGroupForEntry(e *IndexEntry) (string, nextTodoGroupKey) {
 	groupID := e.ID
 	key := nextTodoGroupKey{
 		priorityOrder:    e.Priority.Order(),
@@ -454,8 +465,8 @@ func (idx *Index) nextTodoGroupForEntry(e *IndexEntry) (int, nextTodoGroupKey) {
 		inProgressParent: e.Status == task.StatusInProgress,
 	}
 
-	if e.ParentID != nil {
-		if parent, ok := idx.GetEntry(*e.ParentID); ok {
+	if e.ParentID != "" {
+		if parent, ok := idx.GetEntry(e.ParentID); ok {
 			groupID = parent.ID
 			key = nextTodoGroupKey{
 				priorityOrder:    parent.Priority.Order(),
@@ -475,7 +486,7 @@ func (idx *Index) nextTodoGroupForEntry(e *IndexEntry) (int, nextTodoGroupKey) {
 // winning group by their own priority, creation date, and ID.
 func (idx *Index) NextTodo() *task.Task {
 	idx.syncIfStale()
-	groups := make(map[int]*nextTodoGroup)
+	groups := make(map[string]*nextTodoGroup)
 
 	for _, e := range idx.entries {
 		if !idx.isActionableForNextTodo(e) {
@@ -514,7 +525,7 @@ func (idx *Index) NextTodo() *task.Task {
 		if !left.createdAt.Equal(right.createdAt) {
 			return left.createdAt.Before(right.createdAt)
 		}
-		return left.id < right.id
+		return compareTaskIDs(left.id, right.id)
 	})
 
 	winningGroup := groupList[0].tasks
@@ -528,53 +539,53 @@ func (idx *Index) NextTodo() *task.Task {
 		if !winningGroup[i].CreatedAt.Equal(winningGroup[j].CreatedAt) {
 			return winningGroup[i].CreatedAt.Before(winningGroup[j].CreatedAt)
 		}
-		return winningGroup[i].ID < winningGroup[j].ID
+		return compareTaskIDs(winningGroup[i].ID, winningGroup[j].ID)
 	})
 
 	return winningGroup[0]
 }
 
 // NextID returns the next available task ID
-func (idx *Index) NextID() int {
+func (idx *Index) NextID() string {
 	idx.syncIfStale()
 	maxID := 0
 	for id := range idx.entries {
-		if id > maxID {
-			maxID = id
+		if n, err := strconv.Atoi(id); err == nil && n > maxID {
+			maxID = n
 		}
 	}
 	activeNextID := maxID + 1
 
 	storageNextID, err := idx.storage.NextID()
 	if err != nil {
-		return activeNextID
+		return strconv.Itoa(activeNextID)
 	}
 	if storageNextID > activeNextID {
-		return storageNextID
+		activeNextID = storageNextID
 	}
-	return activeNextID
+	return strconv.Itoa(activeNextID)
 }
 
 // GetSubtasks returns all subtasks of a parent task
-func (idx *Index) GetSubtasks(parentID int) []*task.Task {
+func (idx *Index) GetSubtasks(parentID string) []*task.Task {
 	idx.syncIfStale()
 	var result []*task.Task
 	for _, e := range idx.entries {
-		if e.ParentID != nil && *e.ParentID == parentID {
+		if e.ParentID == parentID {
 			result = append(result, entryToTask(e))
 		}
 	}
 	sort.Slice(result, func(i, j int) bool {
-		return result[i].ID < result[j].ID
+		return compareTaskIDs(result[i].ID, result[j].ID)
 	})
 	return result
 }
 
 // HasSubtasks returns true if the task has any subtasks
-func (idx *Index) HasSubtasks(taskID int) bool {
+func (idx *Index) HasSubtasks(taskID string) bool {
 	idx.syncIfStale()
 	for _, e := range idx.entries {
-		if e.ParentID != nil && *e.ParentID == taskID {
+		if e.ParentID == taskID {
 			return true
 		}
 	}
@@ -582,10 +593,10 @@ func (idx *Index) HasSubtasks(taskID int) bool {
 }
 
 // SubtaskCounts returns (total, done) counts for a parent task
-func (idx *Index) SubtaskCounts(parentID int) (total int, done int) {
+func (idx *Index) SubtaskCounts(parentID string) (total int, done int) {
 	idx.syncIfStale()
 	for _, e := range idx.entries {
-		if e.ParentID != nil && *e.ParentID == parentID {
+		if e.ParentID == parentID {
 			total++
 			if e.Status == task.StatusDone {
 				done++
@@ -596,7 +607,7 @@ func (idx *Index) SubtaskCounts(parentID int) (total int, done int) {
 }
 
 // isBlocked checks if a task has any unresolved blocked_by relations
-func (idx *Index) isBlocked(taskID int) bool {
+func (idx *Index) isBlocked(taskID string) bool {
 	idx.syncIfStale()
 	for _, e := range idx.relationsBySource[taskID] {
 		if e.Type == BlockingRelationType {
@@ -665,7 +676,7 @@ func (idx *Index) RemoveRelation(edge task.RelationEdge) {
 }
 
 // GetRelationsForTask returns all edges where task is source OR target
-func (idx *Index) GetRelationsForTask(taskID int) []task.RelationEdge {
+func (idx *Index) GetRelationsForTask(taskID string) []task.RelationEdge {
 	idx.syncIfStale()
 	seen := make(map[task.RelationEdge]bool)
 	var result []task.RelationEdge
@@ -686,9 +697,9 @@ func (idx *Index) GetRelationsForTask(taskID int) []task.RelationEdge {
 }
 
 // GetBlockers returns target IDs from blocked_by edges where source == taskID
-func (idx *Index) GetBlockers(taskID int) []int {
+func (idx *Index) GetBlockers(taskID string) []string {
 	idx.syncIfStale()
-	var blockers []int
+	var blockers []string
 	for _, e := range idx.relationsBySource[taskID] {
 		if e.Type == BlockingRelationType {
 			blockers = append(blockers, e.Target)
@@ -699,7 +710,7 @@ func (idx *Index) GetBlockers(taskID int) []int {
 
 // RemoveAllRelationsForTask removes all relations where task appears as source or target
 // Returns the removed edges so the service knows which other task files to update
-func (idx *Index) RemoveAllRelationsForTask(taskID int) []task.RelationEdge {
+func (idx *Index) RemoveAllRelationsForTask(taskID string) []task.RelationEdge {
 	var removed []task.RelationEdge
 
 	// Remove edges where task is source

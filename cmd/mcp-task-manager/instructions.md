@@ -3,12 +3,14 @@
 This server manages a project's task backlog and workflow files assosiated with task.
 Workflows should use tools `write_task_file`, `read_task_file`, `list_task_files`
 to access and write data assosiated with workflow step (ex. task, research, design etc.)
-Tasks are identified with text ids which should be stored by workflow as current 
-work dir task.
+Tasks are identified by an id — a numeric auto-increment string by default, or a
+custom text id passed explicitly via `create_task`'s `id` parameter — which should
+be stored by workflow as the current work dir task.
 
 ## Planning
 - `create_task` — add work items as they're identified (title, description,
-  priority, type, optional `parent_id` for a subtask).
+  priority, type, optional `parent_id` for a subtask, optional `id` for a
+  caller-supplied custom task id).
 - `update_task` — adjust status, priority, or details as understanding changes.
 - `list_tasks` — review current backlog; top-level tasks by default, pass
   `parent_id` to see subtasks of one task.

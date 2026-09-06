@@ -14,7 +14,7 @@ func registerFileTools(s *server.MCPServer, svc *task.Service) {
 	// write_task_file
 	writeTool := mcp.NewTool("write_task_file",
 		mcp.WithDescription("Create or overwrite a named text file attached to a task"),
-		mcp.WithNumber("task_id",
+		mcp.WithString("task_id",
 			mcp.Required(),
 			mcp.Description("Task ID"),
 		),
@@ -32,7 +32,7 @@ func registerFileTools(s *server.MCPServer, svc *task.Service) {
 	// read_task_file
 	readTool := mcp.NewTool("read_task_file",
 		mcp.WithDescription("Read the content of a named text file attached to a task"),
-		mcp.WithNumber("task_id",
+		mcp.WithString("task_id",
 			mcp.Required(),
 			mcp.Description("Task ID"),
 		),
@@ -46,7 +46,7 @@ func registerFileTools(s *server.MCPServer, svc *task.Service) {
 	// list_task_files
 	listTool := mcp.NewTool("list_task_files",
 		mcp.WithDescription("List the names of all files attached to a task"),
-		mcp.WithNumber("task_id",
+		mcp.WithString("task_id",
 			mcp.Required(),
 			mcp.Description("Task ID"),
 		),
@@ -56,7 +56,7 @@ func registerFileTools(s *server.MCPServer, svc *task.Service) {
 
 func writeTaskFileHandler(svc *task.Service) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		taskID := req.GetInt("task_id", 0)
+		taskID := req.GetString("task_id", "")
 		filename := req.GetString("filename", "")
 		content := req.GetString("content", "")
 
@@ -64,7 +64,7 @@ func writeTaskFileHandler(svc *task.Service) server.ToolHandlerFunc {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 
-		return mcp.NewToolResultText(fmt.Sprintf("Wrote file %q to task %d", filename, taskID)), nil
+		return mcp.NewToolResultText(fmt.Sprintf("Wrote file %q to task %s", filename, taskID)), nil
 	}
 }
 
@@ -74,7 +74,7 @@ func readTaskFileHandler(svc *task.Service) server.ToolHandlerFunc {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 
-		taskID := req.GetInt("task_id", 0)
+		taskID := req.GetString("task_id", "")
 		filename := req.GetString("filename", "")
 
 		content, err := svc.ReadTaskFile(taskID, filename)
@@ -92,7 +92,7 @@ func listTaskFilesHandler(svc *task.Service) server.ToolHandlerFunc {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 
-		taskID := req.GetInt("task_id", 0)
+		taskID := req.GetString("task_id", "")
 
 		names, err := svc.ListTaskFiles(taskID)
 		if err != nil {
@@ -100,7 +100,7 @@ func listTaskFilesHandler(svc *task.Service) server.ToolHandlerFunc {
 		}
 
 		if len(names) == 0 {
-			return mcp.NewToolResultText(fmt.Sprintf("No files attached to task %d", taskID)), nil
+			return mcp.NewToolResultText(fmt.Sprintf("No files attached to task %s", taskID)), nil
 		}
 
 		data, err := json.MarshalIndent(names, "", "  ")

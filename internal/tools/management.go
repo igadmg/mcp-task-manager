@@ -31,8 +31,11 @@ func registerManagementTools(s *server.MCPServer, svc *task.Service, validTypes 
 			mcp.Description(allowedValuesDescription("Task type.", validTypes)),
 			mcp.Enum(validTypes...),
 		),
-		mcp.WithNumber("parent_id",
+		mcp.WithString("parent_id",
 			mcp.Description("Parent task ID (creates a subtask)"),
+		),
+		mcp.WithString("id",
+			mcp.Description("Optional custom task id, used verbatim as the id and storage directory name instead of the next auto-increment id. Validated like attached filenames (non-empty, no '/' or '\\', not '..'); \"0\", \"archive\", and \".index.json\" are reserved. Must not already exist (active or archived)."),
 		),
 	)
 	s.AddTool(createTool, createTaskHandler(svc))
@@ -40,7 +43,7 @@ func registerManagementTools(s *server.MCPServer, svc *task.Service, validTypes 
 	// get_task
 	getTool := mcp.NewTool("get_task",
 		mcp.WithDescription("Get a task by ID"),
-		mcp.WithNumber("id",
+		mcp.WithString("id",
 			mcp.Required(),
 			mcp.Description("Task ID"),
 		),
@@ -50,7 +53,7 @@ func registerManagementTools(s *server.MCPServer, svc *task.Service, validTypes 
 	// update_task
 	updateTool := mcp.NewTool("update_task",
 		mcp.WithDescription("Update an existing task"),
-		mcp.WithNumber("id",
+		mcp.WithString("id",
 			mcp.Required(),
 			mcp.Description("Task ID"),
 		),
@@ -78,7 +81,7 @@ func registerManagementTools(s *server.MCPServer, svc *task.Service, validTypes 
 	// delete_task
 	deleteTool := mcp.NewTool("delete_task",
 		mcp.WithDescription("Delete a task"),
-		mcp.WithNumber("id",
+		mcp.WithString("id",
 			mcp.Required(),
 			mcp.Description("Task ID"),
 		),
@@ -103,7 +106,7 @@ func registerManagementTools(s *server.MCPServer, svc *task.Service, validTypes 
 			mcp.Description(allowedValuesDescription("Filter by task type.", validTypes)),
 			mcp.Enum(validTypes...),
 		),
-		mcp.WithNumber("parent_id",
+		mcp.WithString("parent_id",
 			mcp.Description("Filter by parent task ID (0 for top-level tasks, omit for top-level by default)"),
 		),
 		mcp.WithBoolean("archived",
@@ -115,7 +118,7 @@ func registerManagementTools(s *server.MCPServer, svc *task.Service, validTypes 
 	// archive_task
 	archiveTool := mcp.NewTool("archive_task",
 		mcp.WithDescription("Archive a completed task (moves to archive directory)"),
-		mcp.WithNumber("id",
+		mcp.WithString("id",
 			mcp.Required(),
 			mcp.Description("Task ID to archive"),
 		),
@@ -129,15 +132,10 @@ func createTaskHandler(svc *task.Service) server.ToolHandlerFunc {
 		description := req.GetString("description", "")
 		priority := task.Priority(req.GetString("priority", ""))
 		taskType := req.GetString("type", "")
+		parentID := req.GetString("parent_id", "")
+		customID := req.GetString("id", "")
 
-		var parentID *int
-		args := req.GetArguments()
-		if _, ok := args["parent_id"]; ok {
-			id := req.GetInt("parent_id", 0)
-			parentID = &id
-		}
-
-		t, err := svc.Create(title, description, priority, taskType, parentID)
+		t, err := svc.Create(title, description, priority, taskType, parentID, customID)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
@@ -148,8 +146,8 @@ func createTaskHandler(svc *task.Service) server.ToolHandlerFunc {
 
 // taskWithSubtasksResponse is the response structure for get_task
 type taskWithSubtasksResponse struct {
-	ID          int                 `json:"id"`
-	ParentID    *int                `json:"parent_id,omitempty"`
+	ID          string              `json:"id"`
+	ParentID    string              `json:"parent_id,omitempty"`
 	Title       string              `json:"title"`
 	Description string              `json:"description"`
 	Status      task.Status         `json:"status"`
@@ -170,7 +168,7 @@ func getTaskHandler(svc *task.Service) server.ToolHandlerFunc {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 
-		id := req.GetInt("id", 0)
+		id := req.GetString("id", "")
 
 		t, subtasks, err := svc.GetWithSubtasks(id)
 		if err != nil {
@@ -210,7 +208,7 @@ func getTaskHandler(svc *task.Service) server.ToolHandlerFunc {
 
 func updateTaskHandler(svc *task.Service) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		id := req.GetInt("id", 0)
+		id := req.GetString("id", "")
 
 		var title, description, taskType *string
 		var status *task.Status
@@ -249,24 +247,24 @@ func updateTaskHandler(svc *task.Service) server.ToolHandlerFunc {
 
 func deleteTaskHandler(svc *task.Service) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		id := req.GetInt("id", 0)
+		id := req.GetString("id", "")
 		deleteSubtasks := req.GetBool("delete_subtasks", false)
 
 		if err := svc.Delete(id, deleteSubtasks); err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 
-		return mcp.NewToolResultText(fmt.Sprintf("Task %d deleted", id)), nil
+		return mcp.NewToolResultText(fmt.Sprintf("Task %s deleted", id)), nil
 	}
 }
 
 func archiveTaskHandler(svc *task.Service) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		id := req.GetInt("id", 0)
+		id := req.GetString("id", "")
 		if err := svc.ArchiveTask(id); err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
-		return mcp.NewToolResultText(fmt.Sprintf("Task %d archived", id)), nil
+		return mcp.NewToolResultText(fmt.Sprintf("Task %s archived", id)), nil
 	}
 }
 
@@ -311,12 +309,12 @@ func listTasksHandler(svc *task.Service) server.ToolHandlerFunc {
 			taskType = &v
 		}
 
-		// Default to showing top-level tasks (parentID = 0)
+		// Default to showing top-level tasks (parentID = "0")
 		// If parent_id is explicitly provided, use that value
-		defaultParentID := 0
+		defaultParentID := "0"
 		parentID := &defaultParentID
 		if _, ok := args["parent_id"]; ok {
-			id := req.GetInt("parent_id", 0)
+			id := req.GetString("parent_id", "")
 			parentID = &id
 		}
 
