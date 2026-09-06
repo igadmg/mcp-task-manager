@@ -159,23 +159,11 @@ Add to your Claude Desktop configuration (`~/.config/claude/claude_desktop_confi
 
 ### Claude Code Integration
 
-Use this path for Claude Code specifically. The Claude plugin and the Codex plugin are packaged differently, so the Claude flow still uses an explicit `claude mcp add` step.
+Use this path for Claude Code specifically. The Claude plugin now bundles its own `.mcp.json` (repo root), so installing the plugin also wires up the `task-manager` MCP server — no separate `claude mcp add` step needed.
 
 **Setup:**
 
-1. Install the `mcp-task-manager` binary so Claude can launch it:
-
-```bash
-go install github.com/gpayer/mcp-task-manager/cmd/mcp-task-manager@latest
-```
-
-2. Add the MCP server in Claude Code:
-
-```bash
-claude mcp add --transport stdio task-manager -- mcp-task-manager
-```
-
-3. Install the Claude Code plugin:
+1. Install the Claude Code plugin:
 
 ```bash
 # Add the marketplace
@@ -185,21 +173,20 @@ claude mcp add --transport stdio task-manager -- mcp-task-manager
 /plugin install mcp-task-manager@mcp-task-manager
 ```
 
+That's it — the bundled `.mcp.json` launches the server with `go run -C ${CLAUDE_PLUGIN_ROOT} ./cmd/mcp-task-manager`, so it always runs the checked-out source (no `go install`/binary step, and no rebuild needed between debug runs). This requires the Go toolchain to be available; if you'd rather run a pre-built binary, replace the `.mcp.json` command with the binary path, or use `claude mcp add --transport stdio task-manager -- mcp-task-manager` instead.
+
 **Usage:**
 
-Use the Claude Code command `/mcp-task-manager:superpowers-workflow` to automatically execute pending tasks. The workflow spawns ordinary subagents and includes the complete planner, coder, and reviewer role contracts in the relevant subagent initial prompts.
+- Use `/mcp-task-manager:begin-task` (backed by the packaged `begin_task` skill) to turn a ticket into a task-manager task and drive it through research → design → planning → implementation, with an approval gate between each phase.
+- Use `/mcp-task-manager:execute-all` (backed by the packaged `superpowers-workflow` skill) to instead loop over the existing task-manager backlog, spawning planner/coder/reviewer subagents per task.
 
 ### Codex Integration
 
 Use this path for Codex specifically. This repository now acts as a Codex marketplace root: the marketplace catalog lives in `.agents/plugins/marketplace.json`, and the installable Codex plugin package is `plugins/mcp-task-manager/`.
 
-**Prerequisite: install the MCP server binary first**
+**Prerequisite: the Go toolchain**
 
-The Codex plugin package includes `superpowers-workflow`, `/execute-all`, and a packaged `.mcp.json`, but it still expects the `mcp-task-manager` executable to already be available on your `PATH`:
-
-```bash
-go install github.com/gpayer/mcp-task-manager/cmd/mcp-task-manager@latest
-```
+The Codex plugin package includes `begin_task`, `superpowers-workflow`, the `/begin-task` and `/execute-all` commands, and a packaged `.mcp.json`. The `.mcp.json` launches the server with `go run -C ${CLAUDE_PLUGIN_ROOT}/../.. ./cmd/mcp-task-manager`, so it runs the checked-out source directly — you need the Go toolchain available, but not a pre-installed `mcp-task-manager` binary.
 
 **Add this marketplace and install the plugin**
 
@@ -213,13 +200,14 @@ Inside Codex, install the packaged plugin from that marketplace:
 /plugin install mcp-task-manager@mcp-task-manager
 ```
 
-The plugin package wires in the MCP server definition from `plugins/mcp-task-manager/.mcp.json`, so you do not need a separate `codex mcp add` step as long as `mcp-task-manager` is already installed and resolvable by name.
+The plugin package wires in the MCP server definition from `plugins/mcp-task-manager/.mcp.json`, so you do not need a separate `codex mcp add` step.
 
 **Usage**
 
-Use the Codex skill `$superpowers-workflow` or the packaged command `/execute-all` to automatically execute pending tasks. The workflow spawns ordinary subagents and includes the complete planner, coder, and reviewer role contracts in the relevant subagent initial prompts.
+- Use the Codex skill `$begin_task` or the packaged command `/begin-task` to turn a ticket into a task-manager task and drive it through research → design → planning → implementation, with an approval gate between each phase.
+- Use the Codex skill `$superpowers-workflow` or the packaged command `/execute-all` to instead loop over the existing task-manager backlog, spawning planner/coder/reviewer subagents per task.
 
-The model/reasoning settings are capability-based recommendations. The workflow applies them only when the active subagent tool supports those controls and they are not overridden by user choice, model availability, policy, cost/latency constraints, or task-specific needs.
+The model/reasoning settings for `superpowers-workflow` are capability-based recommendations. The workflow applies them only when the active subagent tool supports those controls and they are not overridden by user choice, model availability, policy, cost/latency constraints, or task-specific needs.
 
 ### VS Code Integration
 
