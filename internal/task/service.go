@@ -42,6 +42,9 @@ type RelationEdge struct {
 
 // Index interface for task indexing
 //
+// The index is in-memory only: it is built from the per-task files and has no
+// storage of its own, so mutations need no separate persistence step.
+//
 // Performance note: Methods returning []*Task use lazy loading:
 //   - Get() loads the full task with description from disk
 //   - Filter(), All(), GetSubtasks(), NextTodo() return tasks without descriptions (from in-memory index)
@@ -49,7 +52,6 @@ type RelationEdge struct {
 // This design keeps list operations fast while still providing full task data on demand.
 type Index interface {
 	Load() error
-	Save() error
 	Get(id string) (*Task, bool) // Loads full task with description from disk
 	Set(t *Task)
 	Delete(id string)
@@ -211,9 +213,6 @@ func (s *Service) Create(title, description string, priority Priority, taskType 
 	}
 
 	s.index.Set(t)
-	if err := s.index.Save(); err != nil {
-		return nil, err
-	}
 
 	return t, nil
 }
@@ -326,9 +325,6 @@ func (s *Service) Update(id string, title, description *string, status *Status, 
 	}
 
 	s.index.Set(t)
-	if err := s.index.Save(); err != nil {
-		return nil, err
-	}
 
 	return t, nil
 }
@@ -393,7 +389,7 @@ func (s *Service) Delete(id string, deleteSubtasks bool) error {
 	}
 
 	s.index.Delete(id)
-	return s.index.Save()
+	return nil
 }
 
 // List returns all tasks, optionally filtered
@@ -551,7 +547,7 @@ func (s *Service) AddRelation(source string, relationType string, target string)
 	// Update index
 	s.index.AddRelation(RelationEdge{Type: relationType, Source: source, Target: target})
 
-	return s.index.Save()
+	return nil
 }
 
 // RemoveRelation removes a relation between two tasks
@@ -588,7 +584,7 @@ func (s *Service) RemoveRelation(source string, relationType string, target stri
 	// Update index
 	s.index.RemoveRelation(RelationEdge{Type: relationType, Source: source, Target: target})
 
-	return s.index.Save()
+	return nil
 }
 
 // IsBlocked checks if a task has unresolved blocked_by relations
@@ -663,7 +659,7 @@ func (s *Service) ArchiveTask(id string) error {
 	}
 
 	s.index.Delete(id)
-	return s.index.Save()
+	return nil
 }
 
 // updateAffectedRelationTasks updates frontmatter of tasks whose relations pointed to taskID

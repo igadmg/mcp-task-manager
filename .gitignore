@@ -4,9 +4,6 @@
 # go
 coverage.out
 
-# Task data (generated at runtime)
-tasks/.index.json
-
 # IDE
 .idea/
 .vscode/

@@ -88,7 +88,7 @@ func (m *mockStorage) MigrateFlatLayout() error {
 var mockReservedTaskIDs = map[string]string{
 	"0":           `reserved as the "top-level" filter sentinel`,
 	"archive":     "reserved for the archive subdirectory",
-	".index.json": "reserved for the index cache file",
+	".index.json": "reserved: the filename of the retired index cache file",
 }
 
 func (m *mockStorage) ValidateID(id string) error {
@@ -163,7 +163,6 @@ func newMockIndex() *mockIndex {
 }
 
 func (m *mockIndex) Load() error { return nil }
-func (m *mockIndex) Save() error { return nil }
 
 func (m *mockIndex) Get(id string) (*Task, bool) {
 	t, ok := m.tasks[id]

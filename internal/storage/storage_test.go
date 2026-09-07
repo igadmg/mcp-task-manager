@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -364,7 +363,12 @@ func TestIndex_SetGetDelete(t *testing.T) {
 		t.Errorf("Get() title = %q, want %q", got.Title, tk.Title)
 	}
 
-	// Delete
+	// Delete. The index mirrors the task directories, so the file has to go
+	// too - dropping only the entry leaves a divergence that the next query
+	// detects and heals by rebuilding from disk.
+	if err := storage.Delete("1"); err != nil {
+		t.Fatalf("storage.Delete() error = %v", err)
+	}
 	idx.Delete("1")
 	_, ok = idx.Get("1")
 	if ok {
@@ -549,37 +553,6 @@ func TestIndex_All_OrdersIDsNumerically(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("All() order = %v, want %v (numeric, not lexicographic)", got, want)
 		}
-	}
-}
-
-func TestIndex_Load_RebuildsOnBareNumericIDFormat(t *testing.T) {
-	dir := t.TempDir()
-	storage := NewMarkdownStorage(dir)
-
-	now := time.Now().UTC().Truncate(time.Second)
-	tk := &task.Task{ID: "1", Title: "Real Task", Status: task.StatusTodo, Priority: task.PriorityHigh, Type: "feature", CreatedAt: now, UpdatedAt: now}
-	if err := storage.Save(tk); err != nil {
-		t.Fatalf("Save() error = %v", err)
-	}
-
-	// Today's object shape, but with a bare-number id - the pre-upgrade wire
-	// format that a JSON unmarshal into a string-typed IndexEntry.ID rejects.
-	staleIndex := `{"git_commit":"","tasks":[{"id":1,"title":"Stale","status":"todo","priority":"high","type":"feature","created_at":"2020-01-01T00:00:00Z","updated_at":"2020-01-01T00:00:00Z"}],"relations":[]}`
-	if err := os.WriteFile(filepath.Join(dir, ".index.json"), []byte(staleIndex), 0644); err != nil {
-		t.Fatalf("failed to write stale index: %v", err)
-	}
-
-	idx := NewIndex(dir, storage)
-	if err := idx.Load(); err != nil {
-		t.Fatalf("Load() error = %v, want nil (a bare-numeric-id index must be discarded and rebuilt, not crash)", err)
-	}
-
-	entry, ok := idx.GetEntry("1")
-	if !ok {
-		t.Fatal("GetEntry(1) not found after rebuild")
-	}
-	if entry.Title != "Real Task" {
-		t.Errorf("GetEntry(1).Title = %q, want %q (rebuilt from markdown, not the stale index)", entry.Title, "Real Task")
 	}
 }
 
@@ -871,7 +844,7 @@ func TestIndex_NextTodo_SortsWinningParentChildrenAfterParentSelection(t *testin
 	}
 }
 
-func TestIndex_SaveAndLoad(t *testing.T) {
+func TestIndex_FreshIndexSeesTasksOnDisk(t *testing.T) {
 	dir := t.TempDir()
 	storage := NewMarkdownStorage(dir)
 	idx := NewIndex(dir, storage)
@@ -887,18 +860,14 @@ func TestIndex_SaveAndLoad(t *testing.T) {
 		UpdatedAt: now,
 	}
 
-	// Save to disk first (required for Get to work)
 	if err := storage.Save(tk); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
 
 	idx.Set(tk)
 
-	if err := idx.Save(); err != nil {
-		t.Fatalf("Save() error = %v", err)
-	}
-
-	// Create new index and load
+	// A second index over the same directory must reconstruct the same state
+	// from the task folders alone - there is no shared file between them.
 	idx2 := NewIndex(dir, storage)
 	if err := idx2.Load(); err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -972,6 +941,127 @@ func TestIndex_Load_EmptyTasksDirDoesNotCreateIndexFile(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(dir, ".index.json")); !os.IsNotExist(err) {
 		t.Fatalf("expected no .index.json file, got err = %v", err)
+	}
+}
+
+func TestIndex_Load_RemovesLegacyIndexFile(t *testing.T) {
+	dir := t.TempDir()
+	storage := NewMarkdownStorage(dir)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	if err := storage.Save(&task.Task{ID: "1", Title: "Real Task", Status: task.StatusTodo, Priority: task.PriorityHigh, Type: "feature", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	// A cache left behind by an older build, claiming something else entirely.
+	legacy := `{"git_commit":"","tasks":[{"id":"99","title":"Stale","status":"done","priority":"low","type":"bug"}]}`
+	legacyPath := filepath.Join(dir, ".index.json")
+	if err := os.WriteFile(legacyPath, []byte(legacy), 0644); err != nil {
+		t.Fatalf("failed to write legacy index: %v", err)
+	}
+
+	idx := NewIndex(dir, storage)
+	if err := idx.Load(); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+		t.Errorf("expected legacy .index.json to be removed, got err = %v", err)
+	}
+
+	entry, ok := idx.GetEntry("1")
+	if !ok {
+		t.Fatal("GetEntry(1) not found; index must come from the task folders")
+	}
+	if entry.Title != "Real Task" {
+		t.Errorf("GetEntry(1).Title = %q, want %q", entry.Title, "Real Task")
+	}
+	if _, ok := idx.GetEntry("99"); ok {
+		t.Error("task 99 exists only in the legacy cache and must not be loaded")
+	}
+}
+
+func TestIndex_PicksUpExternalTaskFileEdit(t *testing.T) {
+	dir := t.TempDir()
+	storage := NewMarkdownStorage(dir)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	tk := &task.Task{ID: "1", Title: "Before", Status: task.StatusTodo, Priority: task.PriorityHigh, Type: "feature", CreatedAt: now, UpdatedAt: now}
+	if err := storage.Save(tk); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	idx := NewIndex(dir, storage)
+	if err := idx.Load(); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	// Rewrite the task behind the index's back, as a git pull or a hand edit
+	// would. The mtime bump is what the staleness check keys on.
+	tk.Title = "After"
+	if err := storage.Save(tk); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(filepath.Join(dir, "1", "1.md"), future, future); err != nil {
+		t.Fatalf("Chtimes() error = %v", err)
+	}
+
+	entry, ok := idx.GetEntry("1")
+	if !ok {
+		t.Fatal("GetEntry(1) returned false")
+	}
+	if entry.Title != "After" {
+		t.Errorf("GetEntry(1).Title = %q, want %q (external edit must be picked up)", entry.Title, "After")
+	}
+}
+
+func TestService_WritePathNeverCreatesIndexFile(t *testing.T) {
+	root := t.TempDir()
+	tasksDir := filepath.Join(root, "tasks")
+
+	storageBackend := NewMarkdownStorage(tasksDir)
+	idx := NewIndex(tasksDir, storageBackend)
+	cfg := &config.Config{
+		TaskTypes:     []string{"feature", "bug"},
+		RelationTypes: config.DefaultRelationTypes,
+		ProjectFound:  true,
+	}
+	svc := task.NewService(storageBackend, storageBackend, storageBackend, idx, cfg.TaskTypes, cfg)
+
+	if err := svc.Initialize(); err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+
+	first, err := svc.Create("First", "body", task.PriorityHigh, "feature", "", "")
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	second, err := svc.Create("Second", "body", task.PriorityLow, "bug", "", "")
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := svc.AddRelation(second.ID, "blocked_by", first.ID); err != nil {
+		t.Fatalf("AddRelation() error = %v", err)
+	}
+	title := "Renamed"
+	if _, err := svc.Update(first.ID, &title, nil, nil, nil, nil); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if err := svc.Delete(second.ID, false); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(tasksDir, ".index.json")); !os.IsNotExist(err) {
+		t.Fatalf("no write path may create .index.json, got err = %v", err)
+	}
+
+	got, err := svc.Get(first.ID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if got.Title != title {
+		t.Errorf("Get().Title = %q, want %q", got.Title, title)
 	}
 }
 
@@ -1439,31 +1529,6 @@ func TestIndex_Filter_ByParentID(t *testing.T) {
 	}
 }
 
-func TestGetGitCommit(t *testing.T) {
-	// Test in non-git directory
-	dir := t.TempDir()
-	commit, err := getGitCommit(dir)
-	if err != nil {
-		t.Fatalf("getGitCommit() in non-git dir error = %v", err)
-	}
-	if commit != "" {
-		t.Errorf("getGitCommit() in non-git dir = %q, want empty", commit)
-	}
-
-	// Test in git directory (use the actual project dir)
-	// The test is running inside a git repo, so cwd should work
-	commit, err = getGitCommit(".")
-	if err != nil {
-		t.Fatalf("getGitCommit() error = %v", err)
-	}
-	if commit == "" {
-		t.Error("getGitCommit() in git repo returned empty string")
-	}
-	if len(commit) != 40 {
-		t.Errorf("getGitCommit() returned %q, want 40-char SHA", commit)
-	}
-}
-
 // Test that GetEntry returns metadata without loading from disk
 func TestIndex_GetEntry_ReturnsMetadataOnly(t *testing.T) {
 	dir := t.TempDir()
@@ -1595,166 +1660,6 @@ func TestIndex_All_ReturnsTasksWithoutDescriptions(t *testing.T) {
 	}
 	if all[1].Title != "Task 2" {
 		t.Errorf("All() task 2 title = %q, want %q", all[1].Title, "Task 2")
-	}
-}
-
-func TestIndex_SaveLoad_WithGitCommit(t *testing.T) {
-	dir := t.TempDir()
-	storage := NewMarkdownStorage(dir)
-	idx := NewIndex(dir, storage)
-
-	now := time.Now().UTC()
-	tk := &task.Task{
-		ID:        "1",
-		Title:     "Test",
-		Status:    task.StatusTodo,
-		Priority:  task.PriorityHigh,
-		Type:      "feature",
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
-	idx.Set(tk)
-
-	if err := idx.Save(); err != nil {
-		t.Fatalf("Save() error = %v", err)
-	}
-
-	// Read raw index file and verify structure
-	data, err := os.ReadFile(filepath.Join(dir, ".index.json"))
-	if err != nil {
-		t.Fatalf("ReadFile error = %v", err)
-	}
-
-	var indexFile IndexFile
-	if err := json.Unmarshal(data, &indexFile); err != nil {
-		t.Fatalf("Unmarshal error = %v", err)
-	}
-
-	// Git commit might be empty if test dir is not in git
-	// but tasks should be present
-	if len(indexFile.Tasks) != 1 {
-		t.Errorf("Tasks count = %d, want 1", len(indexFile.Tasks))
-	}
-	if indexFile.Tasks[0].Title != "Test" {
-		t.Errorf("Task title = %q, want 'Test'", indexFile.Tasks[0].Title)
-	}
-}
-
-func TestIndex_Load_ParsesNewFormat(t *testing.T) {
-	dir := t.TempDir()
-	storage := NewMarkdownStorage(dir)
-
-	// Create index file in new format (no need to match git, just parse correctly)
-	now := time.Now().UTC()
-	indexFile := IndexFile{
-		GitCommit: "", // Empty is fine for non-git directories
-		Tasks: []*IndexEntry{
-			{ID: "1", Title: "Task from Index", Status: task.StatusTodo, Priority: task.PriorityHigh, Type: "feature", CreatedAt: now, UpdatedAt: now},
-		},
-	}
-	data, _ := json.MarshalIndent(indexFile, "", "  ")
-	os.WriteFile(filepath.Join(dir, ".index.json"), data, 0644)
-
-	// Load should parse the new format successfully
-	idx := NewIndex(dir, storage)
-	if err := idx.Load(); err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-
-	// Should have task from index
-	entry, ok := idx.GetEntry("1")
-	if !ok {
-		t.Fatal("Task 1 should exist from index")
-	}
-	if entry.Title != "Task from Index" {
-		t.Errorf("Title = %q, want 'Task from Index'", entry.Title)
-	}
-}
-
-func TestIndex_Load_RebuildOnGitChange(t *testing.T) {
-	// Create temp dir inside project (so we're in git repo)
-	dir := filepath.Join(".", "testdata", "rebuild_test")
-	os.RemoveAll(dir) // Clean up from previous runs
-	defer os.RemoveAll(dir)
-	os.MkdirAll(dir, 0755)
-
-	storage := NewMarkdownStorage(dir)
-
-	// Save a task directly to storage
-	now := time.Now().UTC()
-	tk := &task.Task{ID: "1", Title: "From File", Status: task.StatusTodo, Priority: task.PriorityHigh, Type: "feature", CreatedAt: now, UpdatedAt: now}
-	if err := storage.Save(tk); err != nil {
-		t.Fatalf("Save() error = %v", err)
-	}
-
-	// Verify file was created
-	if _, err := os.Stat(filepath.Join(dir, "1", "1.md")); err != nil {
-		t.Fatalf("Task file not created: %v", err)
-	}
-
-	// Create index file with different git commit
-	indexFile := IndexFile{
-		GitCommit: "0000000000000000000000000000000000000000", // Fake commit that won't match
-		Tasks: []*IndexEntry{
-			{ID: "99", Title: "Old Cached", Status: task.StatusDone, Priority: task.PriorityLow, Type: "bug", CreatedAt: now, UpdatedAt: now},
-		},
-	}
-	data, _ := json.MarshalIndent(indexFile, "", "  ")
-	if err := os.WriteFile(filepath.Join(dir, ".index.json"), data, 0644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	// Check what git commit we'll get
-	currentCommit, _ := getGitCommit(dir)
-	t.Logf("Current git commit: %q", currentCommit)
-	t.Logf("Index git commit: %q", indexFile.GitCommit)
-
-	// Load index - should rebuild because git commit doesn't match
-	idx := NewIndex(dir, storage)
-	if err := idx.Load(); err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-
-	// Should have task from file, not from stale index
-	_, ok := idx.GetEntry("1")
-	if !ok {
-		t.Error("Task 1 (from file) should exist after rebuild")
-	}
-	_, ok = idx.GetEntry("99")
-	if ok {
-		t.Error("Task 99 (stale) should not exist after rebuild")
-	}
-}
-
-func TestIndex_Load_MigratesOldFormat(t *testing.T) {
-	dir := t.TempDir()
-	storage := NewMarkdownStorage(dir)
-
-	// Save task to storage
-	now := time.Now().UTC()
-	tk := &task.Task{ID: "1", Title: "Task", Status: task.StatusTodo, Priority: task.PriorityHigh, Type: "feature", CreatedAt: now, UpdatedAt: now}
-	storage.Save(tk)
-
-	// Write old format index (raw array)
-	oldData := `[{"id":1,"title":"Stale","status":"done","priority":"low","type":"bug"}]`
-	os.WriteFile(filepath.Join(dir, ".index.json"), []byte(oldData), 0644)
-
-	// Load should fail to parse as IndexFile and rebuild
-	idx := NewIndex(dir, storage)
-	if err := idx.Load(); err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-
-	// Should have fresh data from file
-	e, ok := idx.GetEntry("1")
-	if !ok {
-		t.Fatal("Task 1 should exist")
-	}
-	if e.Title != "Task" {
-		t.Errorf("Title = %q, want 'Task' (from file)", e.Title)
-	}
-	if e.Status != task.StatusTodo {
-		t.Errorf("Status = %q, want 'todo' (from file)", e.Status)
 	}
 }
 
@@ -2050,45 +1955,41 @@ func TestIndex_RebuildWithRelations(t *testing.T) {
 	}
 }
 
-func TestIndex_SaveLoadWithRelations(t *testing.T) {
+func TestIndex_FreshIndexRebuildsRelationsFromTaskFiles(t *testing.T) {
 	dir := t.TempDir()
 	storage := NewMarkdownStorage(dir)
-	idx := NewIndex(dir, storage)
 
 	now := time.Now().UTC()
-	tk := &task.Task{ID: "1", Title: "Test", Status: task.StatusTodo, Priority: task.PriorityHigh, Type: "feature", CreatedAt: now, UpdatedAt: now}
-	storage.Save(tk)
-	idx.Set(tk)
+	storage.Save(&task.Task{ID: "1", Title: "Blocker", Status: task.StatusTodo, Priority: task.PriorityHigh, Type: "feature", CreatedAt: now, UpdatedAt: now})
+	storage.Save(&task.Task{ID: "3", Title: "Related", Status: task.StatusTodo, Priority: task.PriorityHigh, Type: "feature", CreatedAt: now, UpdatedAt: now})
+	storage.Save(&task.Task{
+		ID: "2", Title: "Blocked", Status: task.StatusTodo, Priority: task.PriorityHigh, Type: "feature",
+		Relations: []task.Relation{
+			{Type: "blocked_by", Task: "1"},
+			{Type: "relates_to", Task: "3"},
+		},
+		CreatedAt: now, UpdatedAt: now,
+	})
 
-	// Add some relations
-	idx.AddRelation(task.RelationEdge{Type: "blocked_by", Source: "2", Target: "1"})
-	idx.AddRelation(task.RelationEdge{Type: "relates_to", Source: "1", Target: "3"})
-
-	if err := idx.Save(); err != nil {
-		t.Fatalf("Save() error = %v", err)
-	}
-
-	// Verify the index file contains relations
-	data, err := os.ReadFile(filepath.Join(dir, ".index.json"))
-	if err != nil {
-		t.Fatalf("ReadFile error = %v", err)
-	}
-	if !strings.Contains(string(data), "blocked_by") {
-		t.Error("Index file should contain blocked_by relation")
-	}
-	if !strings.Contains(string(data), "relates_to") {
-		t.Error("Index file should contain relates_to relation")
-	}
-
-	// Load into new index and verify relations are restored
-	idx2 := NewIndex(dir, storage)
-	if err := idx2.Load(); err != nil {
+	idx := NewIndex(dir, storage)
+	if err := idx.Load(); err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	blockers := idx2.GetBlockers("2")
+	blockers := idx.GetBlockers("2")
 	if len(blockers) != 1 || blockers[0] != "1" {
-		t.Errorf("GetBlockers(2) after load = %v, want [1]", blockers)
+		t.Errorf("GetBlockers(2) = %v, want [1]", blockers)
+	}
+
+	// The reverse edge of a symmetric relation is derived, not stored.
+	var hasReverse bool
+	for _, e := range idx.GetRelationsForTask("3") {
+		if e.Type == "relates_to" && e.Source == "3" && e.Target == "2" {
+			hasReverse = true
+		}
+	}
+	if !hasReverse {
+		t.Error("expected derived reverse relates_to edge (3->2)")
 	}
 }
 
@@ -2130,21 +2031,6 @@ func TestIndex_Integration_FullFlow(t *testing.T) {
 	}
 	idx.Set(task1)
 	idx.Set(task2)
-	if err := idx.Save(); err != nil {
-		t.Fatalf("idx.Save() error = %v", err)
-	}
-
-	// Read index file and verify no descriptions
-	data, err := os.ReadFile(filepath.Join(dir, ".index.json"))
-	if err != nil {
-		t.Fatalf("ReadFile error = %v", err)
-	}
-	if strings.Contains(string(data), "Long description") {
-		t.Error("Index file should NOT contain task descriptions")
-	}
-	if strings.Contains(string(data), "Another long description") {
-		t.Error("Index file should NOT contain task descriptions")
-	}
 
 	// Load fresh index
 	idx2 := NewIndex(dir, storage)
@@ -2202,9 +2088,6 @@ func TestIndex_AutoRebuildsWhenDiskHasNewTasks(t *testing.T) {
 		t.Fatalf("storage.Save(parent) error = %v", err)
 	}
 	idx.Set(parent)
-	if err := idx.Save(); err != nil {
-		t.Fatalf("idx.Save() error = %v", err)
-	}
 
 	subtask := &task.Task{
 		ID:          "68",
@@ -2239,14 +2122,6 @@ func TestIndex_AutoRebuildsWhenDiskHasNewTasks(t *testing.T) {
 
 	if nextID := idx.NextID(); nextID != "69" {
 		t.Fatalf("NextID() = %s, want 69 after auto-rebuild", nextID)
-	}
-
-	data, err := os.ReadFile(filepath.Join(dir, ".index.json"))
-	if err != nil {
-		t.Fatalf("ReadFile(.index.json) error = %v", err)
-	}
-	if !strings.Contains(string(data), "\"id\": \"68\"") {
-		t.Fatalf(".index.json should contain rebuilt task 68, got:\n%s", string(data))
 	}
 }
 

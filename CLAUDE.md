@@ -18,12 +18,12 @@ A Go-based MCP server for task management, designed for Claude and coding agents
 │    (business logic, validation, sorting)    │
 ├─────────────────────────────────────────────┤
 │                  Storage                    │
-│  (markdown files + JSON index cache)        │
+│  (markdown files + in-memory index)         │
 └─────────────────────────────────────────────┘
          │                        │
          ▼                        ▼
-    ./tasks/{id}/{id}.md           ./tasks/.index.json
-    ./tasks/archive/{id}/{id}.md   (archived tasks, no index)
+    ./tasks/{id}/{id}.md           (source of truth)
+    ./tasks/archive/{id}/{id}.md   (archived tasks, not indexed)
 ```
 
 ## Development Process
@@ -54,8 +54,8 @@ Use the **cclsp MCP tools** (LSP server access) for code navigation:
 ### Storage
 - **Source of truth:** Markdown files with YAML frontmatter, one per-task directory (`./tasks/{id}/{id}.md`)
 - **Attached files:** free-form named text files live alongside `{id}.md` in the same `./tasks/{id}/` directory
-- **Archive:** `./tasks/archive/{id}/{id}.md` — archived tasks (same format, no index); archiving moves the whole per-task directory, carrying attached files with it
-- **Index cache:** `./tasks/.index.json` - rebuildable from .md files on startup
+- **Archive:** `./tasks/archive/{id}/{id}.md` — archived tasks (same format, not indexed); archiving moves the whole per-task directory, carrying attached files with it
+- **Index:** in-memory only, rebuilt from the .md files; no cache file is ever written
 - **Location:** Project-local by default, configurable via `MCP_TASKS_DIR` env var
 - **Config file:** `./mcp-tasks.yaml`
 - **Legacy layout migration:** on startup, any task still found in the old flat layout (`tasks/{id}.md` or `tasks/archive/{id}.md`) is automatically migrated into the per-task directory layout
@@ -85,7 +85,7 @@ Markdown description here.
 ### Task Identification
 - Ids are strings. By default `create_task` still allocates an auto-incrementing numeric-looking id, now unpadded (e.g. `"8"`, not `"008"`).
 - Optionally, `create_task` accepts a caller-supplied custom text id via its `id` parameter; it is used verbatim as the id and never advances or collides with the numeric auto-increment counter (a numeric-looking custom id like `"5"` still participates correctly in future auto-increment collision avoidance).
-- Custom ids are validated the same way attached filenames are: non-empty, no `/` or `\`, not `..`; additionally `"0"`, `"archive"`, and `".index.json"` are reserved (they collide with this package's own on-disk sentinels) and rejected.
+- Custom ids are validated the same way attached filenames are: non-empty, no `/` or `\`, not `..`; additionally `"0"`, `"archive"`, and `".index.json"` are reserved (they collide with this package's own on-disk sentinels, the last being the retired index cache filename) and rejected.
 - Creating a task with an id that already exists (active or archived) is rejected with a clear error, never silently overwritten or disambiguated.
 - Per-task directory is always named after the exact id string used: `7/`, `my-feature/`, etc., each containing `{id}.md` (e.g. `7/7.md`) plus any attached files
 
@@ -161,7 +161,7 @@ Completed tasks can be archived to keep the active task list clean and the index
 **Storage:**
 - Archiving renames the whole `tasks/{id}/` directory to `tasks/archive/{id}/` (same markdown format, unchanged); attached files move along with it automatically
 - No archive index — queries against archived tasks do a linear scan of `archive/{id}/{id}.md`
-- Active index shrinks as tasks are archived
+- The in-memory index shrinks as tasks are archived
 
 **Archive Rules:**
 - Only `done` tasks can be archived
@@ -264,7 +264,7 @@ mcp-task-manager/
 │   │   ├── markdown.go          # Markdown file operations (per-task directory layout)
 │   │   ├── migrate.go           # Legacy flat-layout migration
 │   │   ├── files.go             # Attached-file read/write/list
-│   │   └── index.go             # JSON index cache
+│   │   └── index.go             # In-memory index over the task directories
 │   ├── task/
 │   │   ├── task.go              # Task model/types
 │   │   └── service.go           # Business logic
@@ -289,10 +289,10 @@ mcp-task-manager/
 - Skips tasks with unresolved `blocked_by` relations
 - If no `todo` tasks exist, returns "no tasks available" message (not an error)
 
-### Index Cache
-- Rebuilt on server startup by scanning all .md files
-- Updated in-memory and persisted after each write operation
-- Self-healing: if index is missing/corrupt, rebuild from .md files
+### Index
+- In-memory only; it has no on-disk form and nothing is persisted after a write
+- Built on server startup by scanning all .md files
+- Self-healing: rebuilt whenever a task file's mtime or the task count diverges from what is held in memory, which covers git pulls and hand edits
 - Includes relation edges (with auto-generated reverse edges for symmetric types)
 
 ### Concurrency
@@ -300,7 +300,7 @@ mcp-task-manager/
 - File writes are atomic (write to temp file, then rename)
 
 ### Validation
-- Task IDs: strings, format-validated the same way attached filenames are (non-empty, no `/` or `\`, not `..`), plus three reserved names (`"0"`, `"archive"`, `".index.json"`) rejected for a caller-supplied custom id
+- Task IDs: strings, format-validated the same way attached filenames are (non-empty, no `/` or `\`, not `..`), plus three reserved names (`"0"`, `"archive"`, `".index.json"` - the last a retired cache filename) rejected for a caller-supplied custom id
 - Status: `todo` | `in_progress` | `done`
 - Priority: `critical` | `high` | `medium` | `low`
 - Type: must be in configured list (default: `feature`, `bug`)
@@ -311,4 +311,4 @@ mcp-task-manager/
 - Cycle detection for `blocked_by` chains
 - Additional task types (chore, docs, refactor)
 - `unarchive` / restore task from archive back to active
-- Archive index (only needed if archive query performance becomes a problem)
+- Archive indexing (only needed if archive query performance becomes a problem)

@@ -1,50 +1,14 @@
 package storage
 
 import (
-	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/gpayer/mcp-task-manager/internal/task"
 )
-
-// getGitCommit walks up from dir to find .git directory and returns current commit hash
-// Returns empty string if not a git repo
-func getGitCommit(dir string) (string, error) {
-	// Walk up to find .git directory
-	absDir, err := filepath.Abs(dir)
-	if err != nil {
-		return "", err
-	}
-
-	currentDir := absDir
-	for {
-		gitDir := filepath.Join(currentDir, ".git")
-		if _, err := os.Stat(gitDir); err == nil {
-			// Found .git directory, run git rev-parse HEAD
-			cmd := exec.Command("git", "rev-parse", "HEAD")
-			cmd.Dir = currentDir
-			output, err := cmd.Output()
-			if err != nil {
-				return "", nil // Not a valid git repo or no commits yet
-			}
-			return strings.TrimSpace(string(output)), nil
-		}
-
-		// Move up one directory
-		parent := filepath.Dir(currentDir)
-		if parent == currentDir {
-			// Reached root without finding .git
-			return "", nil
-		}
-		currentDir = parent
-	}
-}
 
 // compareTaskIDs reports whether a sorts before b: numerically when both
 // are pure non-negative integers (preserving today's 1,2,...,9,10,11
@@ -60,23 +24,17 @@ func compareTaskIDs(a, b string) bool {
 	return a < b
 }
 
-// IndexEntry contains task metadata without description (stored in index)
+// IndexEntry contains task metadata without description. It is an in-memory
+// projection of a task's {id}/{id}.md frontmatter and is never serialized.
 type IndexEntry struct {
-	ID        string        `json:"id"`
-	ParentID  string        `json:"parent_id,omitempty"`
-	Title     string        `json:"title"`
-	Status    task.Status   `json:"status"`
-	Priority  task.Priority `json:"priority"`
-	Type      string        `json:"type"`
-	CreatedAt time.Time     `json:"created_at"`
-	UpdatedAt time.Time     `json:"updated_at"`
-}
-
-// IndexFile is the on-disk format for the index
-type IndexFile struct {
-	GitCommit string              `json:"git_commit"`
-	Tasks     []*IndexEntry       `json:"tasks"`
-	Relations []task.RelationEdge `json:"relations,omitempty"`
+	ID        string
+	ParentID  string
+	Title     string
+	Status    task.Status
+	Priority  task.Priority
+	Type      string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // taskToEntry converts a Task to an IndexEntry
@@ -114,14 +72,18 @@ const SymmetricRelationType = "relates_to"
 // BlockingRelationType is the relation type that affects task execution order
 const BlockingRelationType = "blocked_by"
 
-// Index is an in-memory cache of all tasks
+// Index is an in-memory cache of all active tasks, built entirely from the
+// per-task {id}/{id}.md files. It has no on-disk form of its own.
 type Index struct {
 	entries           map[string]*IndexEntry
 	relationsBySource map[string][]task.RelationEdge
 	relationsByTarget map[string][]task.RelationEdge
 	dir               string
 	storage           *MarkdownStorage
-	dirty             bool
+	// builtAt is the moment the in-memory state last agreed with disk,
+	// refreshed both by a rebuild and by our own writes. It is the baseline
+	// isStaleOnDisk compares task file mtimes against.
+	builtAt time.Time
 }
 
 // NewIndex creates a new index for the given directory
@@ -135,8 +97,9 @@ func NewIndex(dir string, storage *MarkdownStorage) *Index {
 	}
 }
 
-// indexPath returns path to the index file
-func (idx *Index) indexPath() string {
+// legacyIndexPath is the shared metadata cache this package used to write.
+// It is only referenced to delete a leftover copy - see Load.
+func (idx *Index) legacyIndexPath() string {
 	return filepath.Join(idx.dir, ".index.json")
 }
 
@@ -144,7 +107,6 @@ func (idx *Index) reset() {
 	idx.entries = make(map[string]*IndexEntry)
 	idx.relationsBySource = make(map[string][]task.RelationEdge)
 	idx.relationsByTarget = make(map[string][]task.RelationEdge)
-	idx.dirty = false
 }
 
 func (idx *Index) rebuildFromTasks(tasks []*task.Task) error {
@@ -175,12 +137,8 @@ func (idx *Index) rebuildFromTasks(tasks []*task.Task) error {
 		}
 	}
 
-	if len(tasks) == 0 {
-		idx.dirty = false
-		return nil
-	}
-
-	return idx.Save()
+	idx.builtAt = time.Now()
+	return nil
 }
 
 // Rebuild scans all markdown files and rebuilds the index
@@ -193,107 +151,22 @@ func (idx *Index) Rebuild() error {
 	return idx.rebuildFromTasks(tasks)
 }
 
-// Save persists the index to disk
-func (idx *Index) Save() error {
-	if err := os.MkdirAll(idx.dir, 0755); err != nil {
-		return err
-	}
-
-	// Get current git commit
-	gitCommit, _ := getGitCommit(idx.dir)
-
-	// Build entries slice sorted by ID
-	entries := make([]*IndexEntry, 0, len(idx.entries))
-	for _, e := range idx.entries {
-		entries = append(entries, e)
-	}
-	sort.Slice(entries, func(i, j int) bool {
-		return compareTaskIDs(entries[i].ID, entries[j].ID)
-	})
-
-	// Build relations slice
-	var relations []task.RelationEdge
-	for _, edges := range idx.relationsBySource {
-		relations = append(relations, edges...)
-	}
-	sort.Slice(relations, func(i, j int) bool {
-		if relations[i].Source != relations[j].Source {
-			return compareTaskIDs(relations[i].Source, relations[j].Source)
-		}
-		if relations[i].Target != relations[j].Target {
-			return compareTaskIDs(relations[i].Target, relations[j].Target)
-		}
-		return relations[i].Type < relations[j].Type
-	})
-
-	indexFile := IndexFile{
-		GitCommit: gitCommit,
-		Tasks:     entries,
-		Relations: relations,
-	}
-
-	data, err := json.MarshalIndent(indexFile, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	tmpPath := idx.indexPath() + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpPath, idx.indexPath()); err != nil {
-		return err
-	}
-	idx.dirty = false
-	return nil
-}
-
-// Load reads the index from disk (or rebuilds if missing/corrupt)
+// Load populates the index from the per-task directories. It also removes
+// the obsolete shared cache file this package used to write, so a repository
+// carrying one from an older build does not keep it around indefinitely;
+// failing to remove it is harmless (nothing reads it) and never fails startup.
 func (idx *Index) Load() error {
-	data, err := os.ReadFile(idx.indexPath())
-	if err != nil {
-		if os.IsNotExist(err) {
-			return idx.Rebuild()
-		}
-		return err
-	}
-
-	var indexFile IndexFile
-	if err := json.Unmarshal(data, &indexFile); err != nil {
-		return idx.Rebuild() // Corrupt or old format index
-	}
-
-	// Check git commit - rebuild if stale
-	currentCommit, _ := getGitCommit(idx.dir)
-	if currentCommit != "" && indexFile.GitCommit != currentCommit {
-		return idx.Rebuild() // Stale index (git changed)
-	}
-
-	// Empty commit in file with non-empty current = stale (migration case)
-	if currentCommit != "" && indexFile.GitCommit == "" {
-		return idx.Rebuild()
-	}
-
-	// Load entries into memory
-	idx.entries = make(map[string]*IndexEntry)
-	for _, e := range indexFile.Tasks {
-		idx.entries[e.ID] = e
-	}
-
-	// Load relations into memory
-	idx.relationsBySource = make(map[string][]task.RelationEdge)
-	idx.relationsByTarget = make(map[string][]task.RelationEdge)
-	for _, edge := range indexFile.Relations {
-		idx.addEdge(edge)
-	}
-	idx.dirty = false
-	return nil
+	_ = os.Remove(idx.legacyIndexPath())
+	return idx.Rebuild()
 }
 
+// syncIfStale rebuilds the index when the task directories have changed
+// behind our back (a git pull, a hand-edited file, another process).
+//
+// Contract: exported query methods call this exactly once, on entry;
+// helpers reachable only from inside such a method must not call it, or a
+// single query costs one directory scan per task instead of one in total.
 func (idx *Index) syncIfStale() {
-	if idx.dirty {
-		return
-	}
 	stale, err := idx.isStaleOnDisk()
 	if err != nil || !stale {
 		return
@@ -301,18 +174,15 @@ func (idx *Index) syncIfStale() {
 	_ = idx.Rebuild()
 }
 
+// isStaleOnDisk reports whether any task file has been written since the
+// in-memory state was last known to agree with disk, or whether the number
+// of task directories has diverged from the number of entries we hold.
 func (idx *Index) isStaleOnDisk() (bool, error) {
 	entries, err := os.ReadDir(idx.dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return false, nil
 		}
-		return false, err
-	}
-
-	indexInfo, err := os.Stat(idx.indexPath())
-	indexMissing := os.IsNotExist(err)
-	if err != nil && !indexMissing {
 		return false, err
 	}
 
@@ -329,21 +199,13 @@ func (idx *Index) isStaleOnDisk() (bool, error) {
 
 		taskCount++
 
-		if indexMissing {
-			continue
-		}
-
-		if info.ModTime().After(indexInfo.ModTime()) {
+		if info.ModTime().After(idx.builtAt) {
 			return true, nil
 		}
 	}
 
 	if taskCount == 0 {
 		return false, nil
-	}
-
-	if indexMissing {
-		return len(idx.entries) == 0, nil
 	}
 
 	if taskCount != len(idx.entries) {
@@ -356,6 +218,12 @@ func (idx *Index) isStaleOnDisk() (bool, error) {
 // GetEntry returns an entry by ID (metadata only, no description)
 func (idx *Index) GetEntry(id string) (*IndexEntry, bool) {
 	idx.syncIfStale()
+	return idx.getEntry(id)
+}
+
+// getEntry is the non-syncing form of GetEntry, for callers that have
+// already synced (see syncIfStale's contract).
+func (idx *Index) getEntry(id string) (*IndexEntry, bool) {
 	e, ok := idx.entries[id]
 	return e, ok
 }
@@ -376,13 +244,13 @@ func (idx *Index) Get(id string) (*task.Task, bool) {
 // Set adds or updates a task in the index
 func (idx *Index) Set(t *task.Task) {
 	idx.entries[t.ID] = taskToEntry(t)
-	idx.dirty = true
+	idx.builtAt = time.Now()
 }
 
 // Delete removes a task from the index
 func (idx *Index) Delete(id string) {
 	delete(idx.entries, id)
-	idx.dirty = true
+	idx.builtAt = time.Now()
 }
 
 // All returns all tasks sorted by ID
@@ -450,7 +318,7 @@ func (idx *Index) isActionableForNextTodo(e *IndexEntry) bool {
 	if e.Status != task.StatusTodo && e.Status != task.StatusInProgress {
 		return false
 	}
-	if idx.HasSubtasks(e.ID) {
+	if idx.hasSubtasks(e.ID) {
 		return false
 	}
 	return !idx.isBlocked(e.ID)
@@ -466,7 +334,7 @@ func (idx *Index) nextTodoGroupForEntry(e *IndexEntry) (string, nextTodoGroupKey
 	}
 
 	if e.ParentID != "" {
-		if parent, ok := idx.GetEntry(e.ParentID); ok {
+		if parent, ok := idx.getEntry(e.ParentID); ok {
 			groupID = parent.ID
 			key = nextTodoGroupKey{
 				priorityOrder:    parent.Priority.Order(),
@@ -584,6 +452,12 @@ func (idx *Index) GetSubtasks(parentID string) []*task.Task {
 // HasSubtasks returns true if the task has any subtasks
 func (idx *Index) HasSubtasks(taskID string) bool {
 	idx.syncIfStale()
+	return idx.hasSubtasks(taskID)
+}
+
+// hasSubtasks is the non-syncing form of HasSubtasks, for callers that have
+// already synced (see syncIfStale's contract).
+func (idx *Index) hasSubtasks(taskID string) bool {
 	for _, e := range idx.entries {
 		if e.ParentID == taskID {
 			return true
@@ -606,9 +480,9 @@ func (idx *Index) SubtaskCounts(parentID string) (total int, done int) {
 	return
 }
 
-// isBlocked checks if a task has any unresolved blocked_by relations
+// isBlocked checks if a task has any unresolved blocked_by relations.
+// Non-syncing: reachable only from NextTodo, which syncs first.
 func (idx *Index) isBlocked(taskID string) bool {
-	idx.syncIfStale()
 	for _, e := range idx.relationsBySource[taskID] {
 		if e.Type == BlockingRelationType {
 			if target, ok := idx.entries[e.Target]; ok && target.Status != task.StatusDone {
@@ -657,7 +531,7 @@ func (idx *Index) AddRelation(edge task.RelationEdge) {
 		}
 		idx.addEdge(reverse)
 	}
-	idx.dirty = true
+	idx.builtAt = time.Now()
 }
 
 // RemoveRelation removes a relation edge from the index
@@ -672,7 +546,7 @@ func (idx *Index) RemoveRelation(edge task.RelationEdge) {
 		}
 		idx.removeEdge(reverse)
 	}
-	idx.dirty = true
+	idx.builtAt = time.Now()
 }
 
 // GetRelationsForTask returns all edges where task is source OR target
@@ -741,6 +615,6 @@ func (idx *Index) RemoveAllRelationsForTask(taskID string) []task.RelationEdge {
 	}
 	delete(idx.relationsByTarget, taskID)
 
-	idx.dirty = true
+	idx.builtAt = time.Now()
 	return removed
 }

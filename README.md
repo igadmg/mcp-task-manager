@@ -12,7 +12,7 @@ MCP Task Manager provides a simple but powerful task management system that inte
 - **Attached files** - `write_task_file`, `read_task_file`, `list_task_files` let an agent attach free-form notes, research, or design docs to a task; they move and are removed together with the task on archive/delete
 - **Priority-based workflow** - Critical > High > Medium > Low, with oldest-first tiebreaker
 - **Agent-friendly tools** - `get_next_task`, `start_task`, `complete_task` for automated workflows
-- **Self-healing index** - JSON index cache rebuilds automatically from source files
+- **Self-healing index** - in-memory index rebuilds automatically from the task files
 - **Configurable task types** - Default: `feature`, `bug`; extensible via config
 
 ## Installation
@@ -331,7 +331,7 @@ Detailed description in Markdown format.
 - Links and references
 ```
 
-Ids are strings on the wire (JSON responses and `--json` CLI output render `"id": "1"`, not a bare number); a bare YAML scalar like `id: 1` above still parses fine into that string field. By default `create_task` allocates the next auto-incrementing numeric-looking id, unpadded (`"8"`, not `"008"`). Optionally, pass `id` (MCP) or `--id` (CLI `create`) to use a caller-supplied custom text id instead — it's validated like an attached filename (non-empty, no `/` or `\`, not `..`; `"0"`, `"archive"`, and `".index.json"` are reserved) and rejected if it collides with an existing active or archived task.
+Ids are strings on the wire (JSON responses and `--json` CLI output render `"id": "1"`, not a bare number); a bare YAML scalar like `id: 1` above still parses fine into that string field. By default `create_task` allocates the next auto-incrementing numeric-looking id, unpadded (`"8"`, not `"008"`). Optionally, pass `id` (MCP) or `--id` (CLI `create`) to use a caller-supplied custom text id instead — it's validated like an attached filename (non-empty, no `/` or `\`, not `..`; `"0"`, `"archive"`, and `".index.json"` are reserved, the last being a retired cache filename) and rejected if it collides with an existing active or archived task.
 
 The `type` field must be one of the configured `task_types` values. With the default configuration, allowed values are `feature` and `bug`.
 
@@ -375,7 +375,7 @@ mcp-task-manager/
 ├── internal/
 │   ├── cli/                 # CLI command handlers
 │   ├── config/              # Configuration loading
-│   ├── storage/             # Markdown + index storage
+│   ├── storage/             # Markdown storage + in-memory index
 │   ├── task/                # Task model and service
 │   └── tools/               # MCP tool handlers
 ├── tasks/                   # Task storage (created at runtime); tasks/{id}/{id}.md plus attached files

@@ -9,4 +9,5 @@ params:
     Optional custom task id, used verbatim as the id and storage directory name
     instead of the next auto-increment id. Validated like attached filenames
     (non-empty, no '/' or '\', not '..'); "0", "archive", and ".index.json" are
-    reserved. Must not already exist (active or archived).
+    reserved, the last being a retired cache filename. Must not already exist
+    (active or archived).
