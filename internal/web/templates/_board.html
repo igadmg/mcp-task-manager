@@ -1,0 +1,31 @@
+<div id="board" hx-get="/board" hx-trigger="every {{ .PollSeconds }}s" hx-swap="outerHTML">
+  {{ if .DangerZone }}
+  <div class="mb-4 rounded-xl border border-amber-400/30 bg-amber-400/[0.06] px-4 py-3">
+    <p class="text-sm font-medium text-amber-200">An agent may be working right now</p>
+    <p class="mt-1 text-sm text-amber-100/70">
+      In progress:
+      {{ range $i, $d := .DangerZone }}{{ if $i }}, {{ end }}<a class="underline decoration-amber-400/40 underline-offset-2 hover:decoration-amber-300" href="/tasks/{{ $d.ID }}">#{{ $d.ID }} {{ $d.Title }}</a>{{ end }}.
+      Files in these areas can change under you.
+    </p>
+  </div>
+  {{ end }}
+
+  <div class="grid gap-3 md:grid-cols-3">
+    {{ range .Columns }}
+    <section class="column">
+      <header class="flex items-center gap-2 px-1 pb-2 pt-1">
+        <span class="dot dot-{{ .Status }}"></span>
+        <h2 class="text-xs font-semibold uppercase tracking-wider text-neutral-400">{{ .Title }}</h2>
+        <span class="chip chip-muted ml-auto">{{ .Count }}</span>
+      </header>
+      <div class="flex flex-col gap-2">
+        {{ range .Cards }}{{ template "_card.html" . }}{{ else }}
+        <p class="px-1 py-6 text-center text-xs text-neutral-600">empty</p>
+        {{ end }}
+      </div>
+    </section>
+    {{ end }}
+  </div>
+
+  <p class="meta mt-3 text-right">updated {{ .Generated }}</p>
+</div>

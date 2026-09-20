@@ -1,0 +1,10 @@
+<div id="board" hx-get="/board" hx-trigger="every {{ .PollSeconds }}s" hx-swap="outerHTML">
+  <div class="rounded-xl border border-white/10 bg-white/[0.02] p-8 text-center">
+    <p class="text-sm font-medium text-neutral-200">No project resolved yet</p>
+    <p class="mx-auto mt-2 max-w-md text-sm text-neutral-500">
+      The dashboard is running inside the MCP server and is waiting for the client to
+      name a project. The board appears here by itself after the first tool call.
+    </p>
+    <p class="meta mt-4">polling every {{ .PollSeconds }}s</p>
+  </div>
+</div>

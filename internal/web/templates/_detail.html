@@ -1,0 +1,99 @@
+{{ if .Missing }}
+<div class="rounded-xl border border-white/10 bg-white/[0.02] p-6">
+  <p class="text-sm font-medium text-neutral-200">This task is gone</p>
+  <p class="mt-2 text-sm text-neutral-500">It was deleted after the board was drawn. <a class="underline underline-offset-2" href="/">Refresh the board</a>.</p>
+</div>
+{{ else }}
+<div class="rounded-xl border border-white/10 bg-neutral-900/60 p-5">
+  {{ if .Archived }}
+  <p class="mb-4 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-neutral-400">
+    Archived &mdash; read-only. Relations and subtasks are not indexed for archived tasks.
+  </p>
+  {{ end }}
+
+  <div class="flex items-baseline gap-2">
+    <span class="meta">#{{ .Card.ID }}</span>
+    {{ if .Card.IsSubtask }}<a class="meta hover:text-neutral-300" href="/tasks/{{ .Card.ParentID }}">&#8627; {{ .Card.ParentID }}</a>{{ end }}
+    <span class="chip chip-{{ .Card.Priority }} ml-auto">{{ .Card.Priority }}</span>
+  </div>
+  <h1 class="mt-1.5 text-base font-semibold leading-snug text-neutral-100">{{ .Card.Title }}</h1>
+
+  <div class="mt-3 flex flex-wrap items-center gap-1.5">
+    <span class="chip chip-muted"><span class="dot dot-{{ .Card.Status }}"></span>{{ .Card.Status }}</span>
+    <span class="chip chip-muted">{{ .Card.Type }}</span>
+    {{ if .Card.Resolution }}<span class="chip chip-muted">{{ .Card.Resolution }}</span>{{ end }}
+    {{ if .Card.Blocked }}<span class="chip chip-blocked">blocked</span>{{ end }}
+  </div>
+
+  {{ if .Description }}
+  <pre class="mt-4 max-h-96 overflow-auto whitespace-pre-wrap rounded-lg bg-black/30 p-3 font-mono text-xs leading-relaxed text-neutral-300">{{ .Description }}</pre>
+  {{ else }}
+  <p class="mt-4 text-xs text-neutral-600">No description.</p>
+  {{ end }}
+
+  {{ if .Card.Blockers }}
+  <section class="mt-5">
+    <h2 class="text-xs font-semibold uppercase tracking-wider text-neutral-400">Blocked by</h2>
+    <ul class="mt-2 space-y-1">
+      {{ range .Card.Blockers }}
+      <li><a class="flex items-center gap-2 rounded px-1 py-1 hover:bg-white/5" href="/tasks/{{ .ID }}">
+        <span class="meta">#{{ .ID }}</span>
+        <span class="truncate text-xs text-neutral-300">{{ .Title }}</span>
+        <span class="chip chip-muted ml-auto">{{ .Status }}</span>
+      </a></li>
+      {{ end }}
+    </ul>
+  </section>
+  {{ end }}
+
+  {{ if .Card.Subtasks }}
+  <section class="mt-5">
+    <h2 class="text-xs font-semibold uppercase tracking-wider text-neutral-400">Subtasks {{ .Card.SubtaskDone }}/{{ .Card.SubtaskTotal }}</h2>
+    <ul class="mt-2 space-y-1">
+      {{ range .Card.Subtasks }}
+      <li><a class="flex items-center gap-2 rounded px-1 py-1 hover:bg-white/5" href="/tasks/{{ .ID }}">
+        <span class="meta">#{{ .ID }}</span>
+        <span class="truncate text-xs text-neutral-300">{{ .Title }}</span>
+        <span class="chip chip-muted ml-auto">{{ .Status }}</span>
+      </a></li>
+      {{ end }}
+    </ul>
+  </section>
+  {{ end }}
+
+  {{ if .Relations }}
+  <section class="mt-5">
+    <h2 class="text-xs font-semibold uppercase tracking-wider text-neutral-400">Relations</h2>
+    <ul class="mt-2 space-y-1">
+      {{ range .Relations }}
+      <li class="flex items-center gap-2 px-1 py-1">
+        <span class="chip chip-muted">{{ .Type }}</span>
+        <span class="meta">{{ .Direction }}</span>
+        <a class="truncate text-xs text-neutral-300 hover:text-neutral-100" href="/tasks/{{ .OtherID }}">#{{ .OtherID }} {{ .OtherTitle }}</a>
+      </li>
+      {{ end }}
+    </ul>
+  </section>
+  {{ end }}
+
+  {{ if .Files }}
+  <section class="mt-5">
+    <h2 class="text-xs font-semibold uppercase tracking-wider text-neutral-400">Attached files</h2>
+    <ul class="mt-2 flex flex-wrap gap-1.5">
+      {{ range .Files }}<li class="chip chip-muted">{{ . }}</li>{{ end }}
+    </ul>
+  </section>
+  {{ end }}
+
+  <dl class="mt-5 grid grid-cols-2 gap-x-4 gap-y-1 border-t border-white/5 pt-4">
+    <dt class="meta">created</dt><dd class="meta text-neutral-400">{{ .CreatedAt }}</dd>
+    <dt class="meta">updated</dt><dd class="meta text-neutral-400">{{ .UpdatedAt }}</dd>
+    {{ if .ClosedAt }}<dt class="meta">closed</dt><dd class="meta text-neutral-400">{{ .ClosedAt }}</dd>{{ end }}
+    {{ if .VerifiedAt }}<dt class="meta">verified</dt><dd class="meta text-neutral-400">{{ .VerifiedAt }}</dd>{{ end }}
+  </dl>
+
+  {{ if .ResolutionNote }}
+  <p class="mt-3 text-xs italic text-neutral-500">{{ .ResolutionNote }}</p>
+  {{ end }}
+</div>
+{{ end }}
