@@ -98,6 +98,19 @@ func (r *Resolver) Service(ctx context.Context) (*task.Service, error) {
 	return resolved.Service, nil
 }
 
+// Current returns the cached resolution without resolving anything.
+//
+// It is how consumers that must not cause side effects read the project - the
+// HTTP handlers above all. Resolution runs Service.Initialize(), which
+// migrates the legacy layout and may auto-archive, so it must only ever be
+// triggered by an MCP tool call or an explicit CLI startup, never by a plain
+// GET. Do not "helpfully" resolve here when nothing is cached yet.
+func (r *Resolver) Current() (*Resolved, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.resolved, r.resolved != nil
+}
+
 func (r *Resolver) resolve(ctx context.Context) (*Resolved, error) {
 	var provider config.RootsProvider
 	if r.roots != nil {
@@ -108,7 +121,13 @@ func (r *Resolver) resolve(ctx context.Context) (*Resolved, error) {
 	if err != nil {
 		return nil, err
 	}
+	return Build(cfg)
+}
 
+// Build constructs the storage, index and task service for an already loaded
+// config, running Initialize. It is the single construction site for a
+// project: Resolver.resolve and the CLI both go through it.
+func Build(cfg *config.Config) (*Resolved, error) {
 	tasksDir := cfg.TasksDir()
 	mdStorage := storage.NewMarkdownStorage(tasksDir)
 	index := storage.NewIndex(tasksDir, mdStorage)
