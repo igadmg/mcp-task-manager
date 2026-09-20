@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gpayer/mcp-task-manager/internal/config"
@@ -68,6 +69,10 @@ type Index interface {
 	RemoveRelation(edge RelationEdge)
 	GetRelationsForTask(taskID string) []RelationEdge
 	GetBlockers(taskID string) []string
+	// AllBlockers returns the blocked_by targets of every task that has
+	// any, keyed by the blocked task's id. Board-wide blocked lookups go
+	// through it so a whole render costs one index pass, not one per card.
+	AllBlockers() map[string][]string
 	RemoveAllRelationsForTask(taskID string) []RelationEdge
 }
 
@@ -98,6 +103,16 @@ type Service struct {
 	index          Index
 	validTypes     []string
 	config         *config.Config
+
+	// mu serializes every task operation. It is the only lock over the
+	// index and the markdown storage, both of which are reachable solely
+	// through this type.
+	//
+	// DISCIPLINE: exported methods lock once on entry and delegate to an
+	// unexported, unlocked twin. Service methods NEVER call each other's
+	// exported forms - Go mutexes are not reentrant. When adding a method,
+	// add it in this shape or TestServiceNoSelfDeadlock will fail.
+	mu sync.Mutex
 }
 
 // NewService creates a new task service
@@ -114,6 +129,9 @@ func NewService(storage Storage, archiveStorage ArchiveStorage, fileStorage File
 
 // EnsureProjectExists checks that a project was found during config loading.
 // Should be called before read operations.
+//
+// Deliberately unlocked: it reads only s.config, which is write-once
+// (assigned in NewService and never again). Same for ProjectFound and Config.
 func (s *Service) EnsureProjectExists() error {
 	if s.config == nil || !s.config.ProjectFound {
 		// Name the directory that was looked at: an unresolved project
@@ -134,6 +152,9 @@ func (s *Service) ProjectFound() bool {
 // Initialize loads the index if directory exists (does not create directory)
 // Initialize loads the index if directory exists (does not create directory)
 func (s *Service) Initialize() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	// Migrate any legacy flat-layout tasks before the index scans the
 	// directory, so LoadAll/Rebuild only ever sees the current layout.
 	if err := s.storage.MigrateFlatLayout(); err != nil {
@@ -145,7 +166,7 @@ func (s *Service) Initialize() error {
 	}
 	// Run auto-archive on startup if enabled
 	if s.config != nil && s.config.AutoArchive.Enabled {
-		if err := s.RunAutoArchive(); err != nil {
+		if err := s.runAutoArchive(); err != nil {
 			// Log but don't fail startup
 			log.Printf("auto-archive on startup failed: %v", err)
 		}
@@ -158,6 +179,12 @@ func (s *Service) Initialize() error {
 // bypassing (and not advancing) the numeric auto-increment counter. If id
 // is empty, the next auto-increment id is allocated as before.
 func (s *Service) Create(title, description string, priority Priority, taskType string, parentID string, id string) (*Task, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.create(title, description, priority, taskType, parentID, id)
+}
+
+func (s *Service) create(title, description string, priority Priority, taskType string, parentID string, id string) (*Task, error) {
 	if title == "" {
 		return nil, fmt.Errorf("title is required")
 	}
@@ -224,12 +251,20 @@ func (s *Service) Create(title, description string, priority Priority, taskType 
 
 // CreateSubtask creates a subtask under a parent
 func (s *Service) CreateSubtask(title, description string, priority Priority, taskType string, parentID string) (*Task, error) {
-	return s.Create(title, description, priority, taskType, parentID, "")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.create(title, description, priority, taskType, parentID, "")
 }
 
 // Get returns a task by ID with full description loaded from disk.
 // Falls back to the archive if the task is not found in the active index.
 func (s *Service) Get(id string) (*Task, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.get(id)
+}
+
+func (s *Service) get(id string) (*Task, error) {
 	t, ok := s.index.Get(id)
 	if ok {
 		return t, nil
@@ -245,7 +280,13 @@ func (s *Service) Get(id string) (*Task, error) {
 
 // GetWithSubtasks returns a task and its subtasks in one call
 func (s *Service) GetWithSubtasks(id string) (*Task, []*Task, error) {
-	t, err := s.Get(id)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.getWithSubtasks(id)
+}
+
+func (s *Service) getWithSubtasks(id string) (*Task, []*Task, error) {
+	t, err := s.get(id)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -256,6 +297,9 @@ func (s *Service) GetWithSubtasks(id string) (*Task, []*Task, error) {
 // WriteTaskFile creates or overwrites a named file attached to the given
 // task. Only active tasks accept writes - archived tasks are read-only.
 func (s *Service) WriteTaskFile(taskID string, filename, content string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if _, ok := s.index.Get(taskID); !ok {
 		if s.archiveStorage != nil && s.archiveStorage.IsArchived(taskID) {
 			return fmt.Errorf("task %s is archived; files are read-only", taskID)
@@ -268,7 +312,10 @@ func (s *Service) WriteTaskFile(taskID string, filename, content string) error {
 // ReadTaskFile returns the content of a named file attached to the given
 // task. Works for both active and archived tasks.
 func (s *Service) ReadTaskFile(taskID string, filename string) (string, error) {
-	if _, err := s.Get(taskID); err != nil {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, err := s.get(taskID); err != nil {
 		return "", err
 	}
 	return s.fileStorage.ReadFile(taskID, filename)
@@ -277,7 +324,10 @@ func (s *Service) ReadTaskFile(taskID string, filename string) (string, error) {
 // ListTaskFiles returns the names of all files attached to the given task.
 // Works for both active and archived tasks.
 func (s *Service) ListTaskFiles(taskID string) ([]string, error) {
-	if _, err := s.Get(taskID); err != nil {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, err := s.get(taskID); err != nil {
 		return nil, err
 	}
 	return s.fileStorage.ListFiles(taskID)
@@ -285,6 +335,12 @@ func (s *Service) ListTaskFiles(taskID string) ([]string, error) {
 
 // GetSubtaskCounts returns the count of subtasks for a task
 func (s *Service) GetSubtaskCounts(taskID string) (total, done int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.subtaskCounts(taskID)
+}
+
+func (s *Service) subtaskCounts(taskID string) (total, done int) {
 	return s.index.SubtaskCounts(taskID)
 }
 
@@ -326,7 +382,13 @@ func buildUpdateOpts(opts []UpdateOption) updateOpts {
 
 // Update modifies a task
 func (s *Service) Update(id string, title, description *string, status *Status, priority *Priority, taskType *string, opts ...UpdateOption) (*Task, error) {
-	t, err := s.Get(id)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.update(id, title, description, status, priority, taskType, opts...)
+}
+
+func (s *Service) update(id string, title, description *string, status *Status, priority *Priority, taskType *string, opts ...UpdateOption) (*Task, error) {
+	t, err := s.get(id)
 	if err != nil {
 		return nil, err
 	}
@@ -424,7 +486,10 @@ func (s *Service) Update(id string, title, description *string, status *Status, 
 
 // Delete removes a task
 func (s *Service) Delete(id string, deleteSubtasks bool) error {
-	t, err := s.Get(id)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	t, err := s.get(id)
 	if err != nil {
 		return err
 	}
@@ -459,7 +524,7 @@ func (s *Service) Delete(id string, deleteSubtasks bool) error {
 		}
 	}
 	for affectedID := range affectedTasks {
-		affected, err := s.Get(affectedID)
+		affected, err := s.get(affectedID)
 		if err != nil {
 			continue
 		}
@@ -488,18 +553,29 @@ func (s *Service) Delete(id string, deleteSubtasks bool) error {
 // List returns all tasks, optionally filtered
 // Note: Tasks returned do not include descriptions for performance (use Get for full task data)
 func (s *Service) List(status *Status, priority *Priority, taskType *string, parentID *string, resolution *Resolution) []*Task {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.list(status, priority, taskType, parentID, resolution)
+}
+
+func (s *Service) list(status *Status, priority *Priority, taskType *string, parentID *string, resolution *Resolution) []*Task {
 	return s.index.Filter(status, priority, taskType, parentID, resolution)
 }
 
 // GetNextTask returns the highest priority todo task
 // Note: Task returned does not include description (use Get to load full task data)
 func (s *Service) GetNextTask() *Task {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.index.NextTodo()
 }
 
 // StartTask moves a task from todo to in_progress
 func (s *Service) StartTask(id string) (*Task, error) {
-	t, err := s.Get(id)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	t, err := s.get(id)
 	if err != nil {
 		return nil, err
 	}
@@ -509,7 +585,7 @@ func (s *Service) StartTask(id string) (*Task, error) {
 	}
 
 	// Check if task is blocked
-	if blocked, blockers := s.IsBlocked(id); blocked {
+	if blocked, blockers := s.isBlocked(id); blocked {
 		var parts []string
 		for _, b := range blockers {
 			parts = append(parts, fmt.Sprintf("%s (%s)", b.TaskID, b.Status))
@@ -519,20 +595,20 @@ func (s *Service) StartTask(id string) (*Task, error) {
 
 	// Auto-start parent if this is a subtask
 	if t.ParentID != "" {
-		parent, err := s.Get(t.ParentID)
+		parent, err := s.get(t.ParentID)
 		if err != nil {
 			return nil, fmt.Errorf("parent task not found: %s", t.ParentID)
 		}
 		if parent.Status == StatusTodo {
 			status := StatusInProgress
-			if _, err := s.Update(t.ParentID, nil, nil, &status, nil, nil); err != nil {
+			if _, err := s.update(t.ParentID, nil, nil, &status, nil, nil); err != nil {
 				return nil, fmt.Errorf("failed to start parent task: %w", err)
 			}
 		}
 	}
 
 	status := StatusInProgress
-	return s.Update(id, nil, nil, &status, nil, nil)
+	return s.update(id, nil, nil, &status, nil, nil)
 }
 
 // CompleteTask closes a task. Without options it is the original
@@ -546,7 +622,10 @@ func (s *Service) StartTask(id string) (*Task, error) {
 //     the parent, since a branch that no longer applies does not apply
 //     subtask by subtask either. Completion keeps refusing, unchanged.
 func (s *Service) CompleteTask(id string, opts ...UpdateOption) (*Task, error) {
-	t, err := s.Get(id)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	t, err := s.get(id)
 	if err != nil {
 		return nil, err
 	}
@@ -583,7 +662,7 @@ func (s *Service) CompleteTask(id string, opts ...UpdateOption) (*Task, error) {
 
 	// Complete this task
 	status := StatusDone
-	completed, err := s.Update(id, nil, nil, &status, nil, nil, opts...)
+	completed, err := s.update(id, nil, nil, &status, nil, nil, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -603,7 +682,7 @@ func (s *Service) CompleteTask(id string, opts ...UpdateOption) (*Task, error) {
 			// closed as obsolete: from the parent's side every child has
 			// been dealt with. Give the parent its own resolution
 			// explicitly when that reading is wrong.
-			if _, err := s.Update(t.ParentID, nil, nil, &status, nil, nil); err != nil {
+			if _, err := s.update(t.ParentID, nil, nil, &status, nil, nil); err != nil {
 				return nil, fmt.Errorf("failed to auto-complete parent: %w", err)
 			}
 		}
@@ -621,7 +700,7 @@ func (s *Service) closeSubtasksWith(parentID string, subtasks []*Task, resolutio
 			continue
 		}
 		status := StatusDone
-		if _, err := s.Update(sub.ID, nil, nil, &status, nil, nil, WithResolution(resolution), WithResolutionNote(note)); err != nil {
+		if _, err := s.update(sub.ID, nil, nil, &status, nil, nil, WithResolution(resolution), WithResolutionNote(note)); err != nil {
 			return fmt.Errorf("failed to close subtask %s as %s: %w", sub.ID, resolution, err)
 		}
 	}
@@ -637,6 +716,9 @@ type BlockingInfo struct {
 
 // AddRelation adds a relation between two tasks
 func (s *Service) AddRelation(source string, relationType string, target string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	// Validate no self-reference
 	if source == target {
 		return fmt.Errorf("cannot create relation: source and target are the same task (%s)", source)
@@ -648,13 +730,13 @@ func (s *Service) AddRelation(source string, relationType string, target string)
 	}
 
 	// Validate source task exists
-	srcTask, err := s.Get(source)
+	srcTask, err := s.get(source)
 	if err != nil {
 		return fmt.Errorf("source task not found: %s", source)
 	}
 
 	// Validate target task exists
-	if _, err := s.Get(target); err != nil {
+	if _, err := s.get(target); err != nil {
 		return fmt.Errorf("target task not found: %s", target)
 	}
 
@@ -688,7 +770,10 @@ func (s *Service) AddRelation(source string, relationType string, target string)
 
 // RemoveRelation removes a relation between two tasks
 func (s *Service) RemoveRelation(source string, relationType string, target string) error {
-	srcTask, err := s.Get(source)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	srcTask, err := s.get(source)
 	if err != nil {
 		return fmt.Errorf("source task not found: %s", source)
 	}
@@ -725,6 +810,12 @@ func (s *Service) RemoveRelation(source string, relationType string, target stri
 
 // IsBlocked checks if a task has unresolved blocked_by relations
 func (s *Service) IsBlocked(taskID string) (bool, []BlockingInfo) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.isBlocked(taskID)
+}
+
+func (s *Service) isBlocked(taskID string) (bool, []BlockingInfo) {
 	blockerIDs := s.index.GetBlockers(taskID)
 	if len(blockerIDs) == 0 {
 		return false, nil
@@ -750,6 +841,12 @@ func (s *Service) IsBlocked(taskID string) (bool, []BlockingInfo) {
 
 // ArchiveTask moves a done task (and its subtasks) to the archive
 func (s *Service) ArchiveTask(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.archiveTask(id)
+}
+
+func (s *Service) archiveTask(id string) error {
 	t, ok := s.index.Get(id)
 	if !ok {
 		return fmt.Errorf("task not found: %s", id)
@@ -829,6 +926,12 @@ func (s *Service) updateAffectedRelationTasks(taskID string, removedEdges []Rela
 
 // GetAutoArchiveCandidates returns done tasks that are eligible for auto-archiving
 func (s *Service) GetAutoArchiveCandidates() []*Task {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.autoArchiveCandidates()
+}
+
+func (s *Service) autoArchiveCandidates() []*Task {
 	if s.config == nil {
 		return nil
 	}
@@ -857,16 +960,22 @@ func (s *Service) GetAutoArchiveCandidates() []*Task {
 
 // RunAutoArchive archives all eligible candidates; skips individual failures
 func (s *Service) RunAutoArchive() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.runAutoArchive()
+}
+
+func (s *Service) runAutoArchive() error {
 	if s.config == nil || !s.config.AutoArchive.Enabled {
 		return nil
 	}
-	candidates := s.GetAutoArchiveCandidates()
+	candidates := s.autoArchiveCandidates()
 	for _, t := range candidates {
 		// Skip tasks already archived (may have been archived as subtasks)
 		if _, ok := s.index.Get(t.ID); !ok {
 			continue
 		}
-		if err := s.ArchiveTask(t.ID); err != nil {
+		if err := s.archiveTask(t.ID); err != nil {
 			log.Printf("auto-archive: failed to archive task %s: %v", t.ID, err)
 		}
 	}
@@ -875,6 +984,9 @@ func (s *Service) RunAutoArchive() error {
 
 // ListArchived returns all archived tasks (linear scan of archive directory)
 func (s *Service) ListArchived() ([]*Task, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if s.archiveStorage == nil {
 		return nil, fmt.Errorf("archive storage not available")
 	}

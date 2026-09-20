@@ -390,10 +390,15 @@ func listTasksHandler(rs *project.Resolver) server.ToolHandlerFunc {
 			*task.Task
 			Blocked bool `json:"blocked"`
 		}
+		ids := make([]string, len(tasks))
+		for i, t := range tasks {
+			ids[i] = t.ID
+		}
+		blocked := svc.BlockedMap(ids)
+
 		enriched := make([]taskWithBlocked, len(tasks))
 		for i, t := range tasks {
-			blocked, _ := svc.IsBlocked(t.ID)
-			enriched[i] = taskWithBlocked{Task: t, Blocked: blocked}
+			enriched[i] = taskWithBlocked{Task: t, Blocked: len(blocked[t.ID]) > 0}
 		}
 
 		data, err := json.MarshalIndent(enriched, "", "  ")

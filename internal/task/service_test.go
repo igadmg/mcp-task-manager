@@ -318,6 +318,18 @@ func (m *mockIndex) GetRelationsForTask(taskID string) []RelationEdge {
 	return result
 }
 
+func (m *mockIndex) AllBlockers() map[string][]string {
+	out := make(map[string][]string)
+	for source, edges := range m.relationsBySource {
+		for _, e := range edges {
+			if e.Type == "blocked_by" {
+				out[source] = append(out[source], e.Target)
+			}
+		}
+	}
+	return out
+}
+
 func (m *mockIndex) GetBlockers(taskID string) []string {
 	var blockers []string
 	for _, e := range m.relationsBySource[taskID] {

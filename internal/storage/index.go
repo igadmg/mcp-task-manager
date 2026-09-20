@@ -588,6 +588,21 @@ func (idx *Index) GetRelationsForTask(taskID string) []task.RelationEdge {
 	return result
 }
 
+// AllBlockers returns the blocked_by targets of every task that has any,
+// keyed by the blocked task's id. One pass for a whole board.
+func (idx *Index) AllBlockers() map[string][]string {
+	idx.syncIfStale()
+	out := make(map[string][]string)
+	for source, edges := range idx.relationsBySource {
+		for _, e := range edges {
+			if e.Type == BlockingRelationType {
+				out[source] = append(out[source], e.Target)
+			}
+		}
+	}
+	return out
+}
+
 // GetBlockers returns target IDs from blocked_by edges where source == taskID
 func (idx *Index) GetBlockers(taskID string) []string {
 	idx.syncIfStale()
