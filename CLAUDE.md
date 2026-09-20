@@ -7,24 +7,31 @@ A Go-based MCP server for task management, designed for Claude and coding agents
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────┐
-│         Entry Point (main.go)               │
-│   (CLI mode if args, MCP server otherwise)  │
-├──────────────────────┬──────────────────────┤
-│    CLI Commands      │   MCP Tool Handlers  │
-│  (list, get, create) │  (create_task, etc.) │
-├──────────────────────┴──────────────────────┤
-│               Task Service                  │
-│    (business logic, validation, sorting)    │
-├─────────────────────────────────────────────┤
-│                  Storage                    │
-│  (markdown files + in-memory index)         │
-└─────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────┐
+│              Entry Point (cmd/mcp-task-manager)               │
+│        (CLI if args, MCP server otherwise; internal/app)      │
+├──────────────────┬───────────────────┬────────────────────────┤
+│   CLI Commands   │ MCP Tool Handlers │   Web UI (kanban)      │
+│ (list, get, ...) │ (create_task ...) │ (read-only, htmx+CSS)  │
+├──────────────────┴───────────────────┴────────────────────────┤
+│                        Task Service                           │
+│       (business logic, validation, sorting, one mutex)        │
+├───────────────────────────────────────────────────────────────┤
+│                           Storage                             │
+│              (markdown files + in-memory index)               │
+└───────────────────────────────────────────────────────────────┘
          │                        │
          ▼                        ▼
     ./tasks/{id}/{id}.md           (source of truth)
     ./tasks/archive/{id}/{id}.md   (archived tasks, not indexed)
 ```
+
+### Package boundary
+
+`internal/task` is the only package that performs task operations;
+`internal/storage` is private to it. A consumer that needs data the service
+does not expose gets a new method on `task.Service` (see
+`internal/task/view.go`), never its own storage handle.
 
 ## Development Process
 
@@ -203,6 +210,20 @@ A task can have zero or more free-form named text files attached to it (e.g. res
 - `write_task_file` is rejected for archived tasks (archived tasks are read-only, consistent with the rest of this project's archived-task semantics)
 - `read_task_file` and `list_task_files` work for both active and archived tasks
 
+### Web UI
+
+A read-only kanban dashboard, served by `internal/web` (`net/http` +
+`html/template` + `http.ServeMux` patterns; no framework).
+
+- **One process, two transports.** MCP (stdio) and HTTP share a single resolved project and a single `task.Service`. `internal/app` is the composition root.
+- **Ways to start it:** `web.enabled` in the config (or `MCP_WEB_ENABLED`) brings it up with the MCP server; the `start_web_ui` tool starts it on demand; `mcp-task-manager serve web` runs it in the foreground.
+- **Read-only is structural.** Only `GET` patterns are registered, so `ServeMux` answers everything else with 405, and no handler can reach a mutating service method.
+- **Handlers never resolve.** They read `Resolver.Current()`, never `Get()`: resolution runs `Service.Initialize()`, which migrates the layout and may auto-archive, and a plain GET must not move files. Before the first tool call the board renders a placeholder that polls itself back to life.
+- **Assets are embedded.** Tailwind output and htmx are vendored under `internal/web/static/` and compiled in with `go:embed`; the page renders offline. Regenerate the CSS with `scripts/build-css.sh` after editing templates — a maintainer step, never part of `go build`.
+- **Danger zone.** In-progress tasks are highlighted and named in a banner, so a human reading the board knows an agent may be editing those areas. Presentation only; the UI stays read-only.
+- **Archived tasks are not on the board** (the snapshot is the active index); the detail route still serves them, read-only.
+- **Logging goes to stderr.** Nothing in `internal/web` writes to stdout — in stdio mode stdout is the JSON-RPC channel.
+
 ## MCP Tools
 
 ### Task Management
@@ -221,6 +242,11 @@ A task can have zero or more free-form named text files attached to it (e.g. res
 | `write_task_file` | Create or overwrite a named text file attached to a task (rejected for archived tasks) |
 | `read_task_file` | Read the content of a named file attached to a task (works for active and archived tasks) |
 | `list_task_files` | List the names of all files attached to a task (works for active and archived tasks) |
+
+### Web UI
+| Tool | Description |
+|------|-------------|
+| `start_web_ui` | Start the read-only kanban dashboard and report its URL; optional `addr`. Idempotent — a second call reports the running URL and never double-binds |
 
 ### Relations
 | Tool | Description |
@@ -251,7 +277,15 @@ relation_types:       # optional, defaults to these four
 auto_archive:         # optional
   enabled: false      # default: false
   after_days: 30      # default: 30
+web:                  # optional
+  enabled: false      # start the dashboard with the MCP server; default: false
+  addr: 127.0.0.1:7777  # default
+  with_mcp: false     # `serve web` also serves MCP over stdio; default: false
 ```
+
+A partially written section keeps the defaults for the keys it omits
+(`config.applyDefaults`), so `web: {enabled: true}` still listens on the
+default address and `auto_archive: {enabled: true}` still waits 30 days.
 
 Environment overrides:
 
@@ -261,6 +295,8 @@ Environment overrides:
 | `MCP_PROJECT_DIR` | explicit project root |
 | `CLAUDE_PROJECT_DIR` | project root, set by Claude Code |
 | `MCP_ROOT_SOURCE` | restrict resolution to one source (`roots` to exercise the protocol path) |
+| `MCP_WEB_ENABLED` | start the web dashboard with the MCP server (bool; unparseable values ignored) |
+| `MCP_WEB_ADDR` | dashboard listen address; never enables it on its own |
 
 `mcp-task-manager version` prints the resolved root, tasks directory and source.
 
@@ -276,8 +312,12 @@ Environment overrides:
 mcp-task-manager/
 ├── cmd/
 │   └── mcp-task-manager/
-│       └── main.go              # Entry point (CLI if args, MCP server otherwise)
+│       └── main.go              # Entry point: mode selection + signal context
 ├── internal/
+│   ├── app/
+│   │   ├── app.go               # Composition root: RunMCP, RunWeb, MCP server assembly
+│   │   ├── icon.png             # Embedded server icon
+│   │   └── instructions.md      # Embedded server instructions
 │   ├── cli/
 │   │   ├── cli.go               # CLI entry point and subcommand setup
 │   │   ├── cli_test.go          # CLI tests
@@ -298,13 +338,29 @@ mcp-task-manager/
 │   │   └── index.go             # In-memory index over the task directories
 │   ├── task/
 │   │   ├── task.go              # Task model/types (status, priority, resolution)
-│   │   └── service.go           # Business logic
-│   └── tools/
-│       ├── tools.go             # Tool registration
-│       ├── management.go        # create, update, list, get, delete
-│       ├── workflow.go          # get_next_task, start, complete
-│       ├── relations.go         # add_relation, remove_relation
-│       └── files.go             # write_task_file, read_task_file, list_task_files
+│   │   ├── service.go           # Business logic (single mutex, twin discipline)
+│   │   └── view.go              # Board/detail composites for read-only consumers
+│   ├── testsupport/
+│   │   └── testsupport.go       # Shared test backlog helpers (NewBacklog, Seed, IsolateEnv)
+│   ├── tools/
+│   │   ├── tools.go             # Tool registration + the WebStarter interface
+│   │   ├── management.go        # create, update, list, get, delete
+│   │   ├── workflow.go          # get_next_task, start, complete
+│   │   ├── relations.go         # add_relation, remove_relation
+│   │   ├── files.go             # write_task_file, read_task_file, list_task_files
+│   │   └── web.go               # start_web_ui
+│   └── web/
+│       ├── server.go            # Route table (GET only)
+│       ├── handlers.go          # board, board fragment, detail, panel, health
+│       ├── view.go              # View models + pure mapping from the snapshot
+│       ├── controller.go        # Listener lifecycle: Start / URL / Shutdown
+│       ├── templates.go         # Embedded template sets
+│       ├── assets.go            # Embedded static assets
+│       ├── templates/           # layout, board, card, detail, placeholder
+│       ├── assets/input.css     # Tailwind entry (input to scripts/build-css.sh)
+│       └── static/              # app.css + htmx.min.js, committed and embedded
+├── scripts/
+│   └── build-css.sh             # Maintainer step: rebuild the vendored Tailwind CSS
 ├── mcp-tasks.yaml               # Default config (for reference)
 ├── _design.md                   # Resolution / verified_at: rationale and rules
 ├── go.mod
@@ -328,8 +384,12 @@ mcp-task-manager/
 - Includes relation edges (with auto-generated reverse edges for symmetric types)
 
 ### Concurrency
-- MVP assumes single-server, no locking
+- A single `sync.Mutex` on `task.Service` serializes every task operation. It is the only lock over the index and the markdown storage, both of which are reachable solely through that type.
+- **Twin discipline:** exported methods lock once on entry and delegate to an unexported, unlocked twin (`Get`/`get`, `Update`/`update`, …). Service methods never call each other's exported forms — Go mutexes are not reentrant. `TestServiceNoSelfDeadlock` fails if a new method breaks the shape.
+- `EnsureProjectExists`, `ProjectFound` and `Config` are deliberately unlocked: they read only the write-once config field.
+- The lock matters because mcp-go's stdio server dispatches tool calls across a worker pool, and because the web dashboard reads the same service concurrently. `go test -race` covers both (`internal/task/concurrency_test.go`, `internal/web/race_test.go`).
 - File writes are atomic (write to temp file, then rename)
+- Cross-process coordination (file locks, PID files) stays out of scope: whichever transport the process runs, the other comes up inside it.
 
 ### Validation
 - Task IDs: strings, format-validated the same way attached filenames are (non-empty, no `/` or `\`, not `..`), plus three reserved names (`"0"`, `"archive"`, `".index.json"` - the last a retired cache filename) rejected for a caller-supplied custom id
@@ -338,6 +398,7 @@ mcp-task-manager/
 - Type: must be in configured list (default: `feature`, `bug`)
 - Relation type: must be in configured list (default: `blocked_by`, `relates_to`, `duplicate_of`, `superseded_by`)
 - Resolution: `completed` | `obsolete` | `superseded` | `duplicate` | `wontfix`; only valid on a `done` task
+- Config: `applyDefaults` fills in what a partially written YAML section left out, so a half-specified `web:` or `auto_archive:` block cannot silently zero the rest
 
 ## Future Considerations (Post-MVP)
 - Comments/history

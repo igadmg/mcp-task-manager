@@ -76,6 +76,28 @@ Because roots only become available after `initialize`, the project is resolved 
 
 Note that a client which launches the server with a working directory *other* than the project (for example `go run -C <dir>`) is fine: steps 2–4 do not depend on the working directory at all.
 
+#### Web Dashboard
+
+The same binary also serves a read-only kanban dashboard of the backlog:
+
+```bash
+mcp-task-manager serve web --addr 127.0.0.1:7777
+# then open http://127.0.0.1:7777/
+```
+
+One process, two transports: the dashboard and the MCP tools share a single
+resolved project and a single task service, so a task created through a tool
+call shows up on the board on the next refresh (every 5 seconds).
+
+- From an MCP client, set `web.enabled` in `mcp-tasks.yaml` (or `MCP_WEB_ENABLED=1`) to bring the board up with the server, or call the `start_web_ui` tool to start it on demand.
+- `serve web` resolves the project eagerly, so the board has data from the very first request. Started from inside the MCP server it comes up before the client has named a project and shows a placeholder until the first tool call.
+- `serve web --mcp` additionally serves MCP over stdio in the same process. It is off by default: a terminal has a TTY on stdin, and a JSON-RPC reader there would eat your keystrokes.
+- Tailwind CSS and htmx are compiled into the binary, so the page renders with no network access.
+
+**The HTTP surface is read-only and unauthenticated.** No route mutates a task,
+but anyone who can reach the port can read the whole backlog. The default
+address is loopback-only; binding anywhere else is your explicit choice.
+
 #### Running a Locally Built Binary Against a Project
 
 To try a locally built binary against a real project before installing it system-wide:
@@ -129,6 +151,9 @@ mcp-task-manager archive 1         # Archive a completed task
 mcp-task-manager write-task-file 1 notes.md "some research notes"
 mcp-task-manager read-task-file 1 notes.md
 mcp-task-manager list-task-files 1
+
+# Web dashboard (foreground, Ctrl-C to stop)
+mcp-task-manager serve web --addr 127.0.0.1:7777
 
 # Other
 mcp-task-manager version
@@ -185,7 +210,23 @@ Use this path for Claude Code specifically. The Claude plugin now bundles its ow
 /plugin install mcp-task-manager@mcp-task-manager
 ```
 
-That's it — the bundled `.mcp.json` launches the server with `go run -C ${CLAUDE_PLUGIN_ROOT} ./cmd/mcp-task-manager`, so it always runs the checked-out source (no `go install`/binary step, and no rebuild needed between debug runs). This requires the Go toolchain to be available; if you'd rather run a pre-built binary, replace the `.mcp.json` command with the binary path, or use `claude mcp add --transport stdio task-manager -- mcp-task-manager` instead.
+That's it — the bundled `plugins/mcp-task-manager/.mcp.json` launches `mcp-task-manager`, so the plugin needs the binary on your `PATH` (`go install github.com/gpayer/mcp-task-manager/cmd/mcp-task-manager@latest`). An installed plugin directory is not a Go module, so `go run` cannot be used there.
+
+**Working on this repository itself** is the other case, and it needs a different command. The repo root carries a *project-scoped* `.mcp.json`, which Claude Code launches with the repository as the working directory:
+
+```json
+{
+  "mcpServers": {
+    "task-manager": {
+      "command": "go",
+      "args": ["run", "./cmd/mcp-task-manager"],
+      "env": { "GOWORK": "off" }
+    }
+  }
+}
+```
+
+This always runs the checked-out source, with no build step between debug runs. Do not use `${CLAUDE_PLUGIN_ROOT}` there: it expands to nothing for a project-scoped server.
 
 **Usage:**
 
@@ -287,6 +328,12 @@ To make the server available across every workspace instead of configuring it pe
 | `start_task` | Move task from `todo` to `in_progress` |
 | `complete_task` | Move task from `in_progress` to `done` |
 
+### Web Dashboard
+
+| Tool | Description |
+|------|-------------|
+| `start_web_ui` | Start the read-only kanban dashboard and return its URL. Idempotent: a second call reports the running URL instead of binding another port. Optional `addr` (`host:port`) |
+
 ### Relations
 
 | Tool | Description |
@@ -310,7 +357,15 @@ relation_types:
   - blocked_by
   - relates_to
   - duplicate_of
+web:
+  enabled: false          # start the dashboard alongside the MCP server
+  addr: 127.0.0.1:7777    # listen address
+  with_mcp: false         # `serve web` also serves MCP over stdio
 ```
+
+A partially written section keeps the defaults for the keys it does not
+mention, so `web: {enabled: true}` still listens on `127.0.0.1:7777` and
+`auto_archive: {enabled: true}` still waits 30 days.
 
 The `task_types` list defines the allowed values for every task `type` field in the CLI, MCP tools, and task frontmatter. If omitted, the default allowed values are `feature` and `bug`.
 The `relation_types` list defines the allowed values for every relation `type` field in MCP tools and task metadata. If omitted, the default allowed values are `blocked_by`, `relates_to`, and `duplicate_of`.
@@ -323,6 +378,8 @@ The `relation_types` list defines the allowed values for every relation `type` f
 | `MCP_PROJECT_DIR` | Explicit project root, overriding every other source | unset |
 | `CLAUDE_PROJECT_DIR` | Project root; set by Claude Code itself | unset |
 | `MCP_ROOT_SOURCE` | Restricts resolution to a single source: `MCP_PROJECT_DIR`, `CLAUDE_PROJECT_DIR`, `roots` or `cwd`. Useful for testing the roots path, which the environment variables would otherwise always win | unset |
+| `MCP_WEB_ENABLED` | Starts the web dashboard with the MCP server. Parsed as a bool; an unparseable value is ignored | `false` |
+| `MCP_WEB_ADDR` | Dashboard listen address, `host:port`. Never enables the dashboard on its own | `127.0.0.1:7777` |
 
 ## Task Format
 
@@ -386,17 +443,38 @@ create_task with parent_id parameter
 
 ```
 mcp-task-manager/
-├── cmd/mcp-task-manager/    # Entry point (MCP server + CLI)
+├── cmd/mcp-task-manager/    # Entry point: mode selection and signal handling
 ├── internal/
+│   ├── app/                 # Composition root: MCP + web in one process
 │   ├── cli/                 # CLI command handlers
 │   ├── config/              # Configuration loading
+│   ├── project/             # Project resolution and construction
 │   ├── storage/             # Markdown storage + in-memory index
-│   ├── task/                # Task model and service
-│   └── tools/               # MCP tool handlers
+│   ├── task/                # Task model, service and view API
+│   ├── testsupport/         # Shared test backlog helpers
+│   ├── tools/               # MCP tool handlers
+│   └── web/                 # Read-only kanban dashboard (htmx + Tailwind)
+├── scripts/build-css.sh     # Maintainer step: rebuild the vendored CSS
 ├── tasks/                   # Task storage (created at runtime); tasks/{id}/{id}.md plus attached files
 ├── mcp-tasks.yaml           # Configuration file
 └── CLAUDE.md                # AI assistant instructions
 ```
+
+### Refreshing the Vendored CSS
+
+`internal/web/static/app.css` and `internal/web/static/htmx.min.js` are
+committed and compiled into the binary, so a clean checkout builds and tests
+with no network access. Only a maintainer touching
+`internal/web/templates/` needs to regenerate the CSS:
+
+```bash
+bash scripts/build-css.sh
+```
+
+The script downloads the pinned Tailwind standalone CLI (**v4.3.3**, no Node
+required) into the gitignored `.cache/` directory and runs it over
+`internal/web/assets/input.css`. It is never invoked by `go build`,
+`go generate` or `go test`. htmx is pinned at **2.0.4**.
 
 ## License
 
