@@ -1,0 +1,47 @@
+/* Tailwind entry for the task dashboard.
+ *
+ * Built by scripts/build-css.sh into ../static/app.css, which is committed.
+ * Never built during `go build` or `go test`.
+ *
+ * The component classes below exist so Go can name a style (chip-critical)
+ * without Tailwind having to find that string in a template: the scanner only
+ * reads ../templates, and class names assembled in Go would be missed.
+ */
+@import "tailwindcss";
+
+@source "../templates";
+
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+}
+
+@layer components {
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium leading-none whitespace-nowrap;
+  }
+  .chip-muted   { @apply bg-white/5 text-neutral-400 ring-1 ring-inset ring-white/10; }
+  .chip-critical{ @apply bg-rose-500/15 text-rose-300 ring-1 ring-inset ring-rose-500/30; }
+  .chip-high    { @apply bg-amber-500/15 text-amber-300 ring-1 ring-inset ring-amber-500/30; }
+  .chip-medium  { @apply bg-sky-500/15 text-sky-300 ring-1 ring-inset ring-sky-500/30; }
+  .chip-low     { @apply bg-white/5 text-neutral-400 ring-1 ring-inset ring-white/10; }
+  .chip-blocked { @apply bg-red-500/15 text-red-300 ring-1 ring-inset ring-red-500/30; }
+  .chip-live    { @apply bg-amber-400/15 text-amber-300 ring-1 ring-inset ring-amber-400/30; }
+
+  .dot        { @apply size-1.5 rounded-full; }
+  .dot-todo   { @apply bg-neutral-500; }
+  .dot-in_progress { @apply bg-amber-400; }
+  .dot-done   { @apply bg-emerald-500; }
+
+  .card {
+    @apply block rounded-lg border border-white/10 bg-neutral-900/60 p-3
+           transition hover:border-white/25 hover:bg-neutral-900;
+  }
+  .card-live    { @apply border-amber-400/40 bg-amber-400/[0.04]; }
+  .card-blocked { @apply border-red-500/30; }
+
+  .column {
+    @apply flex min-w-0 flex-col rounded-xl border border-white/5 bg-white/[0.02] p-2;
+  }
+  .meta { @apply font-mono text-[11px] text-neutral-500; }
+}
