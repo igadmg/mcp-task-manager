@@ -1,13 +1,16 @@
 package cli
 
 import (
+	"context"
 	"fmt"
-	"github.com/gpayer/mcp-task-manager/internal/config"
-	"github.com/gpayer/mcp-task-manager/internal/task"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
+	"github.com/gpayer/mcp-task-manager/internal/config"
+	"github.com/gpayer/mcp-task-manager/internal/task"
 	"github.com/integrii/flaggy"
 )
 
@@ -16,12 +19,20 @@ var Version = "dev"
 
 // Run executes the CLI with os.Args
 func Run() {
-	code := RunWithArgs(os.Args, os.Stdout, os.Stderr)
-	os.Exit(code)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	os.Exit(RunWithContext(ctx, os.Args, os.Stdout, os.Stderr))
 }
 
-// RunWithArgs executes the CLI with given arguments (for testing)
+// RunWithArgs executes the CLI with given arguments (for testing). The
+// signature is unchanged on purpose - the whole CLI suite calls it.
 func RunWithArgs(args []string, stdout, stderr io.Writer) int {
+	return RunWithContext(context.Background(), args, stdout, stderr)
+}
+
+// RunWithContext is RunWithArgs plus a cancellation signal, which the
+// foreground servers under `serve` need in order to shut down cleanly.
+func RunWithContext(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	// Reset flaggy for fresh parsing
 	flaggy.ResetParser()
 
@@ -179,10 +190,27 @@ func RunWithArgs(args []string, stdout, stderr io.Writer) int {
 	listTaskFilesCmd.AddPositionalValue(&listTaskFilesIDStr, "task-id", 1, true, "Task ID")
 	flaggy.AttachSubcommand(listTaskFilesCmd, 1)
 
+	// Serve subcommand: `serve web`
+	serveCmd := flaggy.NewSubcommand("serve")
+	serveCmd.Description = "Run a server in the foreground"
+	webCmd := flaggy.NewSubcommand("web")
+	webCmd.Description = "Serve the read-only task dashboard"
+	var serveAddr string
+	var serveWithMCP bool
+	webCmd.String(&serveAddr, "a", "addr", "Listen address (default from mcp-tasks.yaml, e.g. 127.0.0.1:7777)")
+	webCmd.Bool(&serveWithMCP, "", "mcp", "Also serve MCP over stdio in this process")
+	serveCmd.AttachSubcommand(webCmd, 1)
+	flaggy.AttachSubcommand(serveCmd, 1)
+
 	// Parse with custom args
 	flaggy.ParseArgs(args[1:])
 
 	// Handle subcommands
+	// Checked before serveCmd: flaggy marks both the parent and the child.
+	if webCmd.Used {
+		return cmdServeWeb(ctx, stderr, serveAddr, serveWithMCP)
+	}
+
 	if versionCmd.Used {
 		fmt.Fprintf(stdout, "mcp-task-manager %s\n", Version)
 		// Print where this invocation would read tasks from: a silently

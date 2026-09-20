@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/gpayer/mcp-task-manager/internal/config"
+	"github.com/gpayer/mcp-task-manager/internal/testsupport"
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -30,19 +31,11 @@ func (h *rootsHandler) ListRoots(context.Context, mcp.ListRootsRequest) (*mcp.Li
 	return &mcp.ListRootsResult{Roots: roots}, nil
 }
 
-func isolateEnv(t *testing.T) {
-	t.Helper()
-	for _, name := range []string{config.EnvTasksDir, config.EnvProjectDir, config.EnvClaudeProjectDir, config.EnvRootSource} {
-		t.Setenv(name, "")
-		os.Unsetenv(name)
-	}
-}
-
 // TestServer_ResolvesProjectFromRoots drives the whole loop the way a client
 // does: initialize, then a tool call that has to discover the project through
 // roots/list, with the tool schemas following the project's configuration.
 func TestServer_ResolvesProjectFromRoots(t *testing.T) {
-	isolateEnv(t)
+	testsupport.IsolateEnv(t)
 	// Force the roots step: the environment variables would otherwise win and
 	// this path would never be exercised.
 	t.Setenv(config.EnvRootSource, string(config.SourceRoots))
@@ -59,7 +52,7 @@ func TestServer_ResolvesProjectFromRoots(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	srv, resolver := newServer()
+	srv, resolver := newServer(nil)
 	handler := &rootsHandler{paths: []string{root}}
 	c := client.NewClient(transport.NewInProcessTransportWithOptions(srv,
 		transport.WithRootsHandler(handler)))

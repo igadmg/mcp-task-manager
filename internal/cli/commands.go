@@ -1,11 +1,13 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 
+	"github.com/gpayer/mcp-task-manager/internal/app"
 	"github.com/gpayer/mcp-task-manager/internal/config"
-	"github.com/gpayer/mcp-task-manager/internal/storage"
+	"github.com/gpayer/mcp-task-manager/internal/project"
 	"github.com/gpayer/mcp-task-manager/internal/task"
 )
 
@@ -18,18 +20,15 @@ func loadConfig() (*config.Config, error) {
 	return cfg, nil
 }
 
-// initServiceWithConfig initializes the task service with an already loaded config
+// initServiceWithConfig initializes the task service with an already loaded
+// config. Construction lives in internal/project so the CLI, the MCP server
+// and the web entry point all build a project the same way.
 func initServiceWithConfig(cfg *config.Config) (*task.Service, error) {
-	tasksDir := cfg.TasksDir()
-	mdStorage := storage.NewMarkdownStorage(tasksDir)
-	index := storage.NewIndex(tasksDir, mdStorage)
-	svc := task.NewService(mdStorage, mdStorage, mdStorage, index, cfg.TaskTypes, cfg)
-
-	if err := svc.Initialize(); err != nil {
+	resolved, err := project.Build(cfg)
+	if err != nil {
 		return nil, fmt.Errorf("failed to initialize: %w", err)
 	}
-
-	return svc, nil
+	return resolved.Service, nil
 }
 
 // initService initializes the task service (loads config and initializes)
@@ -498,5 +497,31 @@ func cmdComplete(stdout, stderr io.Writer, jsonOutput bool, id, resolution, reso
 		fmt.Fprintln(stdout, msg)
 	}
 
+	return 0
+}
+
+// cmdServeWeb runs the dashboard in the foreground until the context is
+// cancelled. Exit 0 on a clean shutdown, 1 on a startup failure - an occupied
+// port or an unresolvable project must not look like success.
+func cmdServeWeb(ctx context.Context, stderr io.Writer, addr string, withMCP bool) int {
+	cfg, err := loadConfig()
+	if err != nil {
+		fmt.Fprintf(stderr, "Error: %v\n", err)
+		return 1
+	}
+
+	webCfg := cfg.Web
+	webCfg.Enabled = true
+	if addr != "" {
+		webCfg.Addr = addr
+	}
+	if withMCP {
+		webCfg.WithMCP = true
+	}
+
+	if err := app.RunWeb(ctx, app.Options{Web: webCfg, Stderr: stderr}); err != nil {
+		fmt.Fprintf(stderr, "Error: %v\n", err)
+		return 1
+	}
 	return 0
 }

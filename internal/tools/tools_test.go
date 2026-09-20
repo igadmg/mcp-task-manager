@@ -6,10 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gpayer/mcp-task-manager/internal/config"
 	"github.com/gpayer/mcp-task-manager/internal/project"
-	"github.com/gpayer/mcp-task-manager/internal/storage"
-	"github.com/gpayer/mcp-task-manager/internal/task"
+	"github.com/gpayer/mcp-task-manager/internal/testsupport"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -19,7 +17,7 @@ func TestRegisterDocumentsAllowedTypeValues(t *testing.T) {
 	validRelationTypes := []string{"blocks", "duplicates"}
 
 	s := server.NewMCPServer("test-server", "1.0.0")
-	Register(s, nil, validTaskTypes, validRelationTypes)
+	Register(s, nil, validTaskTypes, validRelationTypes, nil)
 
 	tools := s.ListTools()
 
@@ -47,7 +45,7 @@ func TestRegisterDocumentsAllowedTypeValues(t *testing.T) {
 
 func TestRegisterDocumentsFileTools(t *testing.T) {
 	s := server.NewMCPServer("test-server", "1.0.0")
-	Register(s, nil, []string{"feature", "bug"}, []string{"blocked_by", "relates_to", "duplicate_of"})
+	Register(s, nil, []string{"feature", "bug"}, []string{"blocked_by", "relates_to", "duplicate_of"}, nil)
 
 	tools := s.ListTools()
 
@@ -79,7 +77,7 @@ func TestRegisterDocumentsFileTools(t *testing.T) {
 
 func TestRegisterCreateTaskSchemaUsesStringIDs(t *testing.T) {
 	s := server.NewMCPServer("test-server", "1.0.0")
-	Register(s, nil, []string{"feature", "bug"}, []string{"blocked_by", "relates_to", "duplicate_of"})
+	Register(s, nil, []string{"feature", "bug"}, []string{"blocked_by", "relates_to", "duplicate_of"}, nil)
 
 	tools := s.ListTools()
 	createTool, ok := tools["create_task"]
@@ -113,15 +111,8 @@ func TestRegisterCreateTaskSchemaUsesStringIDs(t *testing.T) {
 
 func newTestService(t *testing.T) *project.Resolver {
 	t.Helper()
-	dir := t.TempDir()
-	st := storage.NewMarkdownStorage(dir)
-	idx := storage.NewIndex(dir, st)
-	cfg := &config.Config{TaskTypes: []string{"feature", "bug"}, ProjectFound: true}
-	svc := task.NewService(st, st, st, idx, cfg.TaskTypes, cfg)
-	if err := svc.Initialize(); err != nil {
-		t.Fatalf("Initialize() error = %v", err)
-	}
-	return project.NewStatic(&project.Resolved{Config: cfg, Service: svc})
+	rs, _, _ := testsupport.NewBacklog(t)
+	return rs
 }
 
 func TestCreateTaskHandler_CustomID_ResponseIDIsJSONString(t *testing.T) {
