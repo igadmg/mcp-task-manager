@@ -3,18 +3,21 @@ package tools
 import (
 	"context"
 
+	"github.com/gpayer/mcp-task-manager/internal/project"
 	"github.com/gpayer/mcp-task-manager/internal/task"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
 
-func registerWorkflowTools(s *server.MCPServer, svc *task.Service) {
+func workflowTools(rs *project.Resolver) []server.ServerTool {
+	var tools []server.ServerTool
+
 	// get_next_task
 	nextText := textFor("get_next_task")
 	nextTool := mcp.NewTool("get_next_task",
 		mcp.WithDescription(nextText.Description),
 	)
-	s.AddTool(nextTool, getNextTaskHandler(svc))
+	tools = append(tools, server.ServerTool{Tool: nextTool, Handler: getNextTaskHandler(rs)})
 
 	// start_task
 	startText := textFor("start_task")
@@ -25,7 +28,7 @@ func registerWorkflowTools(s *server.MCPServer, svc *task.Service) {
 			mcp.Description(startText.param("id")),
 		),
 	)
-	s.AddTool(startTool, startTaskHandler(svc))
+	tools = append(tools, server.ServerTool{Tool: startTool, Handler: startTaskHandler(rs)})
 
 	// complete_task
 	completeText := textFor("complete_task")
@@ -36,11 +39,12 @@ func registerWorkflowTools(s *server.MCPServer, svc *task.Service) {
 			mcp.Description(completeText.param("id")),
 		),
 	)
-	s.AddTool(completeTool, completeTaskHandler(svc))
+	tools = append(tools, server.ServerTool{Tool: completeTool, Handler: completeTaskHandler(rs)})
+	return tools
 }
 
-func getNextTaskHandler(svc *task.Service) server.ToolHandlerFunc {
-	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func getNextTaskHandler(rs *project.Resolver) server.ToolHandlerFunc {
+	return withService(rs, func(ctx context.Context, svc *task.Service, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		// Check project exists for read operation
 		if err := svc.EnsureProjectExists(); err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
@@ -51,11 +55,11 @@ func getNextTaskHandler(svc *task.Service) server.ToolHandlerFunc {
 			return mcp.NewToolResultText("No tasks available"), nil
 		}
 		return taskResult(t)
-	}
+	})
 }
 
-func startTaskHandler(svc *task.Service) server.ToolHandlerFunc {
-	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func startTaskHandler(rs *project.Resolver) server.ToolHandlerFunc {
+	return withService(rs, func(ctx context.Context, svc *task.Service, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		id := req.GetString("id", "")
 
 		t, err := svc.StartTask(id)
@@ -64,11 +68,11 @@ func startTaskHandler(svc *task.Service) server.ToolHandlerFunc {
 		}
 
 		return taskResult(t)
-	}
+	})
 }
 
-func completeTaskHandler(svc *task.Service) server.ToolHandlerFunc {
-	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func completeTaskHandler(rs *project.Resolver) server.ToolHandlerFunc {
+	return withService(rs, func(ctx context.Context, svc *task.Service, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		id := req.GetString("id", "")
 
 		t, err := svc.CompleteTask(id)
@@ -80,5 +84,5 @@ func completeTaskHandler(svc *task.Service) server.ToolHandlerFunc {
 		_ = svc.RunAutoArchive()
 
 		return taskResult(t)
-	}
+	})
 }

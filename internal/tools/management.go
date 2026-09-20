@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/gpayer/mcp-task-manager/internal/project"
 	"github.com/gpayer/mcp-task-manager/internal/task"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
 
-func registerManagementTools(s *server.MCPServer, svc *task.Service, validTypes []string) {
+func managementTools(rs *project.Resolver, validTypes []string) []server.ServerTool {
+	var tools []server.ServerTool
+
 	// create_task
 	createText := textFor("create_task")
 	createTool := mcp.NewTool("create_task",
@@ -39,7 +42,7 @@ func registerManagementTools(s *server.MCPServer, svc *task.Service, validTypes 
 			mcp.Description(createText.param("id")),
 		),
 	)
-	s.AddTool(createTool, createTaskHandler(svc))
+	tools = append(tools, server.ServerTool{Tool: createTool, Handler: createTaskHandler(rs)})
 
 	// get_task
 	getText := textFor("get_task")
@@ -50,7 +53,7 @@ func registerManagementTools(s *server.MCPServer, svc *task.Service, validTypes 
 			mcp.Description(getText.param("id")),
 		),
 	)
-	s.AddTool(getTool, getTaskHandler(svc))
+	tools = append(tools, server.ServerTool{Tool: getTool, Handler: getTaskHandler(rs)})
 
 	// update_task
 	updateText := textFor("update_task")
@@ -79,7 +82,7 @@ func registerManagementTools(s *server.MCPServer, svc *task.Service, validTypes 
 			mcp.Enum(validTypes...),
 		),
 	)
-	s.AddTool(updateTool, updateTaskHandler(svc))
+	tools = append(tools, server.ServerTool{Tool: updateTool, Handler: updateTaskHandler(rs)})
 
 	// delete_task
 	deleteText := textFor("delete_task")
@@ -93,7 +96,7 @@ func registerManagementTools(s *server.MCPServer, svc *task.Service, validTypes 
 			mcp.Description(deleteText.param("delete_subtasks")),
 		),
 	)
-	s.AddTool(deleteTool, deleteTaskHandler(svc))
+	tools = append(tools, server.ServerTool{Tool: deleteTool, Handler: deleteTaskHandler(rs)})
 
 	// list_tasks
 	listText := textFor("list_tasks")
@@ -118,7 +121,7 @@ func registerManagementTools(s *server.MCPServer, svc *task.Service, validTypes 
 			mcp.Description(listText.param("archived")),
 		),
 	)
-	s.AddTool(listTool, listTasksHandler(svc))
+	tools = append(tools, server.ServerTool{Tool: listTool, Handler: listTasksHandler(rs)})
 
 	// archive_task
 	archiveText := textFor("archive_task")
@@ -129,11 +132,12 @@ func registerManagementTools(s *server.MCPServer, svc *task.Service, validTypes 
 			mcp.Description(archiveText.param("id")),
 		),
 	)
-	s.AddTool(archiveTool, archiveTaskHandler(svc))
+	tools = append(tools, server.ServerTool{Tool: archiveTool, Handler: archiveTaskHandler(rs)})
+	return tools
 }
 
-func createTaskHandler(svc *task.Service) server.ToolHandlerFunc {
-	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func createTaskHandler(rs *project.Resolver) server.ToolHandlerFunc {
+	return withService(rs, func(ctx context.Context, svc *task.Service, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		title := req.GetString("title", "")
 		description := req.GetString("description", "")
 		priority := task.Priority(req.GetString("priority", ""))
@@ -147,7 +151,7 @@ func createTaskHandler(svc *task.Service) server.ToolHandlerFunc {
 		}
 
 		return taskResult(t)
-	}
+	})
 }
 
 // taskWithSubtasksResponse is the response structure for get_task
@@ -167,8 +171,8 @@ type taskWithSubtasksResponse struct {
 	Subtasks    []*task.Task        `json:"subtasks,omitempty"`
 }
 
-func getTaskHandler(svc *task.Service) server.ToolHandlerFunc {
-	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func getTaskHandler(rs *project.Resolver) server.ToolHandlerFunc {
+	return withService(rs, func(ctx context.Context, svc *task.Service, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		// Check project exists for read operation
 		if err := svc.EnsureProjectExists(); err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
@@ -209,11 +213,11 @@ func getTaskHandler(svc *task.Service) server.ToolHandlerFunc {
 		}
 
 		return mcp.NewToolResultText(string(data)), nil
-	}
+	})
 }
 
-func updateTaskHandler(svc *task.Service) server.ToolHandlerFunc {
-	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func updateTaskHandler(rs *project.Resolver) server.ToolHandlerFunc {
+	return withService(rs, func(ctx context.Context, svc *task.Service, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		id := req.GetString("id", "")
 
 		var title, description, taskType *string
@@ -248,11 +252,11 @@ func updateTaskHandler(svc *task.Service) server.ToolHandlerFunc {
 		}
 
 		return taskResult(t)
-	}
+	})
 }
 
-func deleteTaskHandler(svc *task.Service) server.ToolHandlerFunc {
-	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func deleteTaskHandler(rs *project.Resolver) server.ToolHandlerFunc {
+	return withService(rs, func(ctx context.Context, svc *task.Service, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		id := req.GetString("id", "")
 		deleteSubtasks := req.GetBool("delete_subtasks", false)
 
@@ -261,21 +265,21 @@ func deleteTaskHandler(svc *task.Service) server.ToolHandlerFunc {
 		}
 
 		return mcp.NewToolResultText(fmt.Sprintf("Task %s deleted", id)), nil
-	}
+	})
 }
 
-func archiveTaskHandler(svc *task.Service) server.ToolHandlerFunc {
-	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func archiveTaskHandler(rs *project.Resolver) server.ToolHandlerFunc {
+	return withService(rs, func(ctx context.Context, svc *task.Service, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		id := req.GetString("id", "")
 		if err := svc.ArchiveTask(id); err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 		return mcp.NewToolResultText(fmt.Sprintf("Task %s archived", id)), nil
-	}
+	})
 }
 
-func listTasksHandler(svc *task.Service) server.ToolHandlerFunc {
-	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func listTasksHandler(rs *project.Resolver) server.ToolHandlerFunc {
+	return withService(rs, func(ctx context.Context, svc *task.Service, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		// Check project exists for read operation
 		if err := svc.EnsureProjectExists(); err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
@@ -347,7 +351,7 @@ func listTasksHandler(svc *task.Service) server.ToolHandlerFunc {
 		}
 
 		return mcp.NewToolResultText(string(data)), nil
-	}
+	})
 }
 
 func taskResult(t *task.Task) (*mcp.CallToolResult, error) {

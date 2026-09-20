@@ -1,11 +1,83 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
+
+// Environment variables understood when resolving the project root.
+const (
+	// EnvTasksDir points directly at the tasks directory. An absolute value
+	// is used verbatim; a relative one is resolved against the project root.
+	EnvTasksDir = "MCP_TASKS_DIR"
+	// EnvProjectDir is an explicit project root override.
+	EnvProjectDir = "MCP_PROJECT_DIR"
+	// EnvClaudeProjectDir is exported by Claude Code into the environment of
+	// every MCP server it spawns.
+	EnvClaudeProjectDir = "CLAUDE_PROJECT_DIR"
+	// EnvRootSource forces a single resolution source, skipping the others.
+	// Mainly a testing lever: in Claude Code the CLAUDE_PROJECT_DIR step
+	// always wins, so the roots step would otherwise never execute.
+	EnvRootSource = "MCP_ROOT_SOURCE"
+)
+
+// Well-known names inside a project root.
+const (
+	ConfigFileName      = "mcp-tasks.yaml"
+	DefaultTasksDirName = ".tasks"
+	LegacyTasksDirName  = "tasks"
+)
+
+// Source identifies where the project root was resolved from.
+type Source string
+
+const (
+	SourceTasksDirEnv Source = "MCP_TASKS_DIR"
+	SourceProjectEnv  Source = "MCP_PROJECT_DIR"
+	SourceClaudeEnv   Source = "CLAUDE_PROJECT_DIR"
+	SourceRoots       Source = "roots"
+	SourceCwd         Source = "cwd"
+	SourceFallback    Source = "cwd-fallback"
+)
+
+// RootsProvider returns filesystem paths advertised by the MCP client through
+// the protocol's roots/list request. It is nil whenever roots are unavailable
+// (CLI mode, or a client that does not declare the roots capability).
+type RootsProvider func() ([]string, error)
+
+// Resolution records how the project root and tasks directory were picked.
+// Attempts holds the sources that were tried and rejected, in order, so a
+// failed or surprising resolution can be explained instead of silently
+// degrading to an empty backlog.
+type Resolution struct {
+	Root     string
+	TasksDir string
+	Source   Source
+	Attempts []string
+}
+
+// String renders the resolution for diagnostics.
+func (r *Resolution) String() string {
+	if r == nil {
+		return "unresolved"
+	}
+	return fmt.Sprintf("root=%s tasks=%s source=%s", r.Root, r.TasksDir, r.Source)
+}
+
+// Explain renders the resolution together with the rejected sources.
+func (r *Resolution) Explain() string {
+	if r == nil {
+		return "unresolved"
+	}
+	if len(r.Attempts) == 0 {
+		return r.String()
+	}
+	return r.String() + " (tried: " + strings.Join(r.Attempts, "; ") + ")"
+}
 
 // AutoArchiveConfig holds configuration for automatic task archiving
 type AutoArchiveConfig struct {
@@ -18,8 +90,11 @@ type Config struct {
 	TaskTypes     []string          `yaml:"task_types"`
 	RelationTypes []string          `yaml:"relation_types,omitempty"`
 	AutoArchive   AutoArchiveConfig `yaml:"auto_archive"`
-	DataDir       string            `yaml:"-"` // Set from env or default
-	ProjectFound  bool              `yaml:"-"` // Whether an existing project was discovered
+	// TasksDirName is the tasks directory, relative to the project root.
+	TasksDirName string      `yaml:"tasks_dir,omitempty"`
+	DataDir      string      `yaml:"-"` // Resolved tasks directory
+	ProjectFound bool        `yaml:"-"` // Whether an existing tasks directory was found
+	Resolution   *Resolution `yaml:"-"` // How DataDir was arrived at
 }
 
 // DefaultRelationTypes returns the default relation types
@@ -38,47 +113,201 @@ func DefaultConfig() *Config {
 	}
 }
 
-// Load loads configuration from file and environment
+// Load resolves configuration without access to MCP roots. It is the entry
+// point for CLI mode; the server uses Resolve so that roots can participate.
 func Load() (*Config, error) {
+	return Resolve(nil)
+}
+
+// Resolve determines the project root and tasks directory, then loads
+// mcp-tasks.yaml from the project root.
+//
+// Project root, in order: MCP_PROJECT_DIR, CLAUDE_PROJECT_DIR, MCP roots,
+// a marker search upwards from the working directory. An absolute
+// MCP_TASKS_DIR short-circuits the whole search.
+func Resolve(roots RootsProvider) (*Config, error) {
 	cfg := DefaultConfig()
+	res := &Resolution{}
 
-	// Check for env override first
-	if dir := os.Getenv("MCP_TASKS_DIR"); dir != "" {
-		cfg.DataDir = dir
-		cfg.ProjectFound = true
-		// Try to load config from parent of tasks directory
-		configPath := filepath.Join(dir, "..", "mcp-tasks.yaml")
-		if data, err := os.ReadFile(configPath); err == nil {
-			yaml.Unmarshal(data, cfg)
-		}
-		return cfg, nil
-	}
-
-	// Search for existing project
-	projectRoot, err := FindProjectRoot()
-	if err != nil {
-		return nil, err
-	}
-
-	if projectRoot != "" {
-		cfg.DataDir = filepath.Join(projectRoot, "tasks")
-		cfg.ProjectFound = true
-		// Try to load config from project root
-		configPath := filepath.Join(projectRoot, "mcp-tasks.yaml")
-		if data, err := os.ReadFile(configPath); err == nil {
-			yaml.Unmarshal(data, cfg)
-		}
-	} else {
-		// No project found - use cwd default
-		cfg.DataDir = "./tasks"
-		cfg.ProjectFound = false
-		// Still try to load config from cwd
-		if data, err := os.ReadFile("mcp-tasks.yaml"); err == nil {
-			yaml.Unmarshal(data, cfg)
+	var relTasksDir string
+	if env := strings.TrimSpace(os.Getenv(EnvTasksDir)); env != "" {
+		if filepath.IsAbs(env) {
+			res.TasksDir = filepath.Clean(env)
+			res.Root = filepath.Dir(res.TasksDir)
+			res.Source = SourceTasksDirEnv
+		} else {
+			relTasksDir = env
 		}
 	}
 
+	if res.Root == "" {
+		root, source, attempts := resolveRoot(roots)
+		res.Root, res.Source, res.Attempts = root, source, attempts
+	}
+
+	// The project config lives in the project root, not next to the tasks
+	// directory.
+	if data, err := os.ReadFile(filepath.Join(res.Root, ConfigFileName)); err == nil {
+		if err := yaml.Unmarshal(data, cfg); err != nil {
+			return nil, fmt.Errorf("parse %s in %s: %w", ConfigFileName, res.Root, err)
+		}
+	}
+
+	if res.TasksDir == "" {
+		name := relTasksDir
+		if name == "" {
+			name = strings.TrimSpace(cfg.TasksDirName)
+		}
+		if name == "" {
+			name = pickTasksDirName(res.Root)
+		}
+		if filepath.IsAbs(name) {
+			res.TasksDir = filepath.Clean(name)
+		} else {
+			res.TasksDir = filepath.Join(res.Root, name)
+		}
+		if relTasksDir != "" {
+			res.Source = SourceTasksDirEnv
+		}
+	}
+
+	cfg.DataDir = res.TasksDir
+	cfg.ProjectFound = isDir(res.TasksDir)
+	cfg.Resolution = res
 	return cfg, nil
+}
+
+// resolveRoot walks the resolution sources in priority order. It always
+// returns a usable directory: the working directory is the last resort.
+func resolveRoot(roots RootsProvider) (string, Source, []string) {
+	var attempts []string
+	forced := Source(strings.TrimSpace(os.Getenv(EnvRootSource)))
+	enabled := func(s Source) bool { return forced == "" || forced == s }
+
+	for _, env := range []struct {
+		name   string
+		source Source
+	}{
+		{EnvProjectDir, SourceProjectEnv},
+		{EnvClaudeProjectDir, SourceClaudeEnv},
+	} {
+		if !enabled(env.source) {
+			continue
+		}
+		dir := strings.TrimSpace(os.Getenv(env.name))
+		if dir == "" {
+			attempts = append(attempts, env.name+" unset")
+			continue
+		}
+		if !isDir(dir) {
+			attempts = append(attempts, fmt.Sprintf("%s=%q is not a directory", env.name, dir))
+			continue
+		}
+		return absPath(dir), env.source, attempts
+	}
+
+	if enabled(SourceRoots) {
+		switch {
+		case roots == nil:
+			attempts = append(attempts, "roots unavailable")
+		default:
+			paths, err := roots()
+			switch {
+			case err != nil:
+				attempts = append(attempts, "roots/list failed: "+err.Error())
+			case len(paths) == 0:
+				attempts = append(attempts, "roots/list returned no usable paths")
+			default:
+				if root := pickRoot(paths); root != "" {
+					return absPath(root), SourceRoots, attempts
+				}
+				attempts = append(attempts, "roots/list returned no existing directory")
+			}
+		}
+	}
+
+	if enabled(SourceCwd) {
+		root, err := FindProjectRoot()
+		if err != nil {
+			attempts = append(attempts, "working directory unavailable: "+err.Error())
+		} else if root != "" {
+			return root, SourceCwd, attempts
+		} else {
+			attempts = append(attempts, "no project marker found above the working directory")
+		}
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "."
+	}
+	return cwd, SourceFallback, attempts
+}
+
+// pickRoot chooses between several client-advertised roots: one that already
+// holds a project wins over one that merely exists.
+func pickRoot(paths []string) string {
+	for _, marker := range []string{ConfigFileName, DefaultTasksDirName, LegacyTasksDirName} {
+		for _, p := range paths {
+			if !isDir(p) {
+				continue
+			}
+			if _, err := os.Stat(filepath.Join(p, marker)); err == nil {
+				return p
+			}
+		}
+	}
+	for _, p := range paths {
+		if isDir(p) {
+			return p
+		}
+	}
+	return ""
+}
+
+// pickTasksDirName returns the tasks directory name to use when nothing is
+// configured. A directory that actually holds tasks wins over one that merely
+// exists: a project can have a .tasks directory used for something else
+// entirely while its real backlog still sits in the legacy tasks/.
+func pickTasksDirName(root string) string {
+	candidates := []string{DefaultTasksDirName, LegacyTasksDirName}
+	for _, name := range candidates {
+		if holdsTasks(filepath.Join(root, name)) {
+			return name
+		}
+	}
+	for _, name := range candidates {
+		if isDir(filepath.Join(root, name)) {
+			return name
+		}
+	}
+	return DefaultTasksDirName
+}
+
+// holdsTasks reports whether dir looks like a backlog: an archive directory,
+// a per-task directory holding its own {id}.md record, or a legacy flat
+// {id}.md file awaiting migration.
+func holdsTasks(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !entry.IsDir() {
+			if strings.HasSuffix(name, ".md") {
+				return true
+			}
+			continue
+		}
+		if name == "archive" {
+			return true
+		}
+		if _, err := os.Stat(filepath.Join(dir, name, name+".md")); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // TasksDir returns the full path to the tasks directory
@@ -111,8 +340,9 @@ func (c *Config) IsValidRelationType(t string) bool {
 }
 
 // FindProjectRoot searches for an existing project root by looking for
-// mcp-tasks.yaml or a tasks directory, starting from cwd and moving up.
-// Returns the directory containing the config/tasks, or empty string if not found.
+// mcp-tasks.yaml, a .tasks directory or a legacy tasks directory, starting
+// from cwd and moving up. Returns the directory containing the marker, or an
+// empty string if none was found.
 func FindProjectRoot() (string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -121,17 +351,19 @@ func FindProjectRoot() (string, error) {
 
 	dir := cwd
 	for {
-		// First priority: mcp-tasks.yaml
-		if _, err := os.Stat(filepath.Join(dir, "mcp-tasks.yaml")); err == nil {
-			return dir, nil
+		for _, marker := range []string{ConfigFileName, DefaultTasksDirName, LegacyTasksDirName} {
+			path := filepath.Join(dir, marker)
+			if marker == ConfigFileName {
+				if _, err := os.Stat(path); err == nil {
+					return dir, nil
+				}
+				continue
+			}
+			if isDir(path) {
+				return dir, nil
+			}
 		}
 
-		// Second priority: tasks directory
-		if info, err := os.Stat(filepath.Join(dir, "tasks")); err == nil && info.IsDir() {
-			return dir, nil
-		}
-
-		// Move to parent
 		parent := filepath.Dir(dir)
 		if parent == dir {
 			// Reached filesystem root
@@ -139,4 +371,16 @@ func FindProjectRoot() (string, error) {
 		}
 		dir = parent
 	}
+}
+
+func isDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}
+
+func absPath(path string) string {
+	if abs, err := filepath.Abs(path); err == nil {
+		return abs
+	}
+	return path
 }

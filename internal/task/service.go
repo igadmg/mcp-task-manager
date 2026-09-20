@@ -116,6 +116,11 @@ func NewService(storage Storage, archiveStorage ArchiveStorage, fileStorage File
 // Should be called before read operations.
 func (s *Service) EnsureProjectExists() error {
 	if s.config == nil || !s.config.ProjectFound {
+		// Name the directory that was looked at: an unresolved project
+		// otherwise looks exactly like an empty backlog.
+		if s.config != nil && s.config.Resolution != nil {
+			return fmt.Errorf("%w (%s)", ErrNoProjectFound, s.config.Resolution.Explain())
+		}
 		return ErrNoProjectFound
 	}
 	return nil

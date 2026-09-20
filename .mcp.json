@@ -2,10 +2,14 @@
   "mcpServers": {
     "task-manager": {
       "command": "go",
-      "args": ["run", "-C", "${CLAUDE_PLUGIN_ROOT}", "./cmd/mcp-task-manager"],
+      "args": [
+        "run",
+        "-C",
+        "${CLAUDE_PLUGIN_ROOT}",
+        "./cmd/mcp-task-manager"
+      ],
       "env": {
-        "GOWORK": "off",
-        "MCP_TASKS_DIR": "../.tasks"
+        "GOWORK": "off"
       }
     }
   }

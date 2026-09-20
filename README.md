@@ -62,7 +62,19 @@ The MCP server communicates via stdio:
 mcp-task-manager
 ```
 
-Task storage is resolved relative to the process's current working directory (`./tasks`, or the path in `MCP_TASKS_DIR` — see [Environment Variables](#environment-variables)). An MCP client normally launches the server with its working directory set to the project it's operating on, so each project gets its own `tasks/` directory automatically — no per-project server instance or config needed.
+Task storage is resolved from the **project root**, not from the server's working directory. The root is looked up in this order:
+
+1. `MCP_TASKS_DIR`, if it holds an absolute path — that path is the tasks directory, full stop.
+2. `MCP_PROJECT_DIR` — an explicit project root.
+3. `CLAUDE_PROJECT_DIR` — exported by Claude Code into every MCP server it spawns.
+4. **MCP roots** (`roots/list`) — the protocol's own mechanism; works with any client that declares the `roots` capability. With several roots, one that already holds a project (an `mcp-tasks.yaml`, `.tasks/` or `tasks/`) wins over one that merely exists.
+5. A search upwards from the working directory for `mcp-tasks.yaml`, `.tasks/` or `tasks/`. This is what CLI invocations use.
+
+Inside the root, the tasks directory is `MCP_TASKS_DIR` (relative values are resolved against the root), else `tasks_dir` from `mcp-tasks.yaml`, else `.tasks` — falling back to a legacy `tasks/` directory when that is the one actually holding tasks.
+
+Because roots only become available after `initialize`, the project is resolved on the first tool call rather than at startup. `mcp-task-manager version` prints the resolution, which is the quickest way to check where a given invocation would read and write.
+
+Note that a client which launches the server with a working directory *other* than the project (for example `go run -C <dir>`) is fine: steps 2–4 do not depend on the working directory at all.
 
 #### Running a Locally Built Binary Against a Project
 
@@ -307,7 +319,10 @@ The `relation_types` list defines the allowed values for every relation `type` f
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `MCP_TASKS_DIR` | Directory for task storage | `./tasks` |
+| `MCP_TASKS_DIR` | Tasks directory. Absolute paths are used as-is; relative ones are resolved against the project root | `.tasks` under the project root |
+| `MCP_PROJECT_DIR` | Explicit project root, overriding every other source | unset |
+| `CLAUDE_PROJECT_DIR` | Project root; set by Claude Code itself | unset |
+| `MCP_ROOT_SOURCE` | Restricts resolution to a single source: `MCP_PROJECT_DIR`, `CLAUDE_PROJECT_DIR`, `roots` or `cwd`. Useful for testing the roots path, which the environment variables would otherwise always win | unset |
 
 ## Task Format
 

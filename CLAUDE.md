@@ -56,8 +56,9 @@ Use the **cclsp MCP tools** (LSP server access) for code navigation:
 - **Attached files:** free-form named text files live alongside `{id}.md` in the same `./tasks/{id}/` directory
 - **Archive:** `./tasks/archive/{id}/{id}.md` — archived tasks (same format, not indexed); archiving moves the whole per-task directory, carrying attached files with it
 - **Index:** in-memory only, rebuilt from the .md files; no cache file is ever written
-- **Location:** Project-local by default, configurable via `MCP_TASKS_DIR` env var
-- **Config file:** `./mcp-tasks.yaml`
+- **Location:** resolved from the project root, not from the server's working directory. Order: absolute `MCP_TASKS_DIR` → `MCP_PROJECT_DIR` → `CLAUDE_PROJECT_DIR` → MCP `roots/list` → marker search upwards from cwd. Inside the root: relative `MCP_TASKS_DIR` → `tasks_dir` from the config → `.tasks` (legacy `tasks/` when that is the directory actually holding tasks). See `internal/config` and `internal/project`.
+- **Resolution timing:** lazy, on the first tool call — MCP roots only exist after `initialize`. The tool schemas are registered on defaults and re-published via `tools/list_changed` if the resolved project configures different task types.
+- **Config file:** `mcp-tasks.yaml` in the project root
 - **Legacy layout migration:** on startup, any task still found in the old flat layout (`tasks/{id}.md` or `tasks/archive/{id}.md`) is automatically migrated into the per-task directory layout
 
 ### Task Schema
@@ -221,8 +222,9 @@ A task can have zero or more free-form named text files attached to it (e.g. res
 
 ## Configuration
 
-`mcp-tasks.yaml`:
+`mcp-tasks.yaml`, in the project root:
 ```yaml
+tasks_dir: .tasks     # optional, relative to the project root; default: .tasks
 task_types:
   - feature
   - bug
@@ -235,7 +237,16 @@ auto_archive:         # optional
   after_days: 30      # default: 30
 ```
 
-Override data directory: `MCP_TASKS_DIR=/path/to/tasks`
+Environment overrides:
+
+| Variable | Effect |
+|----------|--------|
+| `MCP_TASKS_DIR` | tasks directory; absolute wins outright, relative is project-root relative |
+| `MCP_PROJECT_DIR` | explicit project root |
+| `CLAUDE_PROJECT_DIR` | project root, set by Claude Code |
+| `MCP_ROOT_SOURCE` | restrict resolution to one source (`roots` to exercise the protocol path) |
+
+`mcp-task-manager version` prints the resolved root, tasks directory and source.
 
 ## Dependencies
 
@@ -258,7 +269,11 @@ mcp-task-manager/
 │   │   ├── output.go            # Output formatters (table, JSON)
 │   │   └── output_test.go       # Output formatter tests
 │   ├── config/
-│   │   └── config.go            # Config loading (file + env)
+│   │   ├── config.go            # Project root / tasks dir resolution + config loading
+│   │   └── resolve_test.go      # Resolution order tests
+│   ├── project/
+│   │   ├── resolver.go          # Lazy, cached project resolution (used by tool handlers)
+│   │   └── roots.go             # MCP roots/list client request + file:// URI parsing
 │   ├── storage/
 │   │   ├── storage.go           # Storage interface
 │   │   ├── markdown.go          # Markdown file operations (per-task directory layout)

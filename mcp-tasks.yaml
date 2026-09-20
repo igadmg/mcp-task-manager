@@ -1,3 +1,5 @@
+# This repository's own backlog predates the .tasks default, so pin it.
+tasks_dir: tasks
 task_types:
   - feature
   - bug

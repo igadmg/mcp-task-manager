@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"github.com/gpayer/mcp-task-manager/internal/config"
 	"io"
 	"os"
 	"strings"
@@ -287,6 +288,7 @@ func TestCompleteCommand(t *testing.T) {
 }
 
 func TestTypeHelpTextIncludesAllowedValues(t *testing.T) {
+	isolateProjectEnv(t)
 	tmpDir := t.TempDir()
 	configPath := tmpDir + "/mcp-tasks.yaml"
 	if err := os.WriteFile(configPath, []byte("task_types:\n  - bug\n  - chore\n"), 0644); err != nil {
@@ -360,8 +362,7 @@ func TestListCommandNoProject(t *testing.T) {
 	os.Chdir(nestedDir)
 	defer os.Chdir(originalWd)
 
-	// Ensure no MCP_TASKS_DIR is set
-	os.Unsetenv("MCP_TASKS_DIR")
+	isolateProjectEnv(t)
 
 	var stdout, stderr bytes.Buffer
 	code := RunWithArgs([]string{"mcp-task-manager", "list"}, &stdout, &stderr)
@@ -423,8 +424,7 @@ func TestGetCommandNoProject(t *testing.T) {
 	os.Chdir(nestedDir)
 	defer os.Chdir(originalWd)
 
-	// Ensure no MCP_TASKS_DIR is set
-	os.Unsetenv("MCP_TASKS_DIR")
+	isolateProjectEnv(t)
 
 	var stdout, stderr bytes.Buffer
 	code := RunWithArgs([]string{"mcp-task-manager", "get", "1"}, &stdout, &stderr)
@@ -706,8 +706,7 @@ func TestNextCommandNoProject(t *testing.T) {
 	os.Chdir(nestedDir)
 	defer os.Chdir(originalWd)
 
-	// Ensure no MCP_TASKS_DIR is set
-	os.Unsetenv("MCP_TASKS_DIR")
+	isolateProjectEnv(t)
 
 	var stdout, stderr bytes.Buffer
 	code := RunWithArgs([]string{"mcp-task-manager", "next"}, &stdout, &stderr)
@@ -717,5 +716,17 @@ func TestNextCommandNoProject(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "no tasks directory found") {
 		t.Errorf("expected 'no tasks directory found' error, got: %s", stderr.String())
+	}
+}
+
+// isolateProjectEnv clears every variable that takes part in project
+// resolution, so a test sees only the directory it set up itself. Without
+// this, running the suite inside a project (CLAUDE_PROJECT_DIR is exported to
+// MCP servers and their tests alike) would resolve to that project.
+func isolateProjectEnv(t *testing.T) {
+	t.Helper()
+	for _, name := range []string{config.EnvTasksDir, config.EnvProjectDir, config.EnvClaudeProjectDir, config.EnvRootSource} {
+		t.Setenv(name, "")
+		os.Unsetenv(name)
 	}
 }

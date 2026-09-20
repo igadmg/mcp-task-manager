@@ -51,6 +51,7 @@ func initService() (*task.Service, *config.Config, error) {
 func checkProjectExists(stderr io.Writer, cfg *config.Config) int {
 	if !cfg.ProjectFound {
 		fmt.Fprintln(stderr, "Error: no tasks directory found.")
+		fmt.Fprintf(stderr, "Looked for: %s\n", cfg.Resolution.Explain())
 		fmt.Fprintln(stderr, "Create a task to initialize one here, or set MCP_TASKS_DIR.")
 		return 1
 	}

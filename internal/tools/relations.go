@@ -4,12 +4,15 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/gpayer/mcp-task-manager/internal/project"
 	"github.com/gpayer/mcp-task-manager/internal/task"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
 
-func registerRelationTools(s *server.MCPServer, svc *task.Service, relationTypes []string) {
+func relationTools(rs *project.Resolver, relationTypes []string) []server.ServerTool {
+	var tools []server.ServerTool
+
 	// add_relation
 	addText := textFor("add_relation")
 	addTool := mcp.NewTool("add_relation",
@@ -28,7 +31,7 @@ func registerRelationTools(s *server.MCPServer, svc *task.Service, relationTypes
 			mcp.Description(addText.param("target")),
 		),
 	)
-	s.AddTool(addTool, addRelationHandler(svc))
+	tools = append(tools, server.ServerTool{Tool: addTool, Handler: addRelationHandler(rs)})
 
 	// remove_relation
 	removeText := textFor("remove_relation")
@@ -48,11 +51,12 @@ func registerRelationTools(s *server.MCPServer, svc *task.Service, relationTypes
 			mcp.Description(removeText.param("target")),
 		),
 	)
-	s.AddTool(removeTool, removeRelationHandler(svc))
+	tools = append(tools, server.ServerTool{Tool: removeTool, Handler: removeRelationHandler(rs)})
+	return tools
 }
 
-func addRelationHandler(svc *task.Service) server.ToolHandlerFunc {
-	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func addRelationHandler(rs *project.Resolver) server.ToolHandlerFunc {
+	return withService(rs, func(ctx context.Context, svc *task.Service, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		source := req.GetString("source", "")
 		relationType := req.GetString("type", "")
 		target := req.GetString("target", "")
@@ -62,11 +66,11 @@ func addRelationHandler(svc *task.Service) server.ToolHandlerFunc {
 		}
 
 		return mcp.NewToolResultText(fmt.Sprintf("Added %s relation from task %s to task %s", relationType, source, target)), nil
-	}
+	})
 }
 
-func removeRelationHandler(svc *task.Service) server.ToolHandlerFunc {
-	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func removeRelationHandler(rs *project.Resolver) server.ToolHandlerFunc {
+	return withService(rs, func(ctx context.Context, svc *task.Service, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		source := req.GetString("source", "")
 		relationType := req.GetString("type", "")
 		target := req.GetString("target", "")
@@ -76,5 +80,5 @@ func removeRelationHandler(svc *task.Service) server.ToolHandlerFunc {
 		}
 
 		return mcp.NewToolResultText(fmt.Sprintf("Removed %s relation from task %s to task %s", relationType, source, target)), nil
-	}
+	})
 }

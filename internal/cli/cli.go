@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"github.com/gpayer/mcp-task-manager/internal/config"
 	"io"
 	"os"
 	"strings"
@@ -176,6 +177,12 @@ func RunWithArgs(args []string, stdout, stderr io.Writer) int {
 	// Handle subcommands
 	if versionCmd.Used {
 		fmt.Fprintf(stdout, "mcp-task-manager %s\n", Version)
+		// Print where this invocation would read tasks from: a silently
+		// mis-resolved project is otherwise indistinguishable from an
+		// empty backlog.
+		if cfg, err := config.Load(); err == nil {
+			fmt.Fprintf(stdout, "%s\n", cfg.Resolution.Explain())
+		}
 		return 0
 	}
 

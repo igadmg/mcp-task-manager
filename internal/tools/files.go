@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/gpayer/mcp-task-manager/internal/project"
 	"github.com/gpayer/mcp-task-manager/internal/task"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
 
-func registerFileTools(s *server.MCPServer, svc *task.Service) {
+func fileTools(rs *project.Resolver) []server.ServerTool {
+	var tools []server.ServerTool
+
 	// write_task_file
 	writeText := textFor("write_task_file")
 	writeTool := mcp.NewTool("write_task_file",
@@ -28,7 +31,7 @@ func registerFileTools(s *server.MCPServer, svc *task.Service) {
 			mcp.Description(writeText.param("content")),
 		),
 	)
-	s.AddTool(writeTool, writeTaskFileHandler(svc))
+	tools = append(tools, server.ServerTool{Tool: writeTool, Handler: writeTaskFileHandler(rs)})
 
 	// read_task_file
 	readText := textFor("read_task_file")
@@ -43,7 +46,7 @@ func registerFileTools(s *server.MCPServer, svc *task.Service) {
 			mcp.Description(readText.param("filename")),
 		),
 	)
-	s.AddTool(readTool, readTaskFileHandler(svc))
+	tools = append(tools, server.ServerTool{Tool: readTool, Handler: readTaskFileHandler(rs)})
 
 	// list_task_files
 	listText := textFor("list_task_files")
@@ -54,11 +57,12 @@ func registerFileTools(s *server.MCPServer, svc *task.Service) {
 			mcp.Description(listText.param("task_id")),
 		),
 	)
-	s.AddTool(listTool, listTaskFilesHandler(svc))
+	tools = append(tools, server.ServerTool{Tool: listTool, Handler: listTaskFilesHandler(rs)})
+	return tools
 }
 
-func writeTaskFileHandler(svc *task.Service) server.ToolHandlerFunc {
-	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func writeTaskFileHandler(rs *project.Resolver) server.ToolHandlerFunc {
+	return withService(rs, func(ctx context.Context, svc *task.Service, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		taskID := req.GetString("task_id", "")
 		filename := req.GetString("filename", "")
 		content := req.GetString("content", "")
@@ -68,11 +72,11 @@ func writeTaskFileHandler(svc *task.Service) server.ToolHandlerFunc {
 		}
 
 		return mcp.NewToolResultText(fmt.Sprintf("Wrote file %q to task %s", filename, taskID)), nil
-	}
+	})
 }
 
-func readTaskFileHandler(svc *task.Service) server.ToolHandlerFunc {
-	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func readTaskFileHandler(rs *project.Resolver) server.ToolHandlerFunc {
+	return withService(rs, func(ctx context.Context, svc *task.Service, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		if err := svc.EnsureProjectExists(); err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
@@ -86,11 +90,11 @@ func readTaskFileHandler(svc *task.Service) server.ToolHandlerFunc {
 		}
 
 		return mcp.NewToolResultText(content), nil
-	}
+	})
 }
 
-func listTaskFilesHandler(svc *task.Service) server.ToolHandlerFunc {
-	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func listTaskFilesHandler(rs *project.Resolver) server.ToolHandlerFunc {
+	return withService(rs, func(ctx context.Context, svc *task.Service, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		if err := svc.EnsureProjectExists(); err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
@@ -112,5 +116,5 @@ func listTaskFilesHandler(svc *task.Service) server.ToolHandlerFunc {
 		}
 
 		return mcp.NewToolResultText(string(data)), nil
-	}
+	})
 }

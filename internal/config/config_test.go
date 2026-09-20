@@ -7,6 +7,7 @@ import (
 )
 
 func TestDefaultConfig(t *testing.T) {
+	isolateEnv(t)
 	cfg := DefaultConfig()
 
 	if cfg.DataDir != "./tasks" {
@@ -26,6 +27,7 @@ func TestDefaultConfig(t *testing.T) {
 }
 
 func TestIsValidTaskType(t *testing.T) {
+	isolateEnv(t)
 	cfg := &Config{
 		TaskTypes: []string{"feature", "bug", "chore"},
 	}
@@ -51,6 +53,7 @@ func TestIsValidTaskType(t *testing.T) {
 }
 
 func TestTasksDir_Absolute(t *testing.T) {
+	isolateEnv(t)
 	cfg := &Config{DataDir: "/absolute/path"}
 	if got := cfg.TasksDir(); got != "/absolute/path" {
 		t.Errorf("TasksDir() = %q, want %q", got, "/absolute/path")
@@ -58,6 +61,7 @@ func TestTasksDir_Absolute(t *testing.T) {
 }
 
 func TestTasksDir_Relative(t *testing.T) {
+	isolateEnv(t)
 	cfg := &Config{DataDir: "./tasks"}
 	cwd, _ := os.Getwd()
 	expected := filepath.Join(cwd, "./tasks")
@@ -68,6 +72,7 @@ func TestTasksDir_Relative(t *testing.T) {
 }
 
 func TestLoad_WithEnvOverride(t *testing.T) {
+	isolateEnv(t)
 	// Save and restore env
 	oldVal := os.Getenv("MCP_TASKS_DIR")
 	defer os.Setenv("MCP_TASKS_DIR", oldVal)
@@ -85,8 +90,9 @@ func TestLoad_WithEnvOverride(t *testing.T) {
 }
 
 func TestFindProjectRoot_ConfigFile(t *testing.T) {
+	isolateEnv(t)
 	// Create temp directory structure with mcp-tasks.yaml
-	tmpDir := t.TempDir()
+	tmpDir := tempDir(t)
 	subDir := filepath.Join(tmpDir, "sub", "deep")
 	if err := os.MkdirAll(subDir, 0755); err != nil {
 		t.Fatalf("failed to create subdirs: %v", err)
@@ -118,8 +124,9 @@ func TestFindProjectRoot_ConfigFile(t *testing.T) {
 }
 
 func TestFindProjectRoot_TasksDirectory(t *testing.T) {
+	isolateEnv(t)
 	// Create temp directory structure with tasks/ directory (no config file)
-	tmpDir := t.TempDir()
+	tmpDir := tempDir(t)
 	subDir := filepath.Join(tmpDir, "sub", "deep")
 	tasksDir := filepath.Join(tmpDir, "tasks")
 
@@ -150,9 +157,10 @@ func TestFindProjectRoot_TasksDirectory(t *testing.T) {
 }
 
 func TestFindProjectRoot_ConfigFilePreferredOverTasksDir(t *testing.T) {
+	isolateEnv(t)
 	// Create two levels: one with tasks/, parent with mcp-tasks.yaml
 	// Should find the one with config file first (it's higher priority at same level)
-	tmpDir := t.TempDir()
+	tmpDir := tempDir(t)
 	subDir := filepath.Join(tmpDir, "sub")
 
 	if err := os.MkdirAll(subDir, 0755); err != nil {
@@ -190,8 +198,9 @@ func TestFindProjectRoot_ConfigFilePreferredOverTasksDir(t *testing.T) {
 }
 
 func TestFindProjectRoot_NotFound(t *testing.T) {
+	isolateEnv(t)
 	// Create temp directory with nothing
-	tmpDir := t.TempDir()
+	tmpDir := tempDir(t)
 
 	// Save and restore cwd
 	oldCwd, _ := os.Getwd()
@@ -212,8 +221,9 @@ func TestFindProjectRoot_NotFound(t *testing.T) {
 }
 
 func TestFindProjectRoot_InProjectRoot(t *testing.T) {
+	isolateEnv(t)
 	// When already in project root, should return that directory
-	tmpDir := t.TempDir()
+	tmpDir := tempDir(t)
 
 	// Create config file in tmpDir
 	configPath := filepath.Join(tmpDir, "mcp-tasks.yaml")
@@ -240,11 +250,15 @@ func TestFindProjectRoot_InProjectRoot(t *testing.T) {
 }
 
 func TestLoad_WithEnvOverride_SetsProjectFound(t *testing.T) {
+	isolateEnv(t)
 	// Save and restore env
 	oldVal := os.Getenv("MCP_TASKS_DIR")
 	defer os.Setenv("MCP_TASKS_DIR", oldVal)
 
-	os.Setenv("MCP_TASKS_DIR", "/custom/path")
+	// ProjectFound now means "the tasks directory exists", so the override
+	// has to point at a real directory.
+	dir := tempDir(t)
+	os.Setenv("MCP_TASKS_DIR", dir)
 
 	cfg, err := Load()
 	if err != nil {
@@ -252,13 +266,14 @@ func TestLoad_WithEnvOverride_SetsProjectFound(t *testing.T) {
 	}
 
 	if !cfg.ProjectFound {
-		t.Error("Load() ProjectFound = false, want true when env var is set")
+		t.Error("Load() ProjectFound = false, want true when env var points at an existing directory")
 	}
 }
 
 func TestLoad_FindsProjectRoot(t *testing.T) {
+	isolateEnv(t)
 	// Create temp directory structure with mcp-tasks.yaml in parent
-	tmpDir := t.TempDir()
+	tmpDir := tempDir(t)
 	subDir := filepath.Join(tmpDir, "sub", "deep")
 	if err := os.MkdirAll(subDir, 0755); err != nil {
 		t.Fatalf("failed to create subdirs: %v", err)
@@ -289,14 +304,16 @@ func TestLoad_FindsProjectRoot(t *testing.T) {
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	// Should find project root and set DataDir
-	expectedDataDir := filepath.Join(tmpDir, "tasks")
+	// Should find project root and set DataDir. A project root with no
+	// tasks directory yet defaults to .tasks.
+	expectedDataDir := filepath.Join(tmpDir, DefaultTasksDirName)
 	if cfg.DataDir != expectedDataDir {
 		t.Errorf("Load() DataDir = %q, want %q", cfg.DataDir, expectedDataDir)
 	}
 
-	if !cfg.ProjectFound {
-		t.Error("Load() ProjectFound = false, want true when project found")
+	// The tasks directory itself does not exist yet.
+	if cfg.ProjectFound {
+		t.Error("Load() ProjectFound = true, want false when the tasks directory is missing")
 	}
 
 	// Should also load config from project root
@@ -306,8 +323,9 @@ func TestLoad_FindsProjectRoot(t *testing.T) {
 }
 
 func TestLoad_NoProjectFound(t *testing.T) {
+	isolateEnv(t)
 	// Create temp directory with nothing
-	tmpDir := t.TempDir()
+	tmpDir := tempDir(t)
 
 	// Clear env var
 	oldVal := os.Getenv("MCP_TASKS_DIR")
@@ -327,9 +345,12 @@ func TestLoad_NoProjectFound(t *testing.T) {
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	// Should use default "./tasks"
-	if cfg.DataDir != "./tasks" {
-		t.Errorf("Load() DataDir = %q, want %q", cfg.DataDir, "./tasks")
+	// Falls back to the working directory, and to the .tasks default name.
+	if want := filepath.Join(tmpDir, DefaultTasksDirName); cfg.DataDir != want {
+		t.Errorf("Load() DataDir = %q, want %q", cfg.DataDir, want)
+	}
+	if cfg.Resolution.Source != SourceFallback {
+		t.Errorf("Load() Source = %q, want %q", cfg.Resolution.Source, SourceFallback)
 	}
 
 	if cfg.ProjectFound {
@@ -338,8 +359,9 @@ func TestLoad_NoProjectFound(t *testing.T) {
 }
 
 func TestLoad_LoadsConfigFromProjectRoot(t *testing.T) {
+	isolateEnv(t)
 	// Create temp directory structure
-	tmpDir := t.TempDir()
+	tmpDir := tempDir(t)
 	subDir := filepath.Join(tmpDir, "sub")
 	if err := os.MkdirAll(subDir, 0755); err != nil {
 		t.Fatalf("failed to create subdirs: %v", err)
@@ -384,6 +406,7 @@ func TestLoad_LoadsConfigFromProjectRoot(t *testing.T) {
 }
 
 func TestDefaultConfig_AutoArchive(t *testing.T) {
+	isolateEnv(t)
 	cfg := DefaultConfig()
 
 	if cfg.AutoArchive.Enabled != false {
@@ -396,8 +419,9 @@ func TestDefaultConfig_AutoArchive(t *testing.T) {
 }
 
 func TestLoad_AutoArchiveFromYAML(t *testing.T) {
+	isolateEnv(t)
 	// Create temp directory with config file containing auto_archive section
-	tmpDir := t.TempDir()
+	tmpDir := tempDir(t)
 
 	configContent := `task_types:
   - feature
@@ -439,8 +463,9 @@ auto_archive:
 }
 
 func TestLoad_AutoArchiveDefaults_WhenNotInYAML(t *testing.T) {
+	isolateEnv(t)
 	// Create temp directory with config file that does NOT contain auto_archive
-	tmpDir := t.TempDir()
+	tmpDir := tempDir(t)
 
 	configContent := "task_types:\n  - feature\n  - bug\n"
 	configPath := filepath.Join(tmpDir, "mcp-tasks.yaml")
@@ -476,8 +501,9 @@ func TestLoad_AutoArchiveDefaults_WhenNotInYAML(t *testing.T) {
 }
 
 func TestLoad_EnvVarLoadsConfigFromParentDir(t *testing.T) {
+	isolateEnv(t)
 	// Create temp directory structure
-	tmpDir := t.TempDir()
+	tmpDir := tempDir(t)
 	tasksDir := filepath.Join(tmpDir, "tasks")
 	if err := os.MkdirAll(tasksDir, 0755); err != nil {
 		t.Fatalf("failed to create tasks dir: %v", err)
@@ -504,4 +530,25 @@ func TestLoad_EnvVarLoadsConfigFromParentDir(t *testing.T) {
 	if !cfg.IsValidTaskType("custom") {
 		t.Error("Load() should have loaded config from parent of MCP_TASKS_DIR")
 	}
+}
+
+// isolateEnv clears every variable that takes part in project resolution, so
+// a test never picks up the root of the project it is being run from.
+func isolateEnv(t *testing.T) {
+	t.Helper()
+	for _, name := range []string{EnvTasksDir, EnvProjectDir, EnvClaudeProjectDir, EnvRootSource} {
+		t.Setenv(name, "")
+		os.Unsetenv(name)
+	}
+}
+
+// tempDir returns a temp directory with symlinks resolved, so it compares
+// equal to what os.Getwd reports after chdir (on macOS /var is a symlink).
+func tempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks() error = %v", err)
+	}
+	return dir
 }

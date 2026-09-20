@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/gpayer/mcp-task-manager/internal/config"
+	"github.com/gpayer/mcp-task-manager/internal/project"
 	"github.com/gpayer/mcp-task-manager/internal/storage"
 	"github.com/gpayer/mcp-task-manager/internal/task"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -110,7 +111,7 @@ func TestRegisterCreateTaskSchemaUsesStringIDs(t *testing.T) {
 	}
 }
 
-func newTestService(t *testing.T) *task.Service {
+func newTestService(t *testing.T) *project.Resolver {
 	t.Helper()
 	dir := t.TempDir()
 	st := storage.NewMarkdownStorage(dir)
@@ -120,7 +121,7 @@ func newTestService(t *testing.T) *task.Service {
 	if err := svc.Initialize(); err != nil {
 		t.Fatalf("Initialize() error = %v", err)
 	}
-	return svc
+	return project.NewStatic(&project.Resolved{Config: cfg, Service: svc})
 }
 
 func TestCreateTaskHandler_CustomID_ResponseIDIsJSONString(t *testing.T) {

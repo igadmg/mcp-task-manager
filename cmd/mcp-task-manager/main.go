@@ -1,15 +1,17 @@
 package main
 
 import (
+	"context"
 	_ "embed"
 	"encoding/base64"
 	"log"
 	"os"
+	"slices"
+	"sync"
 
 	"github.com/gpayer/mcp-task-manager/internal/cli"
 	"github.com/gpayer/mcp-task-manager/internal/config"
-	"github.com/gpayer/mcp-task-manager/internal/storage"
-	"github.com/gpayer/mcp-task-manager/internal/task"
+	"github.com/gpayer/mcp-task-manager/internal/project"
 	"github.com/gpayer/mcp-task-manager/internal/tools"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -29,28 +31,29 @@ func main() {
 	}
 
 	// MCP server mode
-	// Load configuration
-	cfg, err := config.Load()
-	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+	srv, _ := newServer()
+	if err := server.ServeStdio(srv); err != nil {
+		log.Fatalf("Server error: %v", err)
 	}
+}
 
-	// Initialize storage
-	tasksDir := cfg.TasksDir()
-	mdStorage := storage.NewMarkdownStorage(tasksDir)
-	index := storage.NewIndex(tasksDir, mdStorage)
+// newServer assembles the MCP server.
+//
+// The project is resolved lazily, on the first tool call: MCP roots are only
+// available once a client session exists, and the environment may not identify
+// a project at all. Nothing here touches the task files.
+func newServer() (*server.MCPServer, *project.Resolver) {
+	var srv *server.MCPServer
+	resolver := project.NewResolver(func(ctx context.Context) ([]string, error) {
+		return project.ServerRoots(srv, project.DefaultRootsTimeout)(ctx)
+	})
 
-	// Initialize task service
-	svc := task.NewService(mdStorage, mdStorage, mdStorage, index, cfg.TaskTypes, cfg)
-	if err := svc.Initialize(); err != nil {
-		log.Fatalf("Failed to initialize service: %v", err)
-	}
-
-	// Create MCP server
-	s := server.NewMCPServer(
+	srv = server.NewMCPServer(
 		"mcp-task-manager",
 		"0.1.0",
-		server.WithToolCapabilities(false),
+		// listChanged is required: the tool schemas carry the configured
+		// task types, which are unknown until the project is resolved.
+		server.WithToolCapabilities(true),
 		server.WithInstructions(instructionsMD),
 		server.WithIcons(mcp.Icon{
 			Src:      "data:image/png;base64," + base64.StdEncoding.EncodeToString(iconPNG),
@@ -59,11 +62,54 @@ func main() {
 		}),
 	)
 
-	// Register tools
-	tools.Register(s, svc, cfg.TaskTypes, cfg.RelationTypes)
+	// Register on defaults, then re-register if the resolved project turns
+	// out to configure different types.
+	defaults := config.DefaultConfig()
+	registered := newToolSet(defaults.TaskTypes, defaults.RelationTypes)
+	tools.Register(srv, resolver, defaults.TaskTypes, defaults.RelationTypes)
 
-	// Start server
-	if err := server.ServeStdio(s); err != nil {
-		log.Fatalf("Server error: %v", err)
-	}
+	resolver.OnResolve(func(resolved *project.Resolved) {
+		log.Printf("task-manager: %s", resolved.Resolution().Explain())
+		cfg := resolved.Config
+		if registered.matches(cfg.TaskTypes, cfg.RelationTypes) {
+			return
+		}
+		registered.set(cfg.TaskTypes, cfg.RelationTypes)
+		srv.SetTools(tools.Build(resolver, cfg.TaskTypes, cfg.RelationTypes)...)
+		log.Printf("task-manager: tool schemas updated for task types %v", cfg.TaskTypes)
+	})
+
+	// The client tells us when its roots change; the next tool call then
+	// resolves the project again.
+	srv.AddNotificationHandler(mcp.MethodNotificationRootsListChanged,
+		func(ctx context.Context, _ mcp.JSONRPCNotification) {
+			resolver.Invalidate()
+		})
+
+	return srv, resolver
+}
+
+// toolSet remembers which type lists the currently registered tool schemas
+// were built from.
+type toolSet struct {
+	mu            sync.Mutex
+	taskTypes     []string
+	relationTypes []string
+}
+
+func newToolSet(taskTypes, relationTypes []string) *toolSet {
+	return &toolSet{taskTypes: slices.Clone(taskTypes), relationTypes: slices.Clone(relationTypes)}
+}
+
+func (t *toolSet) matches(taskTypes, relationTypes []string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return slices.Equal(t.taskTypes, taskTypes) && slices.Equal(t.relationTypes, relationTypes)
+}
+
+func (t *toolSet) set(taskTypes, relationTypes []string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.taskTypes = slices.Clone(taskTypes)
+	t.relationTypes = slices.Clone(relationTypes)
 }
