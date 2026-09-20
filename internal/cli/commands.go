@@ -117,7 +117,7 @@ func cmdList(stdout, stderr io.Writer, jsonOutput bool, status, priority, taskTy
 	// - Default ("0"): show top-level tasks only (parentID = "0")
 	// - Specified N: show subtasks of task N (parentID = N)
 	parentPtr := &parentID
-	tasks := svc.List(statusPtr, priorityPtr, typePtr, parentPtr)
+	tasks := svc.List(statusPtr, priorityPtr, typePtr, parentPtr, nil)
 
 	// Build subtask counts for each task
 	subtaskCounts := make(map[string]SubtaskCounts)
@@ -273,7 +273,7 @@ func cmdCreate(stdout, stderr io.Writer, jsonOutput bool, title, priority, taskT
 }
 
 // cmdUpdate handles the update command
-func cmdUpdate(stdout, stderr io.Writer, jsonOutput bool, id string, title, status, priority, taskType, description string) int {
+func cmdUpdate(stdout, stderr io.Writer, jsonOutput bool, id string, title, status, priority, taskType, description, resolution, resolutionNote string, verified bool) int {
 	svc, _, err := initService()
 	if err != nil {
 		fmt.Fprintf(stderr, "Error: %v\n", err)
@@ -302,7 +302,18 @@ func cmdUpdate(stdout, stderr io.Writer, jsonOutput bool, id string, title, stat
 		typePtr = &taskType
 	}
 
-	t, err := svc.Update(id, titlePtr, descPtr, statusPtr, priorityPtr, typePtr)
+	var opts []task.UpdateOption
+	if resolution != "" {
+		opts = append(opts, task.WithResolution(task.Resolution(resolution)))
+	}
+	if resolutionNote != "" {
+		opts = append(opts, task.WithResolutionNote(resolutionNote))
+	}
+	if verified {
+		opts = append(opts, task.WithVerified(true))
+	}
+
+	t, err := svc.Update(id, titlePtr, descPtr, statusPtr, priorityPtr, typePtr, opts...)
 	if err != nil {
 		fmt.Fprintf(stderr, "Error: %v\n", err)
 		return 1
@@ -454,19 +465,30 @@ func cmdListTaskFiles(stdout, stderr io.Writer, id string) int {
 }
 
 // cmdComplete handles the complete command
-func cmdComplete(stdout, stderr io.Writer, jsonOutput bool, id string) int {
+func cmdComplete(stdout, stderr io.Writer, jsonOutput bool, id, resolution, resolutionNote string) int {
 	svc, _, err := initService()
 	if err != nil {
 		fmt.Fprintf(stderr, "Error: %v\n", err)
 		return 1
 	}
 
-	if _, err := svc.CompleteTask(id); err != nil {
+	var opts []task.UpdateOption
+	if resolution != "" {
+		opts = append(opts, task.WithResolution(task.Resolution(resolution)))
+	}
+	if resolutionNote != "" {
+		opts = append(opts, task.WithResolutionNote(resolutionNote))
+	}
+
+	if _, err := svc.CompleteTask(id, opts...); err != nil {
 		fmt.Fprintf(stderr, "Error: %v\n", err)
 		return 1
 	}
 
 	msg := fmt.Sprintf("Task #%s completed.", id)
+	if resolution != "" && resolution != string(task.ResolutionCompleted) {
+		msg = fmt.Sprintf("Task #%s closed as %s.", id, resolution)
+	}
 	if jsonOutput {
 		if err := FormatJSONMessage(stdout, msg, id); err != nil {
 			fmt.Fprintf(stderr, "Error: %v\n", err)

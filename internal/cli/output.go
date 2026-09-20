@@ -26,6 +26,9 @@ func FormatTaskDetail(t *task.Task, opts *TaskDetailOptions) string {
 	if opts != nil && opts.Blocked {
 		status += " [BLOCKED]"
 	}
+	if res := t.EffectiveResolution(); res != "" {
+		status += " (" + string(res) + ")"
+	}
 	sb.WriteString(fmt.Sprintf("Status:      %s\n", status))
 	sb.WriteString(fmt.Sprintf("Priority:    %s\n", t.Priority))
 	sb.WriteString(fmt.Sprintf("Type:        %s\n", t.Type))
@@ -34,6 +37,15 @@ func FormatTaskDetail(t *task.Task, opts *TaskDetailOptions) string {
 	}
 	sb.WriteString(fmt.Sprintf("Created:     %s\n", t.CreatedAt.Format("2006-01-02 15:04:05")))
 	sb.WriteString(fmt.Sprintf("Updated:     %s\n", t.UpdatedAt.Format("2006-01-02 15:04:05")))
+	if t.ClosedAt != nil {
+		sb.WriteString(fmt.Sprintf("Closed:      %s\n", t.ClosedAt.Format("2006-01-02 15:04:05")))
+	}
+	if t.VerifiedAt != nil {
+		sb.WriteString(fmt.Sprintf("Verified:    %s\n", t.VerifiedAt.Format("2006-01-02 15:04:05")))
+	}
+	if t.ResolutionNote != "" {
+		sb.WriteString(fmt.Sprintf("Why:         %s\n", t.ResolutionNote))
+	}
 	if len(t.Relations) > 0 {
 		sb.WriteString("\nRelations:\n")
 		for _, rel := range t.Relations {
@@ -81,6 +93,11 @@ func FormatTaskTable(tasks []*task.Task, subtaskCounts map[string]SubtaskCounts,
 			title = title[:37] + "..."
 		}
 		statusStr := string(t.Status)
+		// A closed task shows how it closed, not just that it did: a table
+		// of a dozen "done" rows hides which of them were ever built.
+		if res := t.EffectiveResolution(); res != "" && !res.Delivered() {
+			statusStr += "/" + string(res)
+		}
 		if blockedTasks != nil && blockedTasks[t.ID] {
 			statusStr += " [BLOCKED]"
 		}

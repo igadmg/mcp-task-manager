@@ -1,3 +1,5 @@
-description: Archive a completed task (moves to archive directory)
+description: |
+  Archive a closed task (moves to archive directory). Works for any done task,
+  whatever its resolution; the resolution travels with it and stays readable.
 params:
   id: Task ID to archive

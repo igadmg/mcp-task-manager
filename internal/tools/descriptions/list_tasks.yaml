@@ -4,4 +4,8 @@ params:
   priority: Filter by priority
   type: Filter by task type.
   parent_id: Filter by parent task ID (0 for top-level tasks, omit for top-level by default)
+  resolution: |
+    Filter done tasks by how they were closed (completed, obsolete,
+    superseded, duplicate, wontfix). Tasks closed before resolutions existed
+    count as completed.
   archived: If true, list archived tasks instead of active tasks

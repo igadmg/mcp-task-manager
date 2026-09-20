@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/gpayer/mcp-task-manager/internal/project"
 	"github.com/gpayer/mcp-task-manager/internal/task"
@@ -81,6 +82,16 @@ func managementTools(rs *project.Resolver, validTypes []string) []server.ServerT
 			mcp.Description(allowedValuesDescription(updateText.param("type"), validTypes)),
 			mcp.Enum(validTypes...),
 		),
+		mcp.WithString("resolution",
+			mcp.Description(updateText.param("resolution")),
+			mcp.Enum(task.ResolutionStrings()...),
+		),
+		mcp.WithString("resolution_note",
+			mcp.Description(updateText.param("resolution_note")),
+		),
+		mcp.WithBoolean("verified",
+			mcp.Description(updateText.param("verified")),
+		),
 	)
 	tools = append(tools, server.ServerTool{Tool: updateTool, Handler: updateTaskHandler(rs)})
 
@@ -116,6 +127,10 @@ func managementTools(rs *project.Resolver, validTypes []string) []server.ServerT
 		),
 		mcp.WithString("parent_id",
 			mcp.Description(listText.param("parent_id")),
+		),
+		mcp.WithString("resolution",
+			mcp.Description(listText.param("resolution")),
+			mcp.Enum(task.ResolutionStrings()...),
 		),
 		mcp.WithBoolean("archived",
 			mcp.Description(listText.param("archived")),
@@ -168,7 +183,21 @@ type taskWithSubtasksResponse struct {
 	BlockedBy   []task.BlockingInfo `json:"blocked_by,omitempty"`
 	CreatedAt   string              `json:"created_at"`
 	UpdatedAt   string              `json:"updated_at"`
-	Subtasks    []*task.Task        `json:"subtasks,omitempty"`
+	// Resolution is the effective one: a task closed before the field
+	// existed reports "completed" rather than an empty string.
+	Resolution     task.Resolution `json:"resolution,omitempty"`
+	ResolutionNote string          `json:"resolution_note,omitempty"`
+	ClosedAt       string          `json:"closed_at,omitempty"`
+	VerifiedAt     string          `json:"verified_at,omitempty"`
+	Subtasks       []*task.Task    `json:"subtasks,omitempty"`
+}
+
+// formatOptionalTime renders a nullable timestamp for a tool response.
+func formatOptionalTime(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return t.Format("2006-01-02T15:04:05Z")
 }
 
 func getTaskHandler(rs *project.Resolver) server.ToolHandlerFunc {
@@ -200,6 +229,11 @@ func getTaskHandler(rs *project.Resolver) server.ToolHandlerFunc {
 			BlockedBy:   blockers,
 			CreatedAt:   t.CreatedAt.Format("2006-01-02T15:04:05Z"),
 			UpdatedAt:   t.UpdatedAt.Format("2006-01-02T15:04:05Z"),
+
+			Resolution:     t.EffectiveResolution(),
+			ResolutionNote: t.ResolutionNote,
+			ClosedAt:       formatOptionalTime(t.ClosedAt),
+			VerifiedAt:     formatOptionalTime(t.VerifiedAt),
 		}
 
 		// Only include subtasks if task has them (top-level task with children)
@@ -246,7 +280,18 @@ func updateTaskHandler(rs *project.Resolver) server.ToolHandlerFunc {
 			taskType = &v
 		}
 
-		t, err := svc.Update(id, title, description, status, priority, taskType)
+		var opts []task.UpdateOption
+		if _, ok := args["resolution"]; ok {
+			opts = append(opts, task.WithResolution(task.Resolution(req.GetString("resolution", ""))))
+		}
+		if _, ok := args["resolution_note"]; ok {
+			opts = append(opts, task.WithResolutionNote(req.GetString("resolution_note", "")))
+		}
+		if _, ok := args["verified"]; ok {
+			opts = append(opts, task.WithVerified(req.GetBool("verified", false)))
+		}
+
+		t, err := svc.Update(id, title, description, status, priority, taskType, opts...)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
@@ -319,6 +364,12 @@ func listTasksHandler(rs *project.Resolver) server.ToolHandlerFunc {
 			taskType = &v
 		}
 
+		var resolution *task.Resolution
+		if _, ok := args["resolution"]; ok {
+			r := task.Resolution(req.GetString("resolution", ""))
+			resolution = &r
+		}
+
 		// Default to showing top-level tasks (parentID = "0")
 		// If parent_id is explicitly provided, use that value
 		defaultParentID := "0"
@@ -328,7 +379,7 @@ func listTasksHandler(rs *project.Resolver) server.ToolHandlerFunc {
 			parentID = &id
 		}
 
-		tasks := svc.List(status, priority, taskType, parentID)
+		tasks := svc.List(status, priority, taskType, parentID, resolution)
 
 		if len(tasks) == 0 {
 			return mcp.NewToolResultText("No tasks found"), nil

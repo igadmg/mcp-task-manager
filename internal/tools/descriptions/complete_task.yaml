@@ -1,3 +1,14 @@
-description: Move a task from in_progress to done
+description: |
+  Close a task. Without a resolution this is the normal completion: the task
+  must be in_progress and moves to done. Pass a resolution other than
+  "completed" to close a task whose work is not going to happen - that form
+  also accepts a todo task and closes its open subtasks along with it.
 params:
-  id: Task ID to complete
+  id: Task ID to close
+  resolution: |
+    How the task left the backlog. "completed" (default) - the work landed.
+    "obsolete" - it no longer applies. "superseded" - another task covers it
+    now. "duplicate" - already tracked elsewhere. "wontfix" - understood and
+    deliberately not done. For superseded/duplicate also add the matching
+    relation, so the replacement is a link and not just prose.
+  resolution_note: One line on why, e.g. the commit that landed it or what replaced it.

@@ -45,25 +45,33 @@ func (s *MarkdownStorage) taskPath(id string) string {
 func (s *MarkdownStorage) Save(t *task.Task) error {
 	// Build frontmatter
 	frontmatter := struct {
-		ID        string          `yaml:"id"`
-		ParentID  string          `yaml:"parent_id,omitempty"`
-		Title     string          `yaml:"title"`
-		Status    task.Status     `yaml:"status"`
-		Priority  task.Priority   `yaml:"priority"`
-		Type      string          `yaml:"type"`
-		Relations []task.Relation `yaml:"relations,omitempty"`
-		CreatedAt string          `yaml:"created_at"`
-		UpdatedAt string          `yaml:"updated_at"`
+		ID             string          `yaml:"id"`
+		ParentID       string          `yaml:"parent_id,omitempty"`
+		Title          string          `yaml:"title"`
+		Status         task.Status     `yaml:"status"`
+		Priority       task.Priority   `yaml:"priority"`
+		Type           string          `yaml:"type"`
+		Relations      []task.Relation `yaml:"relations,omitempty"`
+		CreatedAt      string          `yaml:"created_at"`
+		UpdatedAt      string          `yaml:"updated_at"`
+		Resolution     task.Resolution `yaml:"resolution,omitempty"`
+		ResolutionNote string          `yaml:"resolution_note,omitempty"`
+		ClosedAt       string          `yaml:"closed_at,omitempty"`
+		VerifiedAt     string          `yaml:"verified_at,omitempty"`
 	}{
-		ID:        t.ID,
-		ParentID:  t.ParentID,
-		Title:     t.Title,
-		Status:    t.Status,
-		Priority:  t.Priority,
-		Type:      t.Type,
-		Relations: t.Relations,
-		CreatedAt: t.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		UpdatedAt: t.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		ID:             t.ID,
+		ParentID:       t.ParentID,
+		Title:          t.Title,
+		Status:         t.Status,
+		Priority:       t.Priority,
+		Type:           t.Type,
+		Relations:      t.Relations,
+		CreatedAt:      t.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		UpdatedAt:      t.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		Resolution:     t.Resolution,
+		ResolutionNote: t.ResolutionNote,
+		ClosedAt:       formatTime(t.ClosedAt),
+		VerifiedAt:     formatTime(t.VerifiedAt),
 	}
 
 	var buf bytes.Buffer
@@ -157,15 +165,19 @@ func (s *MarkdownStorage) parse(data []byte) (*task.Task, error) {
 
 	// Parse frontmatter
 	var fm struct {
-		ID        string          `yaml:"id"`
-		ParentID  string          `yaml:"parent_id"`
-		Title     string          `yaml:"title"`
-		Status    string          `yaml:"status"`
-		Priority  string          `yaml:"priority"`
-		Type      string          `yaml:"type"`
-		Relations []task.Relation `yaml:"relations"`
-		CreatedAt string          `yaml:"created_at"`
-		UpdatedAt string          `yaml:"updated_at"`
+		ID             string          `yaml:"id"`
+		ParentID       string          `yaml:"parent_id"`
+		Title          string          `yaml:"title"`
+		Status         string          `yaml:"status"`
+		Priority       string          `yaml:"priority"`
+		Type           string          `yaml:"type"`
+		Relations      []task.Relation `yaml:"relations"`
+		CreatedAt      string          `yaml:"created_at"`
+		UpdatedAt      string          `yaml:"updated_at"`
+		Resolution     string          `yaml:"resolution"`
+		ResolutionNote string          `yaml:"resolution_note"`
+		ClosedAt       string          `yaml:"closed_at"`
+		VerifiedAt     string          `yaml:"verified_at"`
 	}
 	if err := yaml.Unmarshal(frontmatterBuf.Bytes(), &fm); err != nil {
 		return nil, err
@@ -185,17 +197,44 @@ func (s *MarkdownStorage) parse(data []byte) (*task.Task, error) {
 	updatedAt, _ := parseTime(fm.UpdatedAt)
 
 	return &task.Task{
-		ID:          fm.ID,
-		ParentID:    fm.ParentID,
-		Title:       fm.Title,
-		Description: strings.TrimSpace(bodyBuf.String()),
-		Status:      task.Status(fm.Status),
-		Priority:    task.Priority(fm.Priority),
-		Type:        fm.Type,
-		Relations:   fm.Relations,
-		CreatedAt:   createdAt,
-		UpdatedAt:   updatedAt,
+		ID:             fm.ID,
+		ParentID:       fm.ParentID,
+		Title:          fm.Title,
+		Description:    strings.TrimSpace(bodyBuf.String()),
+		Status:         task.Status(fm.Status),
+		Priority:       task.Priority(fm.Priority),
+		Type:           fm.Type,
+		Relations:      fm.Relations,
+		CreatedAt:      createdAt,
+		UpdatedAt:      updatedAt,
+		Resolution:     task.Resolution(fm.Resolution),
+		ResolutionNote: fm.ResolutionNote,
+		ClosedAt:       parseOptionalTime(fm.ClosedAt),
+		VerifiedAt:     parseOptionalTime(fm.VerifiedAt),
 	}, nil
+}
+
+// formatTime renders an optional timestamp for the frontmatter, yielding ""
+// for a missing one so the yaml omitempty tag drops the key entirely.
+func formatTime(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return t.Format("2006-01-02T15:04:05Z07:00")
+}
+
+// parseOptionalTime is parseTime for a key that may be absent: an empty or
+// unparsable value reads back as "no timestamp" rather than the zero time,
+// which would otherwise be indistinguishable from a real one.
+func parseOptionalTime(s string) *time.Time {
+	if s == "" {
+		return nil
+	}
+	t, err := parseTime(s)
+	if err != nil {
+		return nil
+	}
+	return &t
 }
 
 // parseTime tries multiple time formats

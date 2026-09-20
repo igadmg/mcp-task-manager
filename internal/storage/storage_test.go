@@ -393,27 +393,27 @@ func TestIndex_Filter(t *testing.T) {
 
 	// Filter by status
 	todoStatus := task.StatusTodo
-	filtered := idx.Filter(&todoStatus, nil, nil, nil)
+	filtered := idx.Filter(&todoStatus, nil, nil, nil, nil)
 	if len(filtered) != 2 {
 		t.Errorf("Filter by todo status returned %d tasks, want 2", len(filtered))
 	}
 
 	// Filter by priority
 	highPriority := task.PriorityHigh
-	filtered = idx.Filter(nil, &highPriority, nil, nil)
+	filtered = idx.Filter(nil, &highPriority, nil, nil, nil)
 	if len(filtered) != 1 {
 		t.Errorf("Filter by high priority returned %d tasks, want 1", len(filtered))
 	}
 
 	// Filter by type
 	featureType := "feature"
-	filtered = idx.Filter(nil, nil, &featureType, nil)
+	filtered = idx.Filter(nil, nil, &featureType, nil, nil)
 	if len(filtered) != 2 {
 		t.Errorf("Filter by feature type returned %d tasks, want 2", len(filtered))
 	}
 
 	// Combined filter
-	filtered = idx.Filter(&todoStatus, nil, &featureType, nil)
+	filtered = idx.Filter(&todoStatus, nil, &featureType, nil, nil)
 	if len(filtered) != 2 {
 		t.Errorf("Combined filter returned %d tasks, want 2", len(filtered))
 	}
@@ -1510,20 +1510,20 @@ func TestIndex_Filter_ByParentID(t *testing.T) {
 	idx.Load()
 
 	// Filter subtasks of parent
-	result := idx.Filter(nil, nil, nil, &parentID)
+	result := idx.Filter(nil, nil, nil, &parentID, nil)
 	if len(result) != 2 {
 		t.Errorf("Filter(parent_id=1) = %d, want 2", len(result))
 	}
 
 	// Filter top-level only (parent_id = 0 means top-level)
 	topLevel := "0"
-	result = idx.Filter(nil, nil, nil, &topLevel)
+	result = idx.Filter(nil, nil, nil, &topLevel, nil)
 	if len(result) != 2 {
 		t.Errorf("Filter(parent_id=0) = %d, want 2 (parent + standalone)", len(result))
 	}
 
 	// No filter - returns all tasks
-	result = idx.Filter(nil, nil, nil, nil)
+	result = idx.Filter(nil, nil, nil, nil, nil)
 	if len(result) != 4 {
 		t.Errorf("Filter(parent_id=nil) = %d, want 4", len(result))
 	}
@@ -2060,7 +2060,7 @@ func TestIndex_Integration_FullFlow(t *testing.T) {
 
 	// Filter() should return tasks without descriptions
 	todoStatus := task.StatusTodo
-	filtered := idx2.Filter(&todoStatus, nil, nil, nil)
+	filtered := idx2.Filter(&todoStatus, nil, nil, nil, nil)
 	if len(filtered) != 1 {
 		t.Fatalf("Filter() returned %d tasks, want 1", len(filtered))
 	}
@@ -2112,7 +2112,7 @@ func TestIndex_AutoRebuildsWhenDiskHasNewTasks(t *testing.T) {
 		t.Fatalf("Get(%s) parent_id = %v, want %s", subtask.ID, got.ParentID, parent.ID)
 	}
 
-	filtered := idx.Filter(nil, nil, nil, &parent.ID)
+	filtered := idx.Filter(nil, nil, nil, &parent.ID, nil)
 	if len(filtered) != 1 {
 		t.Fatalf("Filter(parent_id=%s) returned %d tasks, want 1", parent.ID, len(filtered))
 	}
@@ -2529,5 +2529,83 @@ func TestMarkdownStorage_WriteFile_RejectsInvalidFilenames(t *testing.T) {
 		if err := s.WriteFile("1", name, "x"); err == nil {
 			t.Errorf("WriteFile(%q) expected error, got nil", name)
 		}
+	}
+}
+
+// The resolution fields have to survive a write/read round trip, and a task
+// that has none must not grow empty keys in its frontmatter.
+func TestMarkdownStorage_ResolutionRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	s := NewMarkdownStorage(dir)
+	if err := s.EnsureDir(); err != nil {
+		t.Fatalf("EnsureDir() error = %v", err)
+	}
+
+	closed := time.Date(2026, 9, 20, 17, 23, 17, 0, time.UTC)
+	verified := time.Date(2026, 9, 20, 18, 0, 0, 0, time.UTC)
+	original := &task.Task{
+		ID:             "obsolete-one",
+		Title:          "No longer applies",
+		Description:    "Body text.",
+		Status:         task.StatusDone,
+		Priority:       task.PriorityMedium,
+		Type:           "feature",
+		CreatedAt:      time.Now().UTC().Truncate(time.Second),
+		UpdatedAt:      time.Now().UTC().Truncate(time.Second),
+		Resolution:     task.ResolutionObsolete,
+		ResolutionNote: "replaced by the plugin layout",
+		ClosedAt:       &closed,
+		VerifiedAt:     &verified,
+	}
+	if err := s.Save(original); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	loaded, err := s.Load(original.ID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded.Resolution != task.ResolutionObsolete {
+		t.Errorf("Resolution = %q, want obsolete", loaded.Resolution)
+	}
+	if loaded.ResolutionNote != original.ResolutionNote {
+		t.Errorf("ResolutionNote = %q, want %q", loaded.ResolutionNote, original.ResolutionNote)
+	}
+	if loaded.ClosedAt == nil || !loaded.ClosedAt.Equal(closed) {
+		t.Errorf("ClosedAt = %v, want %v", loaded.ClosedAt, closed)
+	}
+	if loaded.VerifiedAt == nil || !loaded.VerifiedAt.Equal(verified) {
+		t.Errorf("VerifiedAt = %v, want %v", loaded.VerifiedAt, verified)
+	}
+
+	open := &task.Task{
+		ID:        "open-one",
+		Title:     "Still open",
+		Status:    task.StatusTodo,
+		Priority:  task.PriorityLow,
+		Type:      "feature",
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+	if err := s.Save(open); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, open.ID, open.ID+".md"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	for _, key := range []string{"resolution:", "resolution_note:", "closed_at:", "verified_at:"} {
+		if strings.Contains(string(raw), key) {
+			t.Errorf("an open task's frontmatter carries an empty %s", key)
+		}
+	}
+
+	reloaded, err := s.Load(open.ID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if reloaded.Resolution != "" || reloaded.ClosedAt != nil || reloaded.VerifiedAt != nil {
+		t.Errorf("an open task loaded with a closure: %q / %v / %v",
+			reloaded.Resolution, reloaded.ClosedAt, reloaded.VerifiedAt)
 	}
 }

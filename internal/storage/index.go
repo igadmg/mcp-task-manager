@@ -35,34 +35,47 @@ type IndexEntry struct {
 	Type      string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	// Resolution and the two timestamps ride along because list_tasks and
+	// the auto-archive rules read them, and both work off index entries
+	// rather than loading every task file. ResolutionNote deliberately
+	// stays out: like Description, it is body text, fetched with get_task.
+	Resolution task.Resolution
+	ClosedAt   *time.Time
+	VerifiedAt *time.Time
 }
 
 // taskToEntry converts a Task to an IndexEntry
 func taskToEntry(t *task.Task) *IndexEntry {
 	return &IndexEntry{
-		ID:        t.ID,
-		ParentID:  t.ParentID,
-		Title:     t.Title,
-		Status:    t.Status,
-		Priority:  t.Priority,
-		Type:      t.Type,
-		CreatedAt: t.CreatedAt,
-		UpdatedAt: t.UpdatedAt,
+		ID:         t.ID,
+		ParentID:   t.ParentID,
+		Title:      t.Title,
+		Status:     t.Status,
+		Priority:   t.Priority,
+		Type:       t.Type,
+		CreatedAt:  t.CreatedAt,
+		UpdatedAt:  t.UpdatedAt,
+		Resolution: t.Resolution,
+		ClosedAt:   t.ClosedAt,
+		VerifiedAt: t.VerifiedAt,
 	}
 }
 
 // entryToTask converts an IndexEntry back to a Task (without description)
 func entryToTask(e *IndexEntry) *task.Task {
 	return &task.Task{
-		ID:        e.ID,
-		ParentID:  e.ParentID,
-		Title:     e.Title,
-		Status:    e.Status,
-		Priority:  e.Priority,
-		Type:      e.Type,
-		CreatedAt: e.CreatedAt,
-		UpdatedAt: e.UpdatedAt,
-		// Description intentionally empty
+		ID:         e.ID,
+		ParentID:   e.ParentID,
+		Title:      e.Title,
+		Status:     e.Status,
+		Priority:   e.Priority,
+		Type:       e.Type,
+		CreatedAt:  e.CreatedAt,
+		UpdatedAt:  e.UpdatedAt,
+		Resolution: e.Resolution,
+		ClosedAt:   e.ClosedAt,
+		VerifiedAt: e.VerifiedAt,
+		// Description and ResolutionNote intentionally empty
 	}
 }
 
@@ -268,11 +281,16 @@ func (idx *Index) All() []*task.Task {
 
 // Filter returns tasks matching the given criteria
 // parentID: nil = all tasks, "0" = top-level only, otherwise = subtasks of that parent
-func (idx *Index) Filter(status *task.Status, priority *task.Priority, taskType *string, parentID *string) []*task.Task {
+// resolution: nil = any; matching is on the effective resolution, so filtering
+// for "completed" also returns tasks closed before the field existed
+func (idx *Index) Filter(status *task.Status, priority *task.Priority, taskType *string, parentID *string, resolution *task.Resolution) []*task.Task {
 	idx.syncIfStale()
 	var result []*task.Task
 	for _, e := range idx.entries {
 		if status != nil && e.Status != *status {
+			continue
+		}
+		if resolution != nil && entryToTask(e).EffectiveResolution() != *resolution {
 			continue
 		}
 		if priority != nil && e.Priority != *priority {

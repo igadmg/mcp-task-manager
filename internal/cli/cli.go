@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"github.com/gpayer/mcp-task-manager/internal/config"
+	"github.com/gpayer/mcp-task-manager/internal/task"
 	"io"
 	"os"
 	"strings"
@@ -99,13 +100,17 @@ func RunWithArgs(args []string, stdout, stderr io.Writer) int {
 	updateCmd.Description = "Update an existing task"
 	var updateIDStr string
 	var updateTitle, updateStatus, updatePriority, updateType, updateDesc string
-	var updateJSON bool
+	var updateResolution, updateNote string
+	var updateJSON, updateVerified bool
 	updateCmd.AddPositionalValue(&updateIDStr, "id", 1, true, "Task ID")
 	updateCmd.String(&updateTitle, "", "title", "New title")
 	updateCmd.String(&updateStatus, "s", "status", "New status")
 	updateCmd.String(&updatePriority, "p", "priority", "New priority")
 	updateCmd.String(&updateType, "t", "type", fmt.Sprintf("New type (%s)", strings.Join(taskTypes, "|")))
 	updateCmd.String(&updateDesc, "d", "description", "New description")
+	updateCmd.String(&updateResolution, "", "resolution", fmt.Sprintf("Close the task with this resolution (%s)", strings.Join(task.ResolutionStrings(), "|")))
+	updateCmd.String(&updateNote, "", "note", "One line on why the task was closed this way")
+	updateCmd.Bool(&updateVerified, "", "verified", "Stamp verified_at: this task's text was just checked against reality")
 	updateCmd.Bool(&updateJSON, "j", "json", "Output as JSON")
 	flaggy.AttachSubcommand(updateCmd, 1)
 
@@ -131,10 +136,13 @@ func RunWithArgs(args []string, stdout, stderr io.Writer) int {
 
 	// Complete subcommand
 	completeCmd := flaggy.NewSubcommand("complete")
-	completeCmd.Description = "Complete a task (in_progress -> done)"
+	completeCmd.Description = "Close a task (in_progress -> done, or any status when closed with a non-completed resolution)"
 	var completeIDStr string
+	var completeResolution, completeNote string
 	var completeJSON bool
 	completeCmd.AddPositionalValue(&completeIDStr, "id", 1, true, "Task ID")
+	completeCmd.String(&completeResolution, "", "resolution", fmt.Sprintf("How the task left the backlog (%s)", strings.Join(task.ResolutionStrings(), "|")))
+	completeCmd.String(&completeNote, "", "note", "One line on why")
 	completeCmd.Bool(&completeJSON, "j", "json", "Output as JSON")
 	flaggy.AttachSubcommand(completeCmd, 1)
 
@@ -203,7 +211,7 @@ func RunWithArgs(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if updateCmd.Used {
-		return cmdUpdate(stdout, stderr, updateJSON, updateIDStr, updateTitle, updateStatus, updatePriority, updateType, updateDesc)
+		return cmdUpdate(stdout, stderr, updateJSON, updateIDStr, updateTitle, updateStatus, updatePriority, updateType, updateDesc, updateResolution, updateNote, updateVerified)
 	}
 
 	if deleteCmd.Used {
@@ -215,7 +223,7 @@ func RunWithArgs(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if completeCmd.Used {
-		return cmdComplete(stdout, stderr, completeJSON, completeIDStr)
+		return cmdComplete(stdout, stderr, completeJSON, completeIDStr, completeResolution, completeNote)
 	}
 
 	if archiveCmd.Used {

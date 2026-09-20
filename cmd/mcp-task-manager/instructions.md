@@ -26,6 +26,29 @@ be stored by workflow as the current work dir task.
 4. `complete_task` — mark it `done` when finished. Completing the last open
    subtask auto-completes its parent.
 
+## Closing a task whose work will not happen
+Not every task ends in delivered work. Pass `complete_task` a `resolution` to
+record which kind of ending it was, instead of marking it `done` and explaining
+in the description:
+
+- `obsolete` — the task no longer applies; the code or the plan moved out from
+  under it.
+- `superseded` — another task covers it now; also `add_relation` a
+  `superseded_by` edge to it.
+- `duplicate` — already tracked elsewhere; pair with `duplicate_of`.
+- `wontfix` — understood, and deliberately not being done.
+
+Add a `resolution_note` with the one-line why. A task closed this way does not
+need to be `in_progress` first, and its open subtasks are closed with it.
+`list_tasks` can then filter by `resolution`, so abandoned work never again
+looks like shipped work.
+
+## Reviewing the backlog
+When checking whether tasks still reflect the code, `update_task(verified:
+true)` stamps `verified_at` on the ones you confirmed are still accurate. It
+affects nothing else — it just tells the next review which tasks have already
+been checked and which have not been looked at since they were filed.
+
 Use `get_task` to pull full details (including subtasks) for a specific task
 when the user names one directly, rather than `get_next_task`.
 
@@ -35,6 +58,6 @@ Attach free-form files to a task instead of losing context between turns:
 the task and move with it on archive/delete.
 
 ## Cleanup
-`archive_task` moves a completed task (and its files) out of the active
-list; `delete_task` removes a task outright (`delete_subtasks: true` to
+`archive_task` moves a closed task (and its files) out of the active list,
+whatever its resolution; `delete_task` removes a task outright (`delete_subtasks: true` to
 cascade). Archived tasks are read-only but still listable/gettable.

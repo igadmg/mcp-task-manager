@@ -55,6 +55,42 @@ type Task struct {
 	Relations   []Relation `yaml:"relations,omitempty" json:"relations,omitempty"`
 	CreatedAt   time.Time  `yaml:"created_at" json:"created_at"`
 	UpdatedAt   time.Time  `yaml:"updated_at" json:"updated_at"`
+
+	// Resolution is how the task left the active flow, set when it becomes
+	// done and cleared if it is reopened. Empty on any task that is still
+	// open, and on tasks closed before this field existed - a done task
+	// without one reads as ResolutionCompleted.
+	Resolution Resolution `yaml:"resolution,omitempty" json:"resolution,omitempty"`
+	// ResolutionNote is the one-line why behind the resolution: which commit
+	// landed the work, what replaced the task, why it stopped applying.
+	ResolutionNote string `yaml:"resolution_note,omitempty" json:"resolution_note,omitempty"`
+	// ClosedAt is when the task became done. UpdatedAt cannot stand in for
+	// it: editing a closed task's text moves UpdatedAt and would otherwise
+	// look like it was closed again.
+	ClosedAt *time.Time `yaml:"closed_at,omitempty" json:"closed_at,omitempty"`
+	// VerifiedAt is when a human or an agent last checked this task's text
+	// against reality. It says nothing about whether the task is done - an
+	// open task whose description still names renamed symbols is stale in a
+	// way status cannot express. Nil means never checked since it was filed.
+	VerifiedAt *time.Time `yaml:"verified_at,omitempty" json:"verified_at,omitempty"`
+}
+
+// Closed reports whether the task has left the active flow.
+func (t *Task) Closed() bool {
+	return t.Status == StatusDone
+}
+
+// EffectiveResolution is the resolution to display or filter on, resolving a
+// closed task that predates the field to ResolutionCompleted and leaving an
+// open task's resolution empty.
+func (t *Task) EffectiveResolution() Resolution {
+	if !t.Closed() {
+		return ""
+	}
+	if t.Resolution == "" {
+		return ResolutionCompleted
+	}
+	return t.Resolution
 }
 
 // IsValidStatus checks if status is valid
@@ -73,4 +109,70 @@ func IsValidPriority(p string) bool {
 		return true
 	}
 	return false
+}
+
+// Resolution records how a task left the active flow. Status says a task is
+// terminal, Resolution says what actually happened: a task closed because the
+// work landed and a task closed because the work stopped being needed are both
+// StatusDone, and without this field the difference can only be written into
+// the description in prose.
+//
+// The target of a supersede or a duplicate is not stored here: that is an edge
+// between tasks, expressed with the existing relations (superseded_by,
+// duplicate_of), so that it cannot drift from a copy kept in this field.
+type Resolution string
+
+const (
+	// ResolutionCompleted - the work was done. The default when a task is
+	// closed without naming a resolution.
+	ResolutionCompleted Resolution = "completed"
+	// ResolutionObsolete - the task no longer applies; the code, the plan or
+	// the surrounding decisions moved out from under it.
+	ResolutionObsolete Resolution = "obsolete"
+	// ResolutionSuperseded - the need is still real but another task covers
+	// it now. Pair with a superseded_by relation.
+	ResolutionSuperseded Resolution = "superseded"
+	// ResolutionDuplicate - the same work is already tracked elsewhere.
+	// Pair with a duplicate_of relation.
+	ResolutionDuplicate Resolution = "duplicate"
+	// ResolutionWontfix - the task applies and is understood, and we have
+	// decided not to do it.
+	ResolutionWontfix Resolution = "wontfix"
+)
+
+// Resolutions lists every valid resolution, in the order tools present them.
+func Resolutions() []Resolution {
+	return []Resolution{
+		ResolutionCompleted,
+		ResolutionObsolete,
+		ResolutionSuperseded,
+		ResolutionDuplicate,
+		ResolutionWontfix,
+	}
+}
+
+// IsValidResolution checks if resolution is valid
+func IsValidResolution(r string) bool {
+	for _, valid := range Resolutions() {
+		if Resolution(r) == valid {
+			return true
+		}
+	}
+	return false
+}
+
+// Delivered reports whether the resolution means the work actually landed.
+// Everything else is a task that closed without its work being done, which is
+// what backlog reviews and the archive rules key off.
+func (r Resolution) Delivered() bool {
+	return r == "" || r == ResolutionCompleted
+}
+
+// ResolutionStrings renders the valid resolutions for enums and error text.
+func ResolutionStrings() []string {
+	out := make([]string, 0, len(Resolutions()))
+	for _, r := range Resolutions() {
+		out = append(out, string(r))
+	}
+	return out
 }

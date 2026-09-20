@@ -6,3 +6,13 @@ params:
   status: New status
   priority: New priority
   type: New task type.
+  resolution: |
+    Close the task with this resolution (completed, obsolete, superseded,
+    duplicate, wontfix). Setting it moves the task to done; moving a task out
+    of done clears it again.
+  resolution_note: One line on why the task was closed this way; only valid for a done task.
+  verified: |
+    true stamps verified_at with now - a record that this task's own text was
+    just checked against the code and still describes reality. It says nothing
+    about progress; use it when reviewing a backlog for staleness. false clears
+    the stamp.

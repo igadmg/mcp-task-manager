@@ -38,6 +38,13 @@ func workflowTools(rs *project.Resolver) []server.ServerTool {
 			mcp.Required(),
 			mcp.Description(completeText.param("id")),
 		),
+		mcp.WithString("resolution",
+			mcp.Description(completeText.param("resolution")),
+			mcp.Enum(task.ResolutionStrings()...),
+		),
+		mcp.WithString("resolution_note",
+			mcp.Description(completeText.param("resolution_note")),
+		),
 	)
 	tools = append(tools, server.ServerTool{Tool: completeTool, Handler: completeTaskHandler(rs)})
 	return tools
@@ -75,7 +82,16 @@ func completeTaskHandler(rs *project.Resolver) server.ToolHandlerFunc {
 	return withService(rs, func(ctx context.Context, svc *task.Service, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		id := req.GetString("id", "")
 
-		t, err := svc.CompleteTask(id)
+		args := req.GetArguments()
+		var opts []task.UpdateOption
+		if _, ok := args["resolution"]; ok {
+			opts = append(opts, task.WithResolution(task.Resolution(req.GetString("resolution", ""))))
+		}
+		if _, ok := args["resolution_note"]; ok {
+			opts = append(opts, task.WithResolutionNote(req.GetString("resolution_note", "")))
+		}
+
+		t, err := svc.CompleteTask(id, opts...)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}

@@ -78,6 +78,10 @@ relations:            # optional, omitted when empty
     task: 7
 created_at: 2025-01-15T10:30:00Z
 updated_at: 2025-01-15T10:30:00Z
+resolution: obsolete  # optional, done tasks only: completed | obsolete | superseded | duplicate | wontfix
+resolution_note: "one line on why"   # optional, done tasks only
+closed_at: 2025-01-20T09:00:00Z      # optional, set when the task became done
+verified_at: 2025-01-19T12:00:00Z    # optional, last time the task's text was checked against reality
 ---
 
 Markdown description here.
@@ -94,6 +98,13 @@ Markdown description here.
 - Simple 3-state workflow: `todo` → `in_progress` → `done`
 - Blocked state derived from `blocked_by` relations (see Relations section)
 - Completed tasks can be archived (see Archiving section)
+- `done` says a task is terminal; `resolution` says what happened (`completed`,
+  `obsolete`, `superseded`, `duplicate`, `wontfix`). A resolution implies
+  closing, a not-delivered one may close a `todo` task and cascades to its open
+  subtasks, and reopening clears it. A `done` task without one reads as
+  `completed`. See [_design.md](_design.md)
+- `verified_at` is orthogonal to the lifecycle: when the task's own text was
+  last checked against reality. Inert — it gates nothing
 
 ### Priority Ordering
 - Named levels: `critical` > `high` > `medium` > `low`
@@ -132,6 +143,7 @@ Tasks support typed relations to other tasks via the `relations` frontmatter fie
 | `blocked_by` | Source can't proceed until target is done | Affects `get_next_task`, `start_task`, `get_task`, `list_tasks` | No |
 | `relates_to` | Informational link | None | Yes |
 | `duplicate_of` | Source is a duplicate of target | None | No |
+| `superseded_by` | Another task took the work over | None | No |
 
 Relation types are configurable via `mcp-tasks.yaml`. Behavioral effects are hardcoded to specific type names (`blocked_by`).
 
@@ -139,6 +151,8 @@ Relation types are configurable via `mcp-tasks.yaml`. Behavioral effects are har
 - `blocked_by`: stored only on the blocked task (the source)
 - `relates_to`: stored on one side only; the index generates the reverse edge
 - `duplicate_of`: stored only on the duplicate (the source)
+- `superseded_by`: stored only on the superseded task (the source); it is the
+  edge behind the `superseded` resolution, which never stores the target id itself
 - Validation: target task must exist, no self-references, no duplicates
 
 **Blocking behavior:**
@@ -172,6 +186,7 @@ Completed tasks can be archived to keep the active task list clean and the index
 
 **Auto-Archive:**
 - When enabled in config, done tasks older than `after_days` (since `updated_at`) are automatically archived
+- A task closed with a resolution other than `completed` skips the grace period and is eligible immediately: there is no delivered work left to review
 - Triggers on startup and after each `complete_task` call
 
 ### Attached Files
@@ -194,8 +209,8 @@ A task can have zero or more free-form named text files attached to it (e.g. res
 | Tool | Description |
 |------|-------------|
 | `create_task` | Create a new task with title, description, priority, type, optional `parent_id` for subtasks, and optional `id` for a caller-supplied custom task id |
-| `update_task` | Modify task fields |
-| `list_tasks` | List tasks with optional filters (status, priority, type, parent_id, archived); top-level tasks by default |
+| `update_task` | Modify task fields, including `resolution` / `resolution_note` (closes the task) and `verified` (stamps `verified_at`) |
+| `list_tasks` | List tasks with optional filters (status, priority, type, parent_id, resolution, archived); top-level tasks by default |
 | `get_task` | Get full details of a task by ID (includes subtasks for parent tasks; falls back to archive) |
 | `delete_task` | Remove a task; use `delete_subtasks: true` to cascade delete subtasks |
 | `archive_task` | Archive a completed task (moves its directory, including attached files, to `tasks/archive/`) |
@@ -218,7 +233,7 @@ A task can have zero or more free-form named text files attached to it (e.g. res
 |------|-------------|
 | `get_next_task` | Returns highest priority `todo` task (skips parents with incomplete subtasks and blocked tasks) |
 | `start_task` | Move task from `todo` to `in_progress` (auto-starts parent if subtask; refuses if blocked) |
-| `complete_task` | Move task from `in_progress` to `done` (auto-completes parent if last subtask; triggers auto-archive if enabled) |
+| `complete_task` | Close a task: `in_progress` → `done` (auto-completes parent if last subtask; triggers auto-archive if enabled). With a `resolution` other than `completed` it also accepts a `todo` task and closes its open subtasks along with it |
 
 ## Configuration
 
@@ -228,10 +243,11 @@ tasks_dir: .tasks     # optional, relative to the project root; default: .tasks
 task_types:
   - feature
   - bug
-relation_types:       # optional, defaults to these three
+relation_types:       # optional, defaults to these four
   - blocked_by
   - relates_to
   - duplicate_of
+  - superseded_by
 auto_archive:         # optional
   enabled: false      # default: false
   after_days: 30      # default: 30
@@ -281,7 +297,7 @@ mcp-task-manager/
 │   │   ├── files.go             # Attached-file read/write/list
 │   │   └── index.go             # In-memory index over the task directories
 │   ├── task/
-│   │   ├── task.go              # Task model/types
+│   │   ├── task.go              # Task model/types (status, priority, resolution)
 │   │   └── service.go           # Business logic
 │   └── tools/
 │       ├── tools.go             # Tool registration
@@ -290,6 +306,7 @@ mcp-task-manager/
 │       ├── relations.go         # add_relation, remove_relation
 │       └── files.go             # write_task_file, read_task_file, list_task_files
 ├── mcp-tasks.yaml               # Default config (for reference)
+├── _design.md                   # Resolution / verified_at: rationale and rules
 ├── go.mod
 ├── go.sum
 ├── CLAUDE.md
@@ -319,7 +336,8 @@ mcp-task-manager/
 - Status: `todo` | `in_progress` | `done`
 - Priority: `critical` | `high` | `medium` | `low`
 - Type: must be in configured list (default: `feature`, `bug`)
-- Relation type: must be in configured list (default: `blocked_by`, `relates_to`, `duplicate_of`)
+- Relation type: must be in configured list (default: `blocked_by`, `relates_to`, `duplicate_of`, `superseded_by`)
+- Resolution: `completed` | `obsolete` | `superseded` | `duplicate` | `wontfix`; only valid on a `done` task
 
 ## Future Considerations (Post-MVP)
 - Comments/history

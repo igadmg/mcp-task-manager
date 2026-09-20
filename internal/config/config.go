@@ -98,7 +98,9 @@ type Config struct {
 }
 
 // DefaultRelationTypes returns the default relation types
-var DefaultRelationTypes = []string{"blocked_by", "relates_to", "duplicate_of"}
+// superseded_by is the edge behind the "superseded" resolution: the task that
+// took over the work, kept as a link rather than a copy of an id in a field.
+var DefaultRelationTypes = []string{"blocked_by", "relates_to", "duplicate_of", "superseded_by"}
 
 // DefaultConfig returns configuration with defaults
 func DefaultConfig() *Config {

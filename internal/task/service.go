@@ -55,9 +55,9 @@ type Index interface {
 	Get(id string) (*Task, bool) // Loads full task with description from disk
 	Set(t *Task)
 	Delete(id string)
-	All() []*Task                                                                          // Returns tasks without descriptions (from index)
-	Filter(status *Status, priority *Priority, taskType *string, parentID *string) []*Task // Returns tasks without descriptions
-	NextTodo() *Task                                                                       // Returns task without description (from index)
+	All() []*Task                                                                                                  // Returns tasks without descriptions (from index)
+	Filter(status *Status, priority *Priority, taskType *string, parentID *string, resolution *Resolution) []*Task // Returns tasks without descriptions
+	NextTodo() *Task                                                                                               // Returns task without description (from index)
 	NextID() string
 	// Subtask methods
 	GetSubtasks(parentID string) []*Task // Returns tasks without descriptions (from index)
@@ -288,11 +288,61 @@ func (s *Service) GetSubtaskCounts(taskID string) (total, done int) {
 	return s.index.SubtaskCounts(taskID)
 }
 
+// UpdateOption carries the fields that were added after Update's signature
+// settled, so the original callers keep compiling unchanged.
+type UpdateOption func(*updateOpts)
+
+type updateOpts struct {
+	resolution *Resolution
+	note       *string
+	verified   *bool
+}
+
+// WithResolution closes the task with the given resolution. Naming one implies
+// closing: the task is moved to done even if the caller did not say so.
+func WithResolution(r Resolution) UpdateOption {
+	return func(o *updateOpts) { o.resolution = &r }
+}
+
+// WithResolutionNote sets the one-line why behind the resolution. Valid only
+// on a task that is closed, or being closed by the same call.
+func WithResolutionNote(note string) UpdateOption {
+	return func(o *updateOpts) { o.note = &note }
+}
+
+// WithVerified stamps (true) or clears (false) VerifiedAt - the moment the
+// task's own text was last checked against reality.
+func WithVerified(v bool) UpdateOption {
+	return func(o *updateOpts) { o.verified = &v }
+}
+
+func buildUpdateOpts(opts []UpdateOption) updateOpts {
+	var o updateOpts
+	for _, apply := range opts {
+		apply(&o)
+	}
+	return o
+}
+
 // Update modifies a task
-func (s *Service) Update(id string, title, description *string, status *Status, priority *Priority, taskType *string) (*Task, error) {
+func (s *Service) Update(id string, title, description *string, status *Status, priority *Priority, taskType *string, opts ...UpdateOption) (*Task, error) {
 	t, err := s.Get(id)
 	if err != nil {
 		return nil, err
+	}
+
+	o := buildUpdateOpts(opts)
+	if o.resolution != nil {
+		if !IsValidResolution(string(*o.resolution)) {
+			return nil, fmt.Errorf("invalid resolution: %s (want one of %s)", *o.resolution, strings.Join(ResolutionStrings(), ", "))
+		}
+		// A resolution only describes a closed task, so it closes the task
+		// unless the caller is explicitly moving it somewhere else.
+		if status == nil {
+			status = &[]Status{StatusDone}[0]
+		} else if *status != StatusDone {
+			return nil, fmt.Errorf("cannot set resolution %s while moving task %s to %s; a resolution belongs to a done task", *o.resolution, id, *status)
+		}
 	}
 
 	if title != nil {
@@ -323,7 +373,45 @@ func (s *Service) Update(id string, title, description *string, status *Status, 
 		t.Type = *taskType
 	}
 
-	t.UpdatedAt = time.Now().UTC()
+	now := time.Now().UTC()
+
+	switch {
+	case t.Closed():
+		// Closing, or editing an already closed task. An explicit resolution
+		// wins; otherwise a task closed without one reads as completed.
+		if o.resolution != nil {
+			t.Resolution = *o.resolution
+		} else if t.Resolution == "" {
+			t.Resolution = ResolutionCompleted
+		}
+		if o.note != nil {
+			t.ResolutionNote = *o.note
+		}
+		if t.ClosedAt == nil {
+			closed := now
+			t.ClosedAt = &closed
+		}
+	default:
+		// Reopened, or never closed: nothing here may survive, or a stale
+		// resolution would outlive the closure it described.
+		if o.note != nil && o.resolution == nil {
+			return nil, fmt.Errorf("cannot set a resolution note on task %s: it is %s, not done", id, t.Status)
+		}
+		t.Resolution = ""
+		t.ResolutionNote = ""
+		t.ClosedAt = nil
+	}
+
+	if o.verified != nil {
+		if *o.verified {
+			verified := now
+			t.VerifiedAt = &verified
+		} else {
+			t.VerifiedAt = nil
+		}
+	}
+
+	t.UpdatedAt = now
 
 	if err := s.storage.Save(t); err != nil {
 		return nil, err
@@ -399,8 +487,8 @@ func (s *Service) Delete(id string, deleteSubtasks bool) error {
 
 // List returns all tasks, optionally filtered
 // Note: Tasks returned do not include descriptions for performance (use Get for full task data)
-func (s *Service) List(status *Status, priority *Priority, taskType *string, parentID *string) []*Task {
-	return s.index.Filter(status, priority, taskType, parentID)
+func (s *Service) List(status *Status, priority *Priority, taskType *string, parentID *string, resolution *Resolution) []*Task {
+	return s.index.Filter(status, priority, taskType, parentID, resolution)
 }
 
 // GetNextTask returns the highest priority todo task
@@ -447,14 +535,32 @@ func (s *Service) StartTask(id string) (*Task, error) {
 	return s.Update(id, nil, nil, &status, nil, nil)
 }
 
-// CompleteTask moves a task from in_progress to done
-func (s *Service) CompleteTask(id string) (*Task, error) {
+// CompleteTask closes a task. Without options it is the original
+// in_progress -> done completion; with a resolution other than completed it
+// is the other way a task leaves the backlog - the work is not going to
+// happen - and the rules relax accordingly:
+//
+//   - the task may be closed straight from todo, because a task that stopped
+//     applying is usually one nobody ever started;
+//   - open subtasks are closed with the same resolution instead of blocking
+//     the parent, since a branch that no longer applies does not apply
+//     subtask by subtask either. Completion keeps refusing, unchanged.
+func (s *Service) CompleteTask(id string, opts ...UpdateOption) (*Task, error) {
 	t, err := s.Get(id)
 	if err != nil {
 		return nil, err
 	}
 
-	if t.Status != StatusInProgress {
+	o := buildUpdateOpts(opts)
+	resolution := ResolutionCompleted
+	if o.resolution != nil {
+		resolution = *o.resolution
+	}
+
+	if t.Closed() {
+		return nil, fmt.Errorf("task %s is already done (resolution: %s)", id, t.EffectiveResolution())
+	}
+	if resolution.Delivered() && t.Status != StatusInProgress {
 		return nil, fmt.Errorf("task %s is not in progress (current: %s)", id, t.Status)
 	}
 
@@ -467,12 +573,17 @@ func (s *Service) CompleteTask(id string) (*Task, error) {
 		}
 	}
 	if incompleteCount > 0 {
-		return nil, fmt.Errorf("cannot complete task %s: has %d incomplete subtask(s)", id, incompleteCount)
+		if resolution.Delivered() {
+			return nil, fmt.Errorf("cannot complete task %s: has %d incomplete subtask(s)", id, incompleteCount)
+		}
+		if err := s.closeSubtasksWith(id, subtasks, resolution); err != nil {
+			return nil, err
+		}
 	}
 
 	// Complete this task
 	status := StatusDone
-	completed, err := s.Update(id, nil, nil, &status, nil, nil)
+	completed, err := s.Update(id, nil, nil, &status, nil, nil, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -488,6 +599,10 @@ func (s *Service) CompleteTask(id string) (*Task, error) {
 			}
 		}
 		if allDone {
+			// The parent closes as completed even when the last subtask was
+			// closed as obsolete: from the parent's side every child has
+			// been dealt with. Give the parent its own resolution
+			// explicitly when that reading is wrong.
 			if _, err := s.Update(t.ParentID, nil, nil, &status, nil, nil); err != nil {
 				return nil, fmt.Errorf("failed to auto-complete parent: %w", err)
 			}
@@ -495,6 +610,22 @@ func (s *Service) CompleteTask(id string) (*Task, error) {
 	}
 
 	return completed, nil
+}
+
+// closeSubtasksWith closes every still-open subtask with the parent's
+// resolution, recording which parent pulled them along.
+func (s *Service) closeSubtasksWith(parentID string, subtasks []*Task, resolution Resolution) error {
+	note := fmt.Sprintf("closed as %s together with parent %s", resolution, parentID)
+	for _, sub := range subtasks {
+		if sub.Status == StatusDone {
+			continue
+		}
+		status := StatusDone
+		if _, err := s.Update(sub.ID, nil, nil, &status, nil, nil, WithResolution(resolution), WithResolutionNote(note)); err != nil {
+			return fmt.Errorf("failed to close subtask %s as %s: %w", sub.ID, resolution, err)
+		}
+	}
+	return nil
 }
 
 // BlockingInfo describes a task that is blocking another
@@ -703,10 +834,13 @@ func (s *Service) GetAutoArchiveCandidates() []*Task {
 	}
 	threshold := time.Now().UTC().AddDate(0, 0, -s.config.AutoArchive.AfterDays)
 
-	doneTasks := s.index.Filter(&[]Status{StatusDone}[0], nil, nil, nil)
+	doneTasks := s.index.Filter(&[]Status{StatusDone}[0], nil, nil, nil, nil)
 	var candidates []*Task
 	for _, t := range doneTasks {
-		if t.UpdatedAt.After(threshold) {
+		// A task closed without its work being done has nothing to review
+		// later, so it does not serve out the grace period the way a
+		// completed one does - it is archived on the next pass.
+		if t.EffectiveResolution().Delivered() && t.UpdatedAt.After(threshold) {
 			continue
 		}
 		// Only return top-level tasks or subtasks whose parent is also done
