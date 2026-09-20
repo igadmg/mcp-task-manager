@@ -4,8 +4,6 @@
       "command": "go",
       "args": [
         "run",
-        "-C",
-        "${CLAUDE_PLUGIN_ROOT}",
         "./cmd/mcp-task-manager"
       ],
       "env": {

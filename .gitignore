@@ -12,3 +12,12 @@ coverage.out
 
 # OS
 .DS_Store
+
+# Retired index cache file, removed on load but still written by old binaries
+.index.json
+
+# Scratch pointer written by the workflow skills
+.current_task
+
+# Downloaded maintainer tooling (Tailwind standalone CLI)
+/.cache/
