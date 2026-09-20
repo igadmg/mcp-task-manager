@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -23,7 +24,16 @@ const (
 	// Mainly a testing lever: in Claude Code the CLAUDE_PROJECT_DIR step
 	// always wins, so the roots step would otherwise never execute.
 	EnvRootSource = "MCP_ROOT_SOURCE"
+	// EnvWebEnabled turns the web dashboard on or off, parsed as a bool.
+	EnvWebEnabled = "MCP_WEB_ENABLED"
+	// EnvWebAddr sets the dashboard listen address. It never enables the
+	// dashboard on its own - the two levers stay orthogonal.
+	EnvWebAddr = "MCP_WEB_ADDR"
 )
+
+// DefaultWebAddr is loopback-only on purpose: the dashboard is unauthenticated,
+// so reaching it from another machine has to be the operator's explicit choice.
+const DefaultWebAddr = "127.0.0.1:7777"
 
 // Well-known names inside a project root.
 const (
@@ -85,11 +95,24 @@ type AutoArchiveConfig struct {
 	AfterDays int  `yaml:"after_days"`
 }
 
+// WebConfig holds the read-only web dashboard settings.
+type WebConfig struct {
+	// Enabled starts the dashboard alongside the MCP server.
+	Enabled bool `yaml:"enabled"`
+	// Addr is the listen address, host:port.
+	Addr string `yaml:"addr"`
+	// WithMCP additionally serves MCP over stdio from `serve web`. Off by
+	// default: a human running it in a terminal has a TTY on stdin, and a
+	// JSON-RPC reader there would eat their keystrokes as garbage frames.
+	WithMCP bool `yaml:"with_mcp"`
+}
+
 // Config holds application configuration
 type Config struct {
 	TaskTypes     []string          `yaml:"task_types"`
 	RelationTypes []string          `yaml:"relation_types,omitempty"`
 	AutoArchive   AutoArchiveConfig `yaml:"auto_archive"`
+	Web           WebConfig         `yaml:"web"`
 	// TasksDirName is the tasks directory, relative to the project root.
 	TasksDirName string      `yaml:"tasks_dir,omitempty"`
 	DataDir      string      `yaml:"-"` // Resolved tasks directory
@@ -111,6 +134,11 @@ func DefaultConfig() *Config {
 		AutoArchive: AutoArchiveConfig{
 			Enabled:   false,
 			AfterDays: 30,
+		},
+		Web: WebConfig{
+			Enabled: false,
+			Addr:    DefaultWebAddr,
+			WithMCP: false,
 		},
 	}
 }
@@ -154,6 +182,8 @@ func Resolve(roots RootsProvider) (*Config, error) {
 			return nil, fmt.Errorf("parse %s in %s: %w", ConfigFileName, res.Root, err)
 		}
 	}
+	cfg.applyDefaults()
+	cfg.applyEnvOverrides()
 
 	if res.TasksDir == "" {
 		name := relTasksDir
@@ -177,6 +207,42 @@ func Resolve(roots RootsProvider) (*Config, error) {
 	cfg.ProjectFound = isDir(res.TasksDir)
 	cfg.Resolution = res
 	return cfg, nil
+}
+
+// applyDefaults fills in what a partially written section left out.
+// Unmarshalling into an already-defaulted struct only protects keys the file
+// does not mention at all: writing `auto_archive: {enabled: true}` zeroes
+// after_days, and `web: {enabled: true}` zeroes the address.
+//
+// Booleans are deliberately left as written - false is a real value there.
+func (c *Config) applyDefaults() {
+	d := DefaultConfig()
+	if len(c.TaskTypes) == 0 {
+		c.TaskTypes = d.TaskTypes
+	}
+	if len(c.RelationTypes) == 0 {
+		c.RelationTypes = d.RelationTypes
+	}
+	if c.AutoArchive.AfterDays <= 0 {
+		c.AutoArchive.AfterDays = d.AutoArchive.AfterDays
+	}
+	if strings.TrimSpace(c.Web.Addr) == "" {
+		c.Web.Addr = d.Web.Addr
+	}
+}
+
+// applyEnvOverrides lets the environment override the web section. The two
+// variables are orthogonal: an address never enables the dashboard, and an
+// unparseable MCP_WEB_ENABLED is ignored rather than guessed at.
+func (c *Config) applyEnvOverrides() {
+	if addr := strings.TrimSpace(os.Getenv(EnvWebAddr)); addr != "" {
+		c.Web.Addr = addr
+	}
+	if raw := strings.TrimSpace(os.Getenv(EnvWebEnabled)); raw != "" {
+		if enabled, err := strconv.ParseBool(raw); err == nil {
+			c.Web.Enabled = enabled
+		}
+	}
 }
 
 // resolveRoot walks the resolution sources in priority order. It always

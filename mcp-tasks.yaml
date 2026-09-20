@@ -6,3 +6,6 @@ task_types:
 auto_archive:
   enabled: true
   after_days: 30
+web:
+  enabled: false
+  addr: 127.0.0.1:7777

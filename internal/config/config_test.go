@@ -536,7 +536,7 @@ func TestLoad_EnvVarLoadsConfigFromParentDir(t *testing.T) {
 // a test never picks up the root of the project it is being run from.
 func isolateEnv(t *testing.T) {
 	t.Helper()
-	for _, name := range []string{EnvTasksDir, EnvProjectDir, EnvClaudeProjectDir, EnvRootSource} {
+	for _, name := range []string{EnvTasksDir, EnvProjectDir, EnvClaudeProjectDir, EnvRootSource, EnvWebEnabled, EnvWebAddr} {
 		t.Setenv(name, "")
 		os.Unsetenv(name)
 	}
