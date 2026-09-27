@@ -93,7 +93,8 @@ resolution, and the resolution stays readable afterwards.
 
 Auto-archive changes in one place. A completed task serves out
 `auto_archive.after_days` because there is a window where someone may still
-want it in the active list. A task closed without its work being done has
+want it in the active list. The window is still counted from `updated_at`,
+not `closed_at`, so editing a completed task restarts it. A task closed without its work being done has
 nothing to review, so it is eligible on the next pass regardless of age
 (`GetAutoArchiveCandidates`, gated as before on `auto_archive.enabled`).
 
