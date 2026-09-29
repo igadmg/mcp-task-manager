@@ -743,6 +743,12 @@ func (s *Service) completeTask(id string, opts ...UpdateOption) (*Task, error) {
 		return nil, fmt.Errorf("cannot complete task %s: has %d incomplete subtask(s)", id, incompleteCount)
 	}
 
+	if s.git != nil && t.Branch != "" {
+		if done, handled, err := s.completeBranched(t, subtasks, resolution, o, opts); handled {
+			return done, err
+		}
+	}
+
 	var txn gitTxn
 	completed, closed, openParent, err := s.completeTaskRecords(&txn, t, subtasks, resolution, opts)
 	if err == nil {
@@ -798,6 +804,16 @@ func (s *Service) completeTaskRecords(txn *gitTxn, t *Task, subtasks []*Task, re
 		}
 	}
 	if !allDone {
+		return completed, closed, t.ParentID, nil
+	}
+	// A parent with a branch is delivered by its own completion, which
+	// squashes its wip branch into its final one (design 5.6): finishing
+	// the last subtask must not close it behind git's back.
+	parent, err := s.get(t.ParentID)
+	if err != nil {
+		return nil, nil, "", fmt.Errorf("parent task not found: %s", t.ParentID)
+	}
+	if parent.Branch != "" {
 		return completed, closed, t.ParentID, nil
 	}
 	// The parent closes as completed even when the last subtask was

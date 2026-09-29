@@ -153,14 +153,21 @@ func (s *Service) checkpoint(txn *gitTxn, h headState, owner, op string) (string
 	if owner == "" {
 		return h.sha, nil
 	}
-	w, committed, err := s.git.Snapshot(checkpointMsg(owner, op))
+	return s.snapshotHead(txn, h, checkpointMsg(owner, op))
+}
+
+// snapshotHead commits every uncommitted change outside the tasks directory
+// onto HEAD's branch, journaling the ref move and the index. It returns
+// HEAD's commit afterwards, unchanged when there was nothing to commit.
+func (s *Service) snapshotHead(txn *gitTxn, h headState, msg string) (string, error) {
+	w, committed, err := s.git.Snapshot(msg)
 	if err != nil {
-		return "", fmt.Errorf("checkpoint on %s: %w", h.branch, err)
+		return "", fmt.Errorf("snapshot on %s: %w", h.branch, err)
 	}
 	if !committed {
 		return h.sha, nil
 	}
-	txn.add(fmt.Sprintf("checkpoint %s on %s (was %s)", w, h.branch, h.sha), func() error {
+	txn.add(fmt.Sprintf("snapshot %s on %s (was %s)", w, h.branch, h.sha), func() error {
 		if err := s.git.MoveBranch(h.branch, h.sha, w); err != nil {
 			return err
 		}
@@ -176,6 +183,17 @@ func (s *Service) createBranch(txn *gitTxn, name, sha string) error {
 	}
 	txn.add(fmt.Sprintf("branch %s at %s", name, sha), func() error {
 		return s.git.DeleteBranch(name, sha)
+	})
+	return nil
+}
+
+// moveBranch moves a branch with compare-and-swap, journaling the move back.
+func (s *Service) moveBranch(txn *gitTxn, name, newSHA, oldSHA string) error {
+	if err := s.git.MoveBranch(name, newSHA, oldSHA); err != nil {
+		return fmt.Errorf("move branch %s: %w", name, err)
+	}
+	txn.add(fmt.Sprintf("branch %s moved %s -> %s", name, oldSHA, newSHA), func() error {
+		return s.git.MoveBranch(name, oldSHA, newSHA)
 	})
 	return nil
 }

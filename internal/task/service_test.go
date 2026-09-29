@@ -2041,3 +2041,24 @@ func TestNewServiceOptionsApplied(t *testing.T) {
 		t.Error("WithGit(nil) enabled branching")
 	}
 }
+
+// A parent with a branch is delivered by its own completion, so finishing
+// its last subtask must leave it open (design 5.6).
+func TestLastSubtaskDoesNotAutoCompleteBranchedParent(t *testing.T) {
+	svc := newResolutionService()
+	parent, _ := svc.Create("Parent", "", PriorityHigh, "feature", "", "")
+	sub, _ := svc.Create("Sub", "", PriorityHigh, "feature", parent.ID, "")
+	if _, err := svc.Update(parent.ID, nil, nil, nil, nil, nil, withBranch(branchInfo{Branch: strp("dev/wip/parent")})); err != nil {
+		t.Fatalf("Update(parent) error = %v", err)
+	}
+	if _, err := svc.StartTask(sub.ID); err != nil {
+		t.Fatalf("StartTask(sub) error = %v", err)
+	}
+
+	if _, err := svc.CompleteTask(sub.ID); err != nil {
+		t.Fatalf("CompleteTask(sub) error = %v", err)
+	}
+	if got, _ := svc.Get(parent.ID); got.Status != StatusInProgress {
+		t.Errorf("parent status = %s, want in_progress", got.Status)
+	}
+}
