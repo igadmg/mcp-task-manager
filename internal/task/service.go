@@ -104,6 +104,14 @@ type Service struct {
 	validTypes     []string
 	config         *config.Config
 
+	// git drives the branch-per-task workflow; nil means branching is off.
+	// identity names the user branches and the current-task pointer
+	// belong to, and current keeps that pointer (nil: none is kept). All
+	// three are write-once, set by ServiceOptions in NewService.
+	git      GitRepo
+	identity Identity
+	current  CurrentTaskStore
+
 	// mu serializes every task operation. It is the only lock over the
 	// index and the markdown storage, both of which are reachable solely
 	// through this type.
@@ -116,8 +124,8 @@ type Service struct {
 }
 
 // NewService creates a new task service
-func NewService(storage Storage, archiveStorage ArchiveStorage, fileStorage FileStorage, index Index, validTypes []string, cfg *config.Config) *Service {
-	return &Service{
+func NewService(storage Storage, archiveStorage ArchiveStorage, fileStorage FileStorage, index Index, validTypes []string, cfg *config.Config, opts ...ServiceOption) *Service {
+	s := &Service{
 		storage:        storage,
 		archiveStorage: archiveStorage,
 		fileStorage:    fileStorage,
@@ -125,13 +133,26 @@ func NewService(storage Storage, archiveStorage ArchiveStorage, fileStorage File
 		validTypes:     validTypes,
 		config:         cfg,
 	}
+	for _, apply := range opts {
+		apply(s)
+	}
+	return s
+}
+
+// BranchingEnabled reports whether start_task and complete_task drive git
+// branches for this project.
+//
+// Deliberately unlocked: s.git is write-once, assigned in NewService.
+func (s *Service) BranchingEnabled() bool {
+	return s.git != nil
 }
 
 // EnsureProjectExists checks that a project was found during config loading.
 // Should be called before read operations.
 //
 // Deliberately unlocked: it reads only s.config, which is write-once
-// (assigned in NewService and never again). Same for ProjectFound and Config.
+// (assigned in NewService and never again). Same for ProjectFound, Config and
+// BranchingEnabled (s.git).
 func (s *Service) EnsureProjectExists() error {
 	if s.config == nil || !s.config.ProjectFound {
 		// Name the directory that was looked at: an unresolved project
@@ -349,9 +370,11 @@ func (s *Service) subtaskCounts(taskID string) (total, done int) {
 type UpdateOption func(*updateOpts)
 
 type updateOpts struct {
-	resolution *Resolution
-	note       *string
-	verified   *bool
+	resolution    *Resolution
+	note          *string
+	verified      *bool
+	branch        *branchInfo
+	commitMessage *string
 }
 
 // WithResolution closes the task with the given resolution. Naming one implies
@@ -370,6 +393,12 @@ func WithResolutionNote(note string) UpdateOption {
 // task's own text was last checked against reality.
 func WithVerified(v bool) UpdateOption {
 	return func(o *updateOpts) { o.verified = &v }
+}
+
+// WithCommitMessage sets the message of the squash commit a completion
+// makes under git branching. Update ignores it; CompleteTask reads it.
+func WithCommitMessage(msg string) UpdateOption {
+	return func(o *updateOpts) { o.commitMessage = &msg }
 }
 
 func buildUpdateOpts(opts []UpdateOption) updateOpts {
@@ -462,6 +491,12 @@ func (s *Service) update(id string, title, description *string, status *Status, 
 		t.Resolution = ""
 		t.ResolutionNote = ""
 		t.ClosedAt = nil
+	}
+
+	// Branch fields are not touched by the status logic above: they survive
+	// a reopen, so a restarted task finds its branch again.
+	if o.branch != nil {
+		o.branch.apply(t)
 	}
 
 	if o.verified != nil {

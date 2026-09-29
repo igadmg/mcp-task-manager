@@ -117,6 +117,7 @@ func TestServiceNoSelfDeadlock(t *testing.T) {
 	svc.EnsureProjectExists()
 	svc.ProjectFound()
 	svc.Config()
+	svc.BranchingEnabled()
 	svc.Initialize()
 	svc.Create("fresh", "", PriorityLow, "feature", "", "fresh")
 	svc.CreateSubtask("fresh sub", "", PriorityLow, "bug", "fresh")

@@ -1945,3 +1945,99 @@ func TestService_Delete_DoesNotTouchFileStorage(t *testing.T) {
 		t.Error("Delete() should not call fileStorage directly - attached files are removed with the directory removal at the storage layer, not via a service-level cascade")
 	}
 }
+
+func strp(s string) *string { return &s }
+
+func TestUpdateWithBranchSetsFields(t *testing.T) {
+	svc := newResolutionService()
+	created, _ := svc.Create("Branched", "", PriorityHigh, "feature", "", "")
+
+	got, err := svc.Update(created.ID, nil, nil, nil, nil, nil, withBranch(branchInfo{
+		Branch:      strp("dev/wip/x"),
+		BaseBranch:  strp("main_patched"),
+		StartCommit: strp("abc"),
+	}))
+	if err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if got.Branch != "dev/wip/x" || got.BaseBranch != "main_patched" || got.StartCommit != "abc" {
+		t.Errorf("branch fields = (%q, %q, %q)", got.Branch, got.BaseBranch, got.StartCommit)
+	}
+
+	// A nil field is left alone, so moving one field keeps the others.
+	got, err = svc.Update(created.ID, nil, nil, nil, nil, nil, withBranch(branchInfo{StartCommit: strp("def")}))
+	if err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if got.Branch != "dev/wip/x" || got.StartCommit != "def" {
+		t.Errorf("after a partial update: Branch = %q, StartCommit = %q", got.Branch, got.StartCommit)
+	}
+}
+
+func TestReopenKeepsBranchFields(t *testing.T) {
+	svc := newResolutionService()
+	created, _ := svc.Create("Branched", "", PriorityHigh, "feature", "", "")
+	done := StatusDone
+	if _, err := svc.Update(created.ID, nil, nil, &done, nil, nil, WithResolution(ResolutionCompleted), withBranch(branchInfo{
+		Branch:       strp("dev/wip/x"),
+		BaseBranch:   strp("main_patched"),
+		StartCommit:  strp("abc"),
+		FinalBranch:  strp("dev/x"),
+		SquashCommit: strp("def"),
+	})); err != nil {
+		t.Fatalf("Update(done) error = %v", err)
+	}
+
+	todo := StatusTodo
+	got, err := svc.Update(created.ID, nil, nil, &todo, nil, nil)
+	if err != nil {
+		t.Fatalf("Update(todo) error = %v", err)
+	}
+	if got.Resolution != "" || got.ClosedAt != nil {
+		t.Errorf("reopen kept resolution %q / closed_at %v", got.Resolution, got.ClosedAt)
+	}
+	if got.Branch != "dev/wip/x" || got.BaseBranch != "main_patched" || got.StartCommit != "abc" || got.FinalBranch != "dev/x" || got.SquashCommit != "def" {
+		t.Errorf("reopen changed branch fields: %+v", got)
+	}
+}
+
+func TestWithCommitMessageIgnoredByUpdate(t *testing.T) {
+	svc := newResolutionService()
+	created, _ := svc.Create("Plain", "desc", PriorityHigh, "feature", "", "")
+
+	got, err := svc.Update(created.ID, nil, nil, nil, nil, nil, WithCommitMessage("feat: x"))
+	if err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if got.Title != "Plain" || got.Description != "desc" || got.Status != StatusTodo {
+		t.Errorf("WithCommitMessage changed the task: %+v", got)
+	}
+	if o := buildUpdateOpts([]UpdateOption{WithCommitMessage("feat: x")}); o.commitMessage == nil || *o.commitMessage != "feat: x" {
+		t.Errorf("WithCommitMessage did not record the message")
+	}
+}
+
+// nopGit satisfies GitRepo for tests that only check wiring; calling any
+// method panics.
+type nopGit struct{ GitRepo }
+
+func TestNewServiceOptionsApplied(t *testing.T) {
+	off := NewService(newMockStorage(), nil, nil, newMockIndex(), []string{"feature"}, nil)
+	if off.BranchingEnabled() {
+		t.Error("BranchingEnabled() = true without WithGit")
+	}
+
+	id := Identity{Name: "dev", FromGitEmail: true}
+	on := NewService(newMockStorage(), nil, nil, newMockIndex(), []string{"feature"}, nil,
+		WithGit(nopGit{}), WithIdentity(id))
+	if !on.BranchingEnabled() {
+		t.Error("BranchingEnabled() = false with WithGit")
+	}
+	if on.identity != id {
+		t.Errorf("identity = %+v, want %+v", on.identity, id)
+	}
+
+	if NewService(newMockStorage(), nil, nil, newMockIndex(), nil, nil, WithGit(nil)).BranchingEnabled() {
+		t.Error("WithGit(nil) enabled branching")
+	}
+}

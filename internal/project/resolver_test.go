@@ -9,11 +9,12 @@ import (
 	"testing"
 
 	"github.com/gpayer/mcp-task-manager/internal/config"
+	"github.com/gpayer/mcp-task-manager/internal/task"
 )
 
 func isolateEnv(t *testing.T) {
 	t.Helper()
-	for _, name := range []string{config.EnvTasksDir, config.EnvProjectDir, config.EnvClaudeProjectDir, config.EnvRootSource} {
+	for _, name := range []string{config.EnvTasksDir, config.EnvProjectDir, config.EnvClaudeProjectDir, config.EnvRootSource, config.EnvGitBranching} {
 		t.Setenv(name, "")
 		os.Unsetenv(name)
 	}
@@ -160,5 +161,47 @@ func TestPathFromURI(t *testing.T) {
 		if got := PathFromURI(tc.uri); got != tc.want {
 			t.Errorf("PathFromURI(%q) = %q, want %q", tc.uri, got, tc.want)
 		}
+	}
+}
+
+// buildProject builds a project rooted at a fresh directory whose
+// mcp-tasks.yaml holds yaml.
+func buildProject(t *testing.T, yaml string, extra ...task.ServiceOption) *Resolved {
+	t.Helper()
+	isolateEnv(t)
+	dir := projectDir(t)
+	if yaml != "" {
+		if err := os.WriteFile(filepath.Join(dir, config.ConfigFileName), []byte(yaml), 0o644); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+	}
+	t.Setenv(config.EnvProjectDir, dir)
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	resolved, err := Build(cfg, extra...)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	return resolved
+}
+
+func TestBuildBranchingOffHasNoGit(t *testing.T) {
+	if buildProject(t, "").Service.BranchingEnabled() {
+		t.Error("BranchingEnabled() = true with branching off by default")
+	}
+}
+
+func TestBuildBranchingOnInjectsGit(t *testing.T) {
+	// No git repository is needed: Build must not run git against it.
+	if !buildProject(t, "git:\n  branching: true\n").Service.BranchingEnabled() {
+		t.Error("BranchingEnabled() = false with git.branching: true")
+	}
+}
+
+func TestBuildExtraOptionsWin(t *testing.T) {
+	if buildProject(t, "git:\n  branching: true\n", task.WithGit(nil)).Service.BranchingEnabled() {
+		t.Error("an extra WithGit(nil) did not override the injected git")
 	}
 }

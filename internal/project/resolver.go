@@ -14,7 +14,11 @@ import (
 	"github.com/gpayer/mcp-task-manager/internal/config"
 	"github.com/gpayer/mcp-task-manager/internal/storage"
 	"github.com/gpayer/mcp-task-manager/internal/task"
+	"github.com/gpayer/mcp-task-manager/internal/vcs"
 )
+
+// *vcs.Repo is the production task.GitRepo.
+var _ task.GitRepo = (*vcs.Repo)(nil)
 
 // RootsFunc asks the client for its roots as filesystem paths. It returns an
 // error when the client does not support roots, which is not fatal: the
@@ -127,11 +131,33 @@ func (r *Resolver) resolve(ctx context.Context) (*Resolved, error) {
 // Build constructs the storage, index and task service for an already loaded
 // config, running Initialize. It is the single construction site for a
 // project: Resolver.resolve and the CLI both go through it.
-func Build(cfg *config.Config) (*Resolved, error) {
+//
+// The service always gets the per-user current-task store and the user's
+// identity (one `git config` call, falling back to the OS user). Git itself
+// is injected only when cfg.Git.Branching is set, and nothing here runs a
+// git command against the repository: a project that is not a repository
+// fails on its first start_task, not here. extra options apply last, so
+// tests can override any of these.
+func Build(cfg *config.Config, extra ...task.ServiceOption) (*Resolved, error) {
 	tasksDir := cfg.TasksDir()
 	mdStorage := storage.NewMarkdownStorage(tasksDir)
 	index := storage.NewIndex(tasksDir, mdStorage)
-	svc := task.NewService(mdStorage, mdStorage, mdStorage, index, cfg.TaskTypes, cfg)
+
+	root := tasksDir
+	if cfg.Resolution != nil && cfg.Resolution.Root != "" {
+		root = cfg.Resolution.Root
+	}
+	id := vcs.ResolveIdentity(root)
+	opts := []task.ServiceOption{
+		task.WithCurrentTaskStore(mdStorage),
+		task.WithIdentity(task.Identity{Name: id.Name, FromGitEmail: id.FromGitEmail}),
+	}
+	if cfg.Git.Branching {
+		opts = append(opts, task.WithGit(vcs.New(root, tasksDir)))
+	}
+	opts = append(opts, extra...)
+
+	svc := task.NewService(mdStorage, mdStorage, mdStorage, index, cfg.TaskTypes, cfg, opts...)
 	if err := svc.Initialize(); err != nil {
 		return nil, err
 	}
