@@ -42,6 +42,13 @@ type IndexEntry struct {
 	Resolution task.Resolution
 	ClosedAt   *time.Time
 	VerifiedAt *time.Time
+	// Branch, FinalBranch and SquashCommit ride along because the board and
+	// the parent completion gate read them from the index. BaseBranch and
+	// StartCommit stay out: only the detail view and the git flows need
+	// them, and those load the full task.
+	Branch       string
+	FinalBranch  string
+	SquashCommit string
 }
 
 // taskToEntry converts a Task to an IndexEntry
@@ -58,6 +65,10 @@ func taskToEntry(t *task.Task) *IndexEntry {
 		Resolution: t.Resolution,
 		ClosedAt:   t.ClosedAt,
 		VerifiedAt: t.VerifiedAt,
+
+		Branch:       t.Branch,
+		FinalBranch:  t.FinalBranch,
+		SquashCommit: t.SquashCommit,
 	}
 }
 
@@ -75,7 +86,12 @@ func entryToTask(e *IndexEntry) *task.Task {
 		Resolution: e.Resolution,
 		ClosedAt:   e.ClosedAt,
 		VerifiedAt: e.VerifiedAt,
-		// Description and ResolutionNote intentionally empty
+
+		Branch:       e.Branch,
+		FinalBranch:  e.FinalBranch,
+		SquashCommit: e.SquashCommit,
+		// Description, ResolutionNote, BaseBranch and StartCommit
+		// intentionally empty
 	}
 }
 
@@ -201,7 +217,7 @@ func (idx *Index) isStaleOnDisk() (bool, error) {
 
 	taskCount := 0
 	for _, entry := range entries {
-		if !entry.IsDir() || entry.Name() == "archive" {
+		if !entry.IsDir() || entry.Name() == "archive" || entry.Name() == UsersDirName {
 			continue
 		}
 

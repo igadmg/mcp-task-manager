@@ -58,6 +58,11 @@ func (s *MarkdownStorage) Save(t *task.Task) error {
 		ResolutionNote string          `yaml:"resolution_note,omitempty"`
 		ClosedAt       string          `yaml:"closed_at,omitempty"`
 		VerifiedAt     string          `yaml:"verified_at,omitempty"`
+		Branch         string          `yaml:"branch,omitempty"`
+		BaseBranch     string          `yaml:"base_branch,omitempty"`
+		StartCommit    string          `yaml:"start_commit,omitempty"`
+		FinalBranch    string          `yaml:"final_branch,omitempty"`
+		SquashCommit   string          `yaml:"squash_commit,omitempty"`
 	}{
 		ID:             t.ID,
 		ParentID:       t.ParentID,
@@ -72,6 +77,11 @@ func (s *MarkdownStorage) Save(t *task.Task) error {
 		ResolutionNote: t.ResolutionNote,
 		ClosedAt:       formatTime(t.ClosedAt),
 		VerifiedAt:     formatTime(t.VerifiedAt),
+		Branch:         t.Branch,
+		BaseBranch:     t.BaseBranch,
+		StartCommit:    t.StartCommit,
+		FinalBranch:    t.FinalBranch,
+		SquashCommit:   t.SquashCommit,
 	}
 
 	var buf bytes.Buffer
@@ -124,7 +134,7 @@ func (s *MarkdownStorage) LoadAll() ([]*task.Task, error) {
 
 	var tasks []*task.Task
 	for _, entry := range entries {
-		if !entry.IsDir() || entry.Name() == "archive" {
+		if !entry.IsDir() || entry.Name() == "archive" || entry.Name() == UsersDirName {
 			continue
 		}
 
@@ -178,6 +188,11 @@ func (s *MarkdownStorage) parse(data []byte) (*task.Task, error) {
 		ResolutionNote string          `yaml:"resolution_note"`
 		ClosedAt       string          `yaml:"closed_at"`
 		VerifiedAt     string          `yaml:"verified_at"`
+		Branch         string          `yaml:"branch"`
+		BaseBranch     string          `yaml:"base_branch"`
+		StartCommit    string          `yaml:"start_commit"`
+		FinalBranch    string          `yaml:"final_branch"`
+		SquashCommit   string          `yaml:"squash_commit"`
 	}
 	if err := yaml.Unmarshal(frontmatterBuf.Bytes(), &fm); err != nil {
 		return nil, err
@@ -211,6 +226,11 @@ func (s *MarkdownStorage) parse(data []byte) (*task.Task, error) {
 		ResolutionNote: fm.ResolutionNote,
 		ClosedAt:       parseOptionalTime(fm.ClosedAt),
 		VerifiedAt:     parseOptionalTime(fm.VerifiedAt),
+		Branch:         fm.Branch,
+		BaseBranch:     fm.BaseBranch,
+		StartCommit:    fm.StartCommit,
+		FinalBranch:    fm.FinalBranch,
+		SquashCommit:   fm.SquashCommit,
 	}, nil
 }
 

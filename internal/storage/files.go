@@ -45,6 +45,7 @@ var reservedTaskIDs = map[string]string{
 	"0":           `reserved as the "top-level" filter sentinel`,
 	"archive":     "reserved for the archive subdirectory",
 	".index.json": "reserved: the filename of the retired index cache file",
+	UsersDirName:  "reserved for per-user state (current-task pointers)",
 }
 
 // ValidateID checks a task id is safe to use as a directory/file name and

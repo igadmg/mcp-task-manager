@@ -73,6 +73,22 @@ type Task struct {
 	// open task whose description still names renamed symbols is stale in a
 	// way status cannot express. Nil means never checked since it was filed.
 	VerifiedAt *time.Time `yaml:"verified_at,omitempty" json:"verified_at,omitempty"`
+
+	// Branch is the task's wip branch, set when git branching started it.
+	// Branch fields survive a reopen.
+	Branch string `yaml:"branch,omitempty" json:"branch,omitempty"`
+	// BaseBranch is the branch Branch was cut from: the base branch for a
+	// top-level task, or the parent's wip branch for a subtask.
+	BaseBranch string `yaml:"base_branch,omitempty" json:"base_branch,omitempty"`
+	// StartCommit is the commit the wip branch currently sits on. A restart
+	// that rebases the branch rewrites it.
+	StartCommit string `yaml:"start_commit,omitempty" json:"start_commit,omitempty"`
+	// FinalBranch is the squashed branch, set on a delivered top-level
+	// completion.
+	FinalBranch string `yaml:"final_branch,omitempty" json:"final_branch,omitempty"`
+	// SquashCommit is the final commit of a top-level task, or the commit a
+	// subtask merged into its parent's wip branch.
+	SquashCommit string `yaml:"squash_commit,omitempty" json:"squash_commit,omitempty"`
 }
 
 // Closed reports whether the task has left the active flow.
