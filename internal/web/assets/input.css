@@ -44,4 +44,10 @@
     @apply flex min-w-0 flex-col rounded-xl border border-white/5 bg-white/[0.02] p-2;
   }
   .meta { @apply font-mono text-[11px] text-neutral-500; }
+
+  .copy-btn {
+    @apply shrink-0 cursor-pointer rounded px-1.5 py-0.5 font-mono text-[11px] leading-none
+           text-neutral-500 ring-1 ring-inset ring-white/10 transition
+           hover:bg-white/5 hover:text-neutral-200;
+  }
 }

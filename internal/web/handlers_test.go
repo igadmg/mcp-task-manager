@@ -198,11 +198,14 @@ func TestHealthz(t *testing.T) {
 
 func TestStaticAssetsServed(t *testing.T) {
 	h, _, _ := newTestHandler(t)
-	for _, path := range []string{"/static/app.css", "/static/htmx.min.js"} {
+	for _, path := range []string{"/static/app.css", "/static/htmx.min.js", "/static/app.js"} {
 		rec := get(t, h, path)
 		if rec.Code != http.StatusOK {
 			t.Errorf("GET %s = %d, want 200", path, rec.Code)
 			continue
+		}
+		if strings.HasSuffix(path, ".js") && !strings.Contains(rec.Header().Get("Content-Type"), "javascript") {
+			t.Errorf("GET %s Content-Type = %q, want JavaScript", path, rec.Header().Get("Content-Type"))
 		}
 		if rec.Body.Len() == 0 {
 			t.Errorf("GET %s served an empty file", path)
@@ -276,14 +279,21 @@ func TestEscaping(t *testing.T) {
 	if err := svc.WriteTaskFile("1", "x<script>.md", "x"); err != nil {
 		t.Fatalf("WriteTaskFile() error = %v", err)
 	}
+	// A branch name is text too, and it also lands in a data-copy attribute.
+	// Git would never create this one; a hand-edited record could hold it.
+	const branchPayload = `dev/wip/"><script>alert(2)</script>`
+	setBranch(t, dir(t, svc), "1", branchPayload, "")
 
 	for _, path := range []string{"/", "/board", "/tasks/1", "/tasks/1/panel"} {
 		body := get(t, h, path).Body.String()
-		if strings.Contains(body, payload) {
-			t.Errorf("%s rendered the payload unescaped", path)
+		if strings.Contains(body, payload) || strings.Contains(body, branchPayload) {
+			t.Errorf("%s rendered a payload unescaped", path)
 		}
 		if !strings.Contains(body, "&lt;script&gt;") {
 			t.Errorf("%s did not render the escaped payload at all", path)
+		}
+		if !strings.Contains(body, `data-copy="dev/wip/&#34;&gt;&lt;script&gt;alert(2)&lt;/script&gt;"`) {
+			t.Errorf("%s did not escape the branch inside data-copy", path)
 		}
 	}
 }

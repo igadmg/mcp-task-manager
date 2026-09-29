@@ -6,10 +6,10 @@ import (
 	"net/http"
 )
 
-// staticFS lists the two assets individually rather than static/*, so a stray
+// staticFS lists the assets individually rather than static/*, so a stray
 // source map or editor backup can never be shipped inside the binary.
 //
-//go:embed static/app.css static/htmx.min.js
+//go:embed static/app.css static/htmx.min.js static/app.js
 var staticFS embed.FS
 
 // staticHandler serves the embedded CSS and JS. They are part of the binary,

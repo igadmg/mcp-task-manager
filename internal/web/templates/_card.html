@@ -21,6 +21,13 @@
     </div>
   </a>
 
+  {{ if .Branch }}
+  <div class="mt-2 flex min-w-0 items-center gap-1.5">
+    <code class="chip chip-muted min-w-0 truncate font-mono" title="{{ .Branch }}">{{ .Branch }}</code>
+    <button type="button" class="copy-btn" data-copy="{{ .Branch }}" aria-label="Copy branch name">copy</button>
+  </div>
+  {{ end }}
+
   {{ if .Subtasks }}
   <div class="mt-2 space-y-1 border-l border-white/10 pl-2">
     {{ range .Subtasks }}

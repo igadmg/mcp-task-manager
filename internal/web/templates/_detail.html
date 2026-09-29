@@ -76,6 +76,31 @@
   </section>
   {{ end }}
 
+  {{ if or .Branch .FinalBranch }}
+  <section class="mt-5">
+    <h2 class="text-xs font-semibold uppercase tracking-wider text-neutral-400">Git</h2>
+    <dl class="mt-2 grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-4 gap-y-1.5">
+      {{ if .FinalBranch }}
+      <dt class="meta">final branch</dt>
+      <dd class="flex min-w-0 items-center gap-1.5">
+        <code class="chip chip-muted min-w-0 truncate font-mono" title="{{ .FinalBranch }}">{{ .FinalBranch }}</code>
+        <button type="button" class="copy-btn" data-copy="{{ .FinalBranch }}" aria-label="Copy final branch name">copy</button>
+      </dd>
+      {{ end }}
+      {{ if .Branch }}
+      <dt class="meta">wip branch</dt>
+      <dd class="flex min-w-0 items-center gap-1.5">
+        <code class="chip chip-muted min-w-0 truncate font-mono" title="{{ .Branch }}">{{ .Branch }}</code>
+        <button type="button" class="copy-btn" data-copy="{{ .Branch }}" aria-label="Copy wip branch name">copy</button>
+      </dd>
+      {{ end }}
+      {{ if .BaseBranch }}<dt class="meta">based on</dt><dd class="meta truncate text-neutral-400">{{ .BaseBranch }}</dd>{{ end }}
+      {{ if .StartCommit }}<dt class="meta">start commit</dt><dd class="meta text-neutral-400" title="{{ .StartCommit }}">{{ .StartCommitShort }}</dd>{{ end }}
+      {{ if .SquashCommit }}<dt class="meta">squash commit</dt><dd class="meta text-neutral-400" title="{{ .SquashCommit }}">{{ .SquashCommitShort }}</dd>{{ end }}
+    </dl>
+  </section>
+  {{ end }}
+
   {{ if .Files }}
   <section class="mt-5">
     <h2 class="text-xs font-semibold uppercase tracking-wider text-neutral-400">Attached files</h2>

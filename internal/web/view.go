@@ -57,6 +57,9 @@ type CardView struct {
 	Resolution   string
 	InProgress   bool
 	UpdatedAgo   string
+	// Branch is the git branch to show on the card: the final branch once
+	// the task has been delivered, its wip branch before that.
+	Branch string
 	// Subtasks are nested only when they sit in the same column as this
 	// card; otherwise they render standalone in their own column.
 	Subtasks []CardView
@@ -93,6 +96,16 @@ type DetailView struct {
 	ClosedAt       string
 	VerifiedAt     string
 	ResolutionNote string
+	// Git branch data, empty for a task git branching never touched.
+	// Commits are shown by a 12-character prefix, with the full SHA kept
+	// for the tooltip.
+	Branch            string
+	FinalBranch       string
+	BaseBranch        string
+	StartCommit       string
+	StartCommitShort  string
+	SquashCommit      string
+	SquashCommitShort string
 }
 
 // RelationView is one edge, seen from the task being displayed.
@@ -213,6 +226,7 @@ func newCardView(t *task.Task, snap *task.BoardSnapshot, now time.Time) CardView
 		Resolution:   string(t.EffectiveResolution()),
 		InProgress:   t.Status == task.StatusInProgress,
 		UpdatedAgo:   humanizeAgo(now, t.UpdatedAt),
+		Branch:       cardBranch(t),
 		createdAt:    t.CreatedAt,
 	}
 	if blockers := snap.Blocked[t.ID]; len(blockers) > 0 {
@@ -223,6 +237,23 @@ func newCardView(t *task.Task, snap *task.BoardSnapshot, now time.Time) CardView
 		c.SubtaskTotal, c.SubtaskDone = count.Total, count.Done
 	}
 	return c
+}
+
+// cardBranch is the branch a card names: where the delivered work is, or
+// failing that where the work is happening.
+func cardBranch(t *task.Task) string {
+	if t.FinalBranch != "" {
+		return t.FinalBranch
+	}
+	return t.Branch
+}
+
+// shortSHA is the 12-character prefix a commit is displayed by.
+func shortSHA(sha string) string {
+	if len(sha) > 12 {
+		return sha[:12]
+	}
+	return sha
 }
 
 func newBlockerViews(blockers []task.BlockingInfo) []BlockerView {
@@ -251,6 +282,7 @@ func newDetailView(d *task.TaskDetail, cfg *config.Config, titles map[string]str
 		UpdatedAgo:   humanizeAgo(now, t.UpdatedAt),
 		Blocked:      d.Blocked,
 		Blockers:     newBlockerViews(d.Blockers),
+		Branch:       cardBranch(t),
 		createdAt:    t.CreatedAt,
 	}
 	for _, sub := range d.Subtasks {
@@ -281,6 +313,14 @@ func newDetailView(d *task.TaskDetail, cfg *config.Config, titles map[string]str
 		CreatedAt:      t.CreatedAt.Format(timeFormat),
 		UpdatedAt:      t.UpdatedAt.Format(timeFormat),
 		ResolutionNote: t.ResolutionNote,
+
+		Branch:            t.Branch,
+		FinalBranch:       t.FinalBranch,
+		BaseBranch:        t.BaseBranch,
+		StartCommit:       t.StartCommit,
+		StartCommitShort:  shortSHA(t.StartCommit),
+		SquashCommit:      t.SquashCommit,
+		SquashCommitShort: shortSHA(t.SquashCommit),
 	}
 	if t.ClosedAt != nil {
 		v.ClosedAt = t.ClosedAt.Format(timeFormat)
