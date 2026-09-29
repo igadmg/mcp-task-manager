@@ -274,15 +274,15 @@ func (c *Config) applyEnvOverrides() {
 	if addr := strings.TrimSpace(os.Getenv(EnvWebAddr)); addr != "" {
 		c.Web.Addr = addr
 	}
-	if raw := strings.TrimSpace(os.Getenv(EnvWebEnabled)); raw != "" {
-		if enabled, err := strconv.ParseBool(raw); err == nil {
-			c.Web.Enabled = enabled
-		}
-	}
-	if raw := strings.TrimSpace(os.Getenv(EnvGitBranching)); raw != "" {
-		if enabled, err := strconv.ParseBool(raw); err == nil {
-			c.Git.Branching = enabled
-		}
+	envBool(EnvWebEnabled, &c.Web.Enabled)
+	envBool(EnvGitBranching, &c.Git.Branching)
+}
+
+// envBool sets *dst from the bool environment variable name, leaving it
+// alone when the variable is unset or unparseable.
+func envBool(name string, dst *bool) {
+	if v, err := strconv.ParseBool(strings.TrimSpace(os.Getenv(name))); err == nil {
+		*dst = v
 	}
 }
 

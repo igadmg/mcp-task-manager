@@ -35,7 +35,7 @@ func (s *Service) restartBranched(t *Task) (*Task, error) {
 	var target restartTarget
 	var line parentLine
 	if t.ParentID == "" {
-		target, err = s.restartBase(t)
+		target.onto, target.ontoTip, err = s.baseFor(t)
 	} else {
 		line, err = s.parentLineFor(t, h)
 		target.onto = line.branch
@@ -95,7 +95,7 @@ func (s *Service) restartBranched(t *Task) (*Task, error) {
 		// The rebased branch is the checked-out one: move it with the
 		// worktree, never behind git's back.
 		if err := s.git.ResetKeep(newTip); err != nil {
-			return nil, fmt.Errorf("move %s to %s: %w", t.Branch, shortSHA(newTip), err)
+			return nil, fmt.Errorf("move %s to %s: %w", t.Branch, ShortSHA(newTip), err)
 		}
 		return started, nil
 	})
@@ -121,46 +121,31 @@ func (s *Service) blockedError(id string) error {
 // wipTip returns the tip of t's wip branch after checking it still grows
 // from t's recorded start commit.
 func (s *Service) wipTip(t *Task) (string, error) {
-	tip, ok, err := s.git.BranchSHA(t.Branch)
+	tip, err := s.lineTip(t.Branch)
 	if err != nil {
+		return "", fmt.Errorf("task %s: %w", t.ID, err)
+	}
+	if err := s.checkStartCommit(t, tip, "rebase it by hand or delete it to start task "+t.ID+" afresh"); err != nil {
 		return "", err
-	}
-	if !ok {
-		return "", fmt.Errorf("the branch %s of task %s no longer exists", t.Branch, t.ID)
-	}
-	if _, err := s.git.ResolveCommit(t.StartCommit); err != nil {
-		return "", fmt.Errorf("the recorded start commit %q of task %s does not resolve: %w", t.StartCommit, t.ID, err)
-	}
-	ok, err = s.git.IsAncestor(t.StartCommit, tip)
-	if err != nil {
-		return "", err
-	}
-	if !ok {
-		return "", fmt.Errorf("the history of %s no longer contains its recorded start %s; rebase it by hand or delete it to start task %s afresh",
-			t.Branch, shortSHA(t.StartCommit), t.ID)
 	}
 	return tip, nil
 }
 
-// restartBase is where a top-level task is replayed onto: the base branch
-// it started from if that still exists, otherwise the first existing one.
-func (s *Service) restartBase(t *Task) (restartTarget, error) {
-	if t.BaseBranch != "" {
-		if tip, ok, err := s.git.BranchSHA(t.BaseBranch); err != nil {
-			return restartTarget{}, err
-		} else if ok {
-			return restartTarget{onto: t.BaseBranch, ontoTip: tip}, nil
-		}
+// checkStartCommit refuses when t's recorded start commit does not resolve
+// or is no longer in the history of tip, the tip of t's wip branch. hint
+// says what to do about the latter.
+func (s *Service) checkStartCommit(t *Task, tip, hint string) error {
+	if _, err := s.git.ResolveCommit(t.StartCommit); err != nil {
+		return fmt.Errorf("the recorded start commit %q of task %s does not resolve: %w", t.StartCommit, t.ID, err)
 	}
-	bases := s.baseBranches()
-	base, tip, err := s.git.FirstExistingBranch(bases)
+	ok, err := s.git.IsAncestor(t.StartCommit, tip)
 	if err != nil {
-		return restartTarget{}, err
+		return err
 	}
-	if base == "" {
-		return restartTarget{}, fmt.Errorf("none of the base branches %v exist; set git.base_branches", bases)
+	if !ok {
+		return fmt.Errorf("the history of %s no longer contains its recorded start %s; %s", t.Branch, ShortSHA(t.StartCommit), hint)
 	}
-	return restartTarget{onto: base, ontoTip: tip}, nil
+	return nil
 }
 
 // parentLine is the parent wip branch a subtask starts or restarts on.
@@ -191,10 +176,8 @@ func (s *Service) parentLineFor(t *Task, h headState) (parentLine, error) {
 		if p.Branch == "" {
 			return parentLine{}, fmt.Errorf("parent %s has no branch; start it first", p.ID)
 		}
-		if _, ok, err := s.git.BranchSHA(p.Branch); err != nil {
-			return parentLine{}, err
-		} else if !ok {
-			return parentLine{}, fmt.Errorf("the branch %s of parent task %s no longer exists", p.Branch, p.ID)
+		if _, err := s.lineTip(p.Branch); err != nil {
+			return parentLine{}, fmt.Errorf("parent task %s: %w", p.ID, err)
 		}
 		return parentLine{branch: p.Branch}, nil
 	}
@@ -210,7 +193,8 @@ func (s *Service) parentLineFor(t *Task, h headState) (parentLine, error) {
 			if err != nil {
 				return parentLine{}, err
 			}
-			pTarget, err := s.restartBase(p)
+			var pTarget restartTarget
+			pTarget.onto, pTarget.ontoTip, err = s.baseFor(p)
 			if err != nil {
 				return parentLine{}, err
 			}
@@ -228,7 +212,7 @@ func (s *Service) parentLineFor(t *Task, h headState) (parentLine, error) {
 		return parentLine{}, fmt.Errorf("starting parent task %s: %w", p.ID, err)
 	}
 	return parentLine{branch: plan.wip, carryFrom: plan.base, step: func(txn *gitTxn) error {
-		if _, err := s.startFreshRecords(txn, p, plan); err != nil {
+		if _, err := s.startOnNewBranch(txn, p, plan.wip, plan.base, plan.baseTip); err != nil {
 			return fmt.Errorf("starting parent task %s: %w", p.ID, err)
 		}
 		return nil
@@ -269,11 +253,7 @@ func (s *Service) restartRecords(txn *gitTxn, t *Task, target restartTarget, old
 			return "", nil, err
 		}
 	}
-	if err := s.captureTask(txn, t.ID); err != nil {
-		return "", nil, err
-	}
-	status := StatusInProgress
-	started, err := s.update(t.ID, nil, nil, &status, nil, nil, withBranch(branchInfo{
+	started, err := s.updateStatus(txn, t.ID, StatusInProgress, withBranch(branchInfo{
 		BaseBranch:  &target.onto,
 		StartCommit: &target.ontoTip,
 	}))

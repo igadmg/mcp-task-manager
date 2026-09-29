@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -92,11 +93,11 @@ func subWipBranch(parentBranch, sub string) string {
 // "wip" segment. It works off the stored branch, so a later change of the
 // user's email cannot desynchronize the two.
 func finalBranch(wip string) (string, error) {
-	i := strings.Index(wip, "/wip/")
-	if i < 0 {
+	user, name, ok := strings.Cut(wip, "/wip/")
+	if !ok {
 		return "", fmt.Errorf("branch %q is not a wip branch (no /wip/ segment)", wip)
 	}
-	return wip[:i] + "/" + wip[i+len("/wip/"):], nil
+	return user + "/" + name, nil
 }
 
 // commitMessage is the message of a squash commit: override verbatim when
@@ -149,27 +150,31 @@ func closedAsMsg(id string, r Resolution) string {
 // changes and record writes: every applied step registers its undo, and a
 // failure later in the flow rolls back everything already done.
 type gitTxn struct {
-	undo  []func() error
-	names []string
+	steps []txnStep
+}
+
+// txnStep is one applied step and its undo.
+type txnStep struct {
+	name string
+	undo func() error
 }
 
 // add registers the undo of a step that has just been applied.
 func (x *gitTxn) add(name string, f func() error) {
-	x.undo = append(x.undo, f)
-	x.names = append(x.names, name)
+	x.steps = append(x.steps, txnStep{name: name, undo: f})
 }
 
 // rollback runs every undo in reverse order, including after one fails, and
 // reports every step it could not undo.
 func (x *gitTxn) rollback() error {
 	var errs []error
-	for i := len(x.undo) - 1; i >= 0; i-- {
-		if err := x.undo[i](); err != nil {
-			errs = append(errs, fmt.Errorf("undo %s: %w", x.names[i], err))
+	for _, st := range slices.Backward(x.steps) {
+		if err := st.undo(); err != nil {
+			errs = append(errs, fmt.Errorf("undo %s: %w", st.name, err))
 		}
 	}
-	total := len(x.undo)
-	x.undo, x.names = nil, nil
+	total := len(x.steps)
+	x.steps = nil
 	if len(errs) == 0 {
 		return nil
 	}
@@ -196,6 +201,14 @@ func (s *Service) captureTask(txn *gitTxn, id string) error {
 		return nil
 	})
 	return nil
+}
+
+// updateStatus moves task id to status, journaling its record first.
+func (s *Service) updateStatus(txn *gitTxn, id string, status Status, opts ...UpdateOption) (*Task, error) {
+	if err := s.captureTask(txn, id); err != nil {
+		return nil, err
+	}
+	return s.update(id, nil, nil, &status, nil, nil, opts...)
 }
 
 // capturePointer records user's current-task pointer as it is now,

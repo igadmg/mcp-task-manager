@@ -74,17 +74,7 @@ func (s *MarkdownStorage) WriteFile(taskID string, filename, content string) err
 		return err
 	}
 
-	dir := s.taskDir(taskID)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
-	}
-
-	path := filepath.Join(dir, filename)
-	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, []byte(content), 0644); err != nil {
-		return err
-	}
-	return os.Rename(tmpPath, path)
+	return writeFileAtomic(filepath.Join(s.taskDir(taskID), filename), []byte(content))
 }
 
 // ReadFile returns the content of a named file attached to a task,

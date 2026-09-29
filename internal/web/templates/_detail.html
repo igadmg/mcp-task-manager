@@ -83,15 +83,13 @@
       {{ if .FinalBranch }}
       <dt class="meta">final branch</dt>
       <dd class="flex min-w-0 items-center gap-1.5">
-        <code class="chip chip-muted min-w-0 truncate font-mono" title="{{ .FinalBranch }}">{{ .FinalBranch }}</code>
-        <button type="button" class="copy-btn" data-copy="{{ .FinalBranch }}" aria-label="Copy final branch name">copy</button>
+        {{ template "branch" .FinalBranch }}
       </dd>
       {{ end }}
       {{ if .Branch }}
       <dt class="meta">wip branch</dt>
       <dd class="flex min-w-0 items-center gap-1.5">
-        <code class="chip chip-muted min-w-0 truncate font-mono" title="{{ .Branch }}">{{ .Branch }}</code>
-        <button type="button" class="copy-btn" data-copy="{{ .Branch }}" aria-label="Copy wip branch name">copy</button>
+        {{ template "branch" .Branch }}
       </dd>
       {{ end }}
       {{ if .BaseBranch }}<dt class="meta">based on</dt><dd class="meta truncate text-neutral-400">{{ .BaseBranch }}</dd>{{ end }}

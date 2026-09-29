@@ -1,0 +1,5 @@
+{{/* A branch name with a client-side copy button (static/app.js). */}}
+{{ define "branch" }}
+<code class="chip chip-muted min-w-0 truncate font-mono" title="{{ . }}">{{ . }}</code>
+<button type="button" class="copy-btn" data-copy="{{ . }}" aria-label="Copy branch name">copy</button>
+{{ end }}

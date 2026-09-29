@@ -94,16 +94,20 @@ func (s *MarkdownStorage) Save(t *task.Task) error {
 	buf.WriteString("---\n\n")
 	buf.WriteString(t.Description)
 
-	if err := os.MkdirAll(s.taskDir(t.ID), 0755); err != nil {
-		return err
-	}
+	return writeFileAtomic(s.taskPath(t.ID), buf.Bytes())
+}
 
-	// Atomic write: write to temp, then rename
-	tmpPath := s.taskPath(t.ID) + ".tmp"
-	if err := os.WriteFile(tmpPath, buf.Bytes(), 0644); err != nil {
+// writeFileAtomic writes data to path through a temp file and a rename, so a
+// reader never sees a half-written file. It creates path's directory.
+func writeFileAtomic(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
-	return os.Rename(tmpPath, s.taskPath(t.ID))
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 // Load reads a task from a markdown file

@@ -248,14 +248,6 @@ func cardBranch(t *task.Task) string {
 	return t.Branch
 }
 
-// shortSHA is the 12-character prefix a commit is displayed by.
-func shortSHA(sha string) string {
-	if len(sha) > 12 {
-		return sha[:12]
-	}
-	return sha
-}
-
 func newBlockerViews(blockers []task.BlockingInfo) []BlockerView {
 	out := make([]BlockerView, 0, len(blockers))
 	for _, b := range blockers {
@@ -318,9 +310,9 @@ func newDetailView(d *task.TaskDetail, cfg *config.Config, titles map[string]str
 		FinalBranch:       t.FinalBranch,
 		BaseBranch:        t.BaseBranch,
 		StartCommit:       t.StartCommit,
-		StartCommitShort:  shortSHA(t.StartCommit),
+		StartCommitShort:  task.ShortSHA(t.StartCommit),
 		SquashCommit:      t.SquashCommit,
-		SquashCommitShort: shortSHA(t.SquashCommit),
+		SquashCommitShort: task.ShortSHA(t.SquashCommit),
 	}
 	if t.ClosedAt != nil {
 		v.ClosedAt = t.ClosedAt.Format(timeFormat)

@@ -1,8 +1,6 @@
 package storage
 
 import (
-	"bufio"
-	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,10 +33,8 @@ func (s *MarkdownStorage) ReadCurrentTask(user string) (id string, ok bool, err 
 		}
 		return "", false, err
 	}
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	if scanner.Scan() {
-		id = strings.TrimSpace(scanner.Text())
-	}
+	first, _, _ := strings.Cut(string(data), "\n")
+	id = strings.TrimSpace(first)
 	return id, id != "", nil
 }
 
@@ -47,15 +43,7 @@ func (s *MarkdownStorage) WriteCurrentTask(user, id string) error {
 	if err := validatePathSegment("user", user); err != nil {
 		return err
 	}
-	path := s.CurrentTaskPath(user)
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return err
-	}
-	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, []byte(id+"\n"), 0644); err != nil {
-		return err
-	}
-	return os.Rename(tmpPath, path)
+	return writeFileAtomic(s.CurrentTaskPath(user), []byte(id+"\n"))
 }
 
 // RemoveCurrentTask clears user's pointer. Removing an absent pointer is not

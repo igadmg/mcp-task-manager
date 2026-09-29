@@ -639,13 +639,8 @@ func (s *Service) startTask(id string) (*Task, error) {
 		return nil, fmt.Errorf("task %s is not in todo status (current: %s)", id, t.Status)
 	}
 
-	// Check if task is blocked
-	if blocked, blockers := s.isBlocked(id); blocked {
-		var parts []string
-		for _, b := range blockers {
-			parts = append(parts, fmt.Sprintf("%s (%s)", b.TaskID, b.Status))
-		}
-		return nil, fmt.Errorf("task %s is blocked by tasks: %s", id, strings.Join(parts, ", "))
+	if err := s.blockedError(id); err != nil {
+		return nil, err
 	}
 
 	if s.git != nil {
@@ -677,21 +672,13 @@ func (s *Service) startTaskRecords(txn *gitTxn, t *Task) (*Task, error) {
 			return nil, fmt.Errorf("parent task not found: %s", t.ParentID)
 		}
 		if parent.Status == StatusTodo {
-			if err := s.captureTask(txn, t.ParentID); err != nil {
-				return nil, err
-			}
-			status := StatusInProgress
-			if _, err := s.update(t.ParentID, nil, nil, &status, nil, nil); err != nil {
+			if _, err := s.updateStatus(txn, t.ParentID, StatusInProgress); err != nil {
 				return nil, fmt.Errorf("failed to start parent task: %w", err)
 			}
 		}
 	}
 
-	if err := s.captureTask(txn, t.ID); err != nil {
-		return nil, err
-	}
-	status := StatusInProgress
-	return s.update(t.ID, nil, nil, &status, nil, nil)
+	return s.updateStatus(txn, t.ID, StatusInProgress)
 }
 
 // withRollback reports a failed flow together with anything its rollback
@@ -758,14 +745,9 @@ func (s *Service) completeTask(id string, opts ...UpdateOption) (*Task, error) {
 	}
 
 	var txn gitTxn
-	completed, closed, openParent, err := s.completeTaskRecords(&txn, t, subtasks, resolution, opts)
-	if err == nil {
-		err = s.clearPointerIf(&txn, openParent, closed...)
-	}
-	if err != nil {
-		return nil, withRollback(err, txn.rollback())
-	}
-	return completed, nil
+	return runFlow(&txn, func() (*Task, error) {
+		return s.completeRecords(&txn, t, subtasks, resolution, opts)
+	})
 }
 
 // completeTaskRecords writes the records of a completion: the open
@@ -788,11 +770,7 @@ func (s *Service) completeTaskRecords(txn *gitTxn, t *Task, subtasks []*Task, re
 	}
 
 	// Complete this task
-	if err := s.captureTask(txn, t.ID); err != nil {
-		return nil, nil, "", err
-	}
-	status := StatusDone
-	completed, err = s.update(t.ID, nil, nil, &status, nil, nil, opts...)
+	completed, err = s.updateStatus(txn, t.ID, StatusDone, opts...)
 	if err != nil {
 		return nil, nil, "", err
 	}
@@ -828,10 +806,7 @@ func (s *Service) completeTaskRecords(txn *gitTxn, t *Task, subtasks []*Task, re
 	// closed as obsolete: from the parent's side every child has
 	// been dealt with. Give the parent its own resolution
 	// explicitly when that reading is wrong.
-	if err := s.captureTask(txn, t.ParentID); err != nil {
-		return nil, nil, "", err
-	}
-	if _, err := s.update(t.ParentID, nil, nil, &status, nil, nil); err != nil {
+	if _, err := s.updateStatus(txn, t.ParentID, StatusDone); err != nil {
 		return nil, nil, "", fmt.Errorf("failed to auto-complete parent: %w", err)
 	}
 	return completed, append(closed, t.ParentID), "", nil

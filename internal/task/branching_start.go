@@ -57,6 +57,33 @@ func (s *Service) baseBranches() []string {
 	return s.config.Git.BaseBranches
 }
 
+// firstBase returns the first configured base branch that exists, with its
+// tip.
+func (s *Service) firstBase() (name, tip string, err error) {
+	bases := s.baseBranches()
+	name, tip, err = s.git.FirstExistingBranch(bases)
+	if err != nil {
+		return "", "", err
+	}
+	if name == "" {
+		return "", "", fmt.Errorf("none of the base branches %v exist; set git.base_branches", bases)
+	}
+	return name, tip, nil
+}
+
+// baseFor is the base branch top-level task t grows from now: the one it
+// started from if that still exists, otherwise the first existing one.
+func (s *Service) baseFor(t *Task) (name, tip string, err error) {
+	if t.BaseBranch != "" {
+		if tip, ok, err := s.git.BranchSHA(t.BaseBranch); err != nil {
+			return "", "", err
+		} else if ok {
+			return t.BaseBranch, tip, nil
+		}
+	}
+	return s.firstBase()
+}
+
 // freshPlan is where a fresh top-level start branches from and what it
 // creates.
 type freshPlan struct {
@@ -70,13 +97,9 @@ type freshPlan struct {
 // taken. The final branch may already exist only as t's own, left by an
 // earlier completion of t.
 func (s *Service) planFresh(t *Task) (freshPlan, error) {
-	bases := s.baseBranches()
-	base, tip, err := s.git.FirstExistingBranch(bases)
+	base, tip, err := s.firstBase()
 	if err != nil {
 		return freshPlan{}, err
-	}
-	if base == "" {
-		return freshPlan{}, fmt.Errorf("none of the base branches %v exist; set git.base_branches", bases)
 	}
 	wip := wipBranch(s.identity.Name, shortName(t))
 	final, err := finalBranch(wip)
@@ -256,7 +279,7 @@ func (s *Service) startFresh(t *Task) (*Task, error) {
 		if _, err := s.checkpoint(&txn, h, owner, op); err != nil {
 			return nil, err
 		}
-		started, err := s.startFreshRecords(&txn, t, plan)
+		started, err := s.startOnNewBranch(&txn, t, plan.wip, plan.base, plan.baseTip)
 		if err != nil {
 			return nil, err
 		}
@@ -268,20 +291,17 @@ func (s *Service) startFresh(t *Task) (*Task, error) {
 	return s.afterSwitch(started), nil
 }
 
-// startFreshRecords creates t's wip branch and records it, without
-// switching: a subtask start reuses it to start a todo parent.
-func (s *Service) startFreshRecords(txn *gitTxn, t *Task, plan freshPlan) (*Task, error) {
-	if err := s.createBranch(txn, plan.wip, plan.baseTip); err != nil {
+// startOnNewBranch creates t's wip branch at tip (the tip of base), starts
+// t on it and points the user at t, without switching: the caller switches,
+// and a subtask start reuses it to start a todo parent.
+func (s *Service) startOnNewBranch(txn *gitTxn, t *Task, wip, base, tip string) (*Task, error) {
+	if err := s.createBranch(txn, wip, tip); err != nil {
 		return nil, err
 	}
-	if err := s.captureTask(txn, t.ID); err != nil {
-		return nil, err
-	}
-	status := StatusInProgress
-	started, err := s.update(t.ID, nil, nil, &status, nil, nil, withBranch(branchInfo{
-		Branch:      &plan.wip,
-		BaseBranch:  &plan.base,
-		StartCommit: &plan.baseTip,
+	started, err := s.updateStatus(txn, t.ID, StatusInProgress, withBranch(branchInfo{
+		Branch:      &wip,
+		BaseBranch:  &base,
+		StartCommit: &tip,
 	}))
 	if err != nil {
 		return nil, err
@@ -301,11 +321,8 @@ func (s *Service) startSub(t *Task) (*Task, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parent task not found: %s", t.ParentID)
 	}
-	switch {
-	case p.Status == StatusInProgress && p.Branch == "":
+	if p.Status == StatusInProgress && p.Branch == "" {
 		return s.startPlain(t)
-	case p.Status == StatusDone:
-		return nil, fmt.Errorf("parent task %s is done; reopen it before starting subtask %s", p.ID, t.ID)
 	}
 
 	h, err := s.preflightGit()
@@ -344,22 +361,8 @@ func (s *Service) startSub(t *Task) (*Task, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := s.createBranch(&txn, subWip, ptip); err != nil {
-			return nil, err
-		}
-		if err := s.captureTask(&txn, t.ID); err != nil {
-			return nil, err
-		}
-		status := StatusInProgress
-		started, err := s.update(t.ID, nil, nil, &status, nil, nil, withBranch(branchInfo{
-			Branch:      &subWip,
-			BaseBranch:  &parentBranch,
-			StartCommit: &ptip,
-		}))
+		started, err := s.startOnNewBranch(&txn, t, subWip, parentBranch, ptip)
 		if err != nil {
-			return nil, err
-		}
-		if err := s.setPointer(&txn, t.ID); err != nil {
 			return nil, err
 		}
 		return started, s.switchTo(subWip)

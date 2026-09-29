@@ -44,15 +44,8 @@ func (s *Service) preflightWip(t *Task) (headState, error) {
 	if h.branch != t.Branch {
 		return headState{}, fmt.Errorf("task %s works on branch %s, but HEAD is %s; switch to %s first", t.ID, t.Branch, h.branch, t.Branch)
 	}
-	if _, err := s.git.ResolveCommit(t.StartCommit); err != nil {
-		return headState{}, fmt.Errorf("the recorded start commit %q of task %s does not resolve: %w", t.StartCommit, t.ID, err)
-	}
-	ok, err := s.git.IsAncestor(t.StartCommit, h.sha)
-	if err != nil {
+	if err := s.checkStartCommit(t, h.sha, "restart task "+t.ID+" to rebase it"); err != nil {
 		return headState{}, err
-	}
-	if !ok {
-		return headState{}, fmt.Errorf("the history of %s no longer contains its recorded start %s; restart task %s to rebase it", t.Branch, shortSHA(t.StartCommit), t.ID)
 	}
 	return h, nil
 }
@@ -74,18 +67,18 @@ func (s *Service) subtaskGate(p *Task, tip string) error {
 		}
 		ok, err := s.git.IsAncestor(sub.SquashCommit, tip)
 		if err != nil {
-			return fmt.Errorf("checking subtask %s's work (%s) against %s: %w", sub.ID, shortSHA(sub.SquashCommit), p.Branch, err)
+			return fmt.Errorf("checking subtask %s's work (%s) against %s: %w", sub.ID, ShortSHA(sub.SquashCommit), p.Branch, err)
 		}
 		if !ok {
 			return fmt.Errorf("subtask %s was completed but its work (%s) is not in %s; it may have been reset away. Restart %s or merge it back",
-				sub.ID, shortSHA(sub.SquashCommit), p.Branch, sub.ID)
+				sub.ID, ShortSHA(sub.SquashCommit), p.Branch, sub.ID)
 		}
 	}
 	return nil
 }
 
-// shortSHA abbreviates a commit id for messages.
-func shortSHA(sha string) string {
+// ShortSHA abbreviates a commit id for display: its first 12 characters.
+func ShortSHA(sha string) string {
 	if len(sha) > 12 {
 		return sha[:12]
 	}
@@ -183,12 +176,9 @@ func (s *Service) completeSubDelivered(t, p *Task, resolution Resolution, o upda
 	if err != nil {
 		return nil, err
 	}
-	ptip, ok, err := s.git.BranchSHA(p.Branch)
+	ptip, err := s.lineTip(p.Branch)
 	if err != nil {
-		return nil, err
-	}
-	if !ok {
-		return nil, fmt.Errorf("the branch %s of parent task %s no longer exists", p.Branch, p.ID)
+		return nil, fmt.Errorf("parent task %s: %w", p.ID, err)
 	}
 	msg := commitMessageFor(t, o)
 
@@ -269,27 +259,14 @@ func (s *Service) returnTarget(t *Task) (string, error) {
 		if p.Branch == "" {
 			return "", fmt.Errorf("no branch to return to: parent task %s has no branch", p.ID)
 		}
-		if _, ok, err := s.git.BranchSHA(p.Branch); err != nil {
-			return "", err
-		} else if !ok {
-			return "", fmt.Errorf("no branch to return to: the branch %s of parent task %s no longer exists", p.Branch, p.ID)
+		if _, err := s.lineTip(p.Branch); err != nil {
+			return "", fmt.Errorf("no branch to return to: parent task %s: %w", p.ID, err)
 		}
 		return p.Branch, nil
 	}
-	if t.BaseBranch != "" {
-		if _, ok, err := s.git.BranchSHA(t.BaseBranch); err != nil {
-			return "", err
-		} else if ok {
-			return t.BaseBranch, nil
-		}
-	}
-	bases := s.baseBranches()
-	base, _, err := s.git.FirstExistingBranch(bases)
+	base, _, err := s.baseFor(t)
 	if err != nil {
-		return "", err
-	}
-	if base == "" {
-		return "", fmt.Errorf("no branch to return to: %s is gone and none of the base branches %v exist", t.BaseBranch, bases)
+		return "", fmt.Errorf("no branch to return to: %w", err)
 	}
 	return base, nil
 }
