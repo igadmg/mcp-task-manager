@@ -1,0 +1,850 @@
+# Plan: git-branch-per-task
+
+### Planning Summary
+
+This plan turns the approved design (`tasks/git-branch-per-task/design`, revised) into **12 phases, one commit each**. Every phase ends with this gate green:
+
+```
+gofmt -l . (empty) && go build ./... && go vet ./... && go test -race ./...
+```
+
+Also check LSP diagnostics on every touched file, as `~/.claude/CLAUDE.md` requires. Branching is **off by default** in every phase, so nothing that exists today regresses partway through. The only behaviour visible with branching off is the per-user pointer file, which arrives in P5 and which the design specifies.
+
+**This task is implemented the old way.** `git-branch-per-task` was started on `main_patched` before the feature existed and has no `branch` field. No phase enables `git.branching` in this repository. Implementation agents commit on the current branch as usual. They must not create per-task branches and must not call mutating task-manager MCP tools except as the workflow directs.
+
+**Assumptions (defaults chosen for the design's open questions; the user may still override them):**
+1. **`.users/` in this repository.** `tasks/.users/` is added to this repo's `.gitignore`, so per-user pointers are not committed here. The legacy `.current_task` line stays. This supersedes the design's line "`.gitignore` unchanged".
+2. **Dirty foreign branch on start.** `start_task` refuses and lists up to 20 paths, as design 5.1 says.
+3. **Re-completion after a push.** The existing final branch recorded in `T.FinalBranch` is moved with compare-and-swap. The user force-pushes if needed. No suffixed branches.
+
+**Facts verified during planning (implementation must rely on these):**
+- **Installed git.** `/opt/homebrew/bin/git` is 2.55.0 and comes first on PATH. `/usr/bin/git` (Apple, 2.54.0) also exists. Both list `git replay … [--ref-action=<mode>]` (`update|print`); the command is marked EXPERIMENTAL.
+- **Replay, clean.** `git replay --ref-action=print --onto <onto> <upstream>..<branch>` prints `update refs/heads/<branch> <new> <old>`, exits 0, and leaves the ref unmoved.
+- **Replay, empty range.** With `<upstream> == <branch tip>` it exits 0 and prints nothing. The caller must then use `newTip = onto` and must not treat the empty output as an error.
+- **Replay, conflict.** It exits 1 with **empty stdout and empty stderr**, so no `CONFLICT` lines can be parsed. `vcs.Replay` must therefore derive the conflict paths itself:
+  - Run `merge-tree --write-tree --name-only --merge-base=<upstream> <onto> <branchTip>`. Exit 1 lists the paths.
+  - If that merge is clean, return the generic `ErrReplayConflict` "replaying <upstream>..<branch> onto <onto> conflicts".
+  - This fills a gap in the design ("raw stderr is used if none are found"), whose premise does not hold.
+- **Replay, merge commit.** It exits 128 with `fatal: replaying merge commits is not supported yet!`. Map this to a clear error.
+- **merge-tree conflict output.** `merge-tree --write-tree --name-only --merge-base=…` exits 1 on conflict. stdout is the tree OID, then the conflicted path names, then a blank line, then informational `CONFLICT (…)` messages. Parse only the section between the first line and the first blank line.
+- **Build targets.** Go 1.27.1, module `github.com/gpayer/mcp-task-manager`.
+- **Test package layout.** `internal/testsupport` imports `project`, `storage` and `task`. So `internal/task` in-package tests cannot use it, but `package task_test` files can, and so can `package vcs_test`. `internal/vcs` imports only the standard library, so in-package `task` tests may import it.
+- **Mirrors.** `.claude/skills/{begin_task,design,implementation,planning,research,workflow}` are identical to `skills/…`. `skills/` also has `superpowers-workflow`, which is mirrored under `plugins/mcp-task-manager/skills/`. `commands/begin-task.md` equals `plugins/mcp-task-manager/commands/begin-task.md`.
+
+**Global sections (folded in here because the output format is fixed):**
+- **Phase-to-commit mapping.** One commit per phase, with the message given in each phase. Every commit message ends with the session's required `Co-Authored-By` trailer.
+- **Parallelization.** P1, P2 and P3 are mutually independent and can be developed in parallel, then committed in order. P10 (web) depends only on P2 and can run in parallel with P5–P9. P12 (docs) must come last.
+- **Documentation update points.**
+  - Tool YAMLs: P5 (`get_current_task.yaml`) and P9 (`start_task`, `complete_task`, `update_task`).
+  - P12: `internal/app/instructions.md`, CLAUDE.md, README.md, `mcp-tasks.yaml` reference block, `.gitignore`, all skill and command mirrors.
+  - Code doc comments: in each phase.
+- **Final verification plan.** See the end of P12: the full gate, the race run, the mirror diffs, and the manual scratch-clone scenario from design §Testing Strategy 11.
+
+### Phase Table
+
+| Phase ID | Goal | Main files | Regen | Depends on | Verification |
+| -------- | ---- | ---------- | ----- | ---------- | ------------ |
+| P1 | `git:` config section + `MCP_GIT_BRANCHING` | `internal/config/config.go`, `resolve_test.go`/`config_test.go`, `internal/testsupport/testsupport.go` | none | — | gate; config tests |
+| P2 | Five branch fields persisted; `.users` skip/reserve; pointer store | `internal/task/task.go`, `internal/storage/{markdown,index,files}.go`, new `internal/storage/current.go`, `storage_test.go` | none | — | gate; storage round-trip/scan/pointer tests |
+| P3 | `internal/vcs` package + git test primitives | new `internal/vcs/{vcs,refs,tree}.go`, `vcs_test.go`; `testsupport` git helpers | none | — | gate; `go test -race ./internal/vcs/...` |
+| P4 | Service plumbing: `GitRepo`/options/naming/journal; `project.Build` wiring | new `internal/task/{git,branching}.go`, `naming_test.go`; `service.go`; `internal/project/resolver.go` | none | P1, P2, P3 | gate; naming + txn + wiring tests |
+| P5 | Current-task pointer rules + `CurrentTask` + `get_current_task` tool | new `internal/task/current.go`; `service.go`; `internal/tools/workflow.go`; new `descriptions/get_current_task.yaml`; `testsupport.NewBacklog` | none (embedded YAML, plain build) | P2, P4 | gate; pointer + tool tests; deadlock test |
+| P6 | Git test harness + start flows (fresh top-level, subtask, vacate) | `testsupport` (`NewGitBacklog`, state capture); `internal/task/branching.go`; new `branching_start_test.go`, `gitfault_test.go` | none | P3, P4, P5 | gate; start matrix × 5 layouts; fault injection |
+| P7 | Completion flows (delivered, subtask merge + gate, non-delivered) | `internal/task/branching.go`, `service.go`; new `branching_complete_test.go` | none | P6 | gate; completion matrix × 5 layouts; fault injection |
+| P8 | Restart/rebase via `git replay` | `internal/task/branching.go`, `service.go`; new `branching_restart_test.go` | none | P7 | gate; restart matrix; conflict rollback |
+| P9 | `update_task` guard, `commit_message`, CLI `-m` + branch output, tool YAML text | `service.go`, `internal/tools/{workflow,management}.go`, YAMLs, `internal/cli/{cli,commands,output}.go`, tests | none (embedded YAML) | P7, P8 | gate; tools + CLI tests |
+| P10 | Web: branch chip + copy button (read-only) | `internal/web/{view.go,assets.go}`, templates, new `static/app.js`, `assets/input.css`, tests | CSS source edited only | P2 | gate; web tests incl. 405/no-mutation |
+| P11 | Regenerate `static/app.css` | `internal/web/static/app.css` only | **full rebuild of app.css** via `scripts/build-css.sh` | P10 | gate; `TestStaticAssetsServed`; visual check |
+| P12 | Docs, skills, commands, `.gitignore`, config reference, server instructions | CLAUDE.md, README.md, `internal/app/instructions.md`, `mcp-tasks.yaml`, `.gitignore`, skill/command mirrors | none (embedded md) | P1–P11 | gate; mirror diffs; manual scenario |
+
+### Phase Details
+
+---
+
+- `Phase ID:` **P1 — Config section**
+- `Goal:` Add the opt-in `git` config section (`branching`, `base_branches`) with defaults, refill and env override. Nothing consumes it yet.
+- `Why this phase exists:` Every later phase reads `cfg.Git`. It is a self-contained, testable unit that changes no behaviour.
+- `Files likely to change:`
+  - `internal/config/config.go`
+  - `internal/config/resolve_test.go` (or `config_test.go`, following the existing web-section tests in `web_test.go`)
+  - `internal/testsupport/testsupport.go` (`IsolateEnv` list only)
+- `Regeneration required:` No.
+- `Dependencies:` None.
+- `Implementation tasks:`
+  - Add the env constant `EnvGitBranching = "MCP_GIT_BRANCHING"` next to `EnvWebEnabled`, with a doc comment.
+  - Add `type GitConfig struct { Branching bool \`yaml:"branching"\`; BaseBranches []string \`yaml:"base_branches"\` }` with the design's doc comments.
+  - Add `Git GitConfig \`yaml:"git"\`` to `Config`.
+  - Add `var DefaultBaseBranches = []string{"main_patched", "master_patched", "main", "master"}`.
+  - `DefaultConfig()` returns `Git: GitConfig{Branching: false, BaseBranches: <a copy of DefaultBaseBranches>}`. Copy with `append([]string(nil), …)` so callers cannot mutate the package var.
+  - `applyDefaults()`: trim every `BaseBranches` entry, drop empty ones, and refill from `DefaultBaseBranches` when the result is empty. Leave `Branching` as written.
+  - `applyEnvOverrides()`: parse `MCP_GIT_BRANCHING` with `strconv.ParseBool` and ignore an unparseable value, exactly like `MCP_WEB_ENABLED`. Update the function's doc comment.
+  - Add `config.EnvGitBranching` to `testsupport.IsolateEnv`.
+- `Tests and checks:`
+  - `TestGitConfigDefaults`: no file gives `Branching == false` and `BaseBranches` equal to the default list.
+  - `TestGitConfigParse`: `git: {branching: true, base_branches: [develop, main]}` is honoured verbatim.
+  - `TestGitConfigPartialSectionKeepsDefaults`: `git: {branching: true}` keeps the default list.
+  - `TestGitConfigBaseBranchesTrimmedAndRefilled`: `["  main ", "", "  "]` becomes `["main"]`, and `[]` becomes the defaults.
+  - `TestGitBranchingEnvOverride`: `true` enables over a file's `false`; `false` disables over a file's `true`; `maybe` is ignored.
+  - `TestDefaultBaseBranchesNotAliased`: mutating the returned config does not change `DefaultBaseBranches`.
+  - Run the gate.
+- `Commit boundary:` `feat(config): add opt-in git branching section and MCP_GIT_BRANCHING override`
+- `Definition of done:` All tests pass, and no existing config test changes expectation.
+- `Rollback note:` Pure addition, so revert the commit. Nothing reads the section yet.
+
+---
+
+- `Phase ID:` **P2 — Task branch fields, `.users` hygiene, pointer store**
+- `Goal:` Persist `branch`, `base_branch`, `start_commit`, `final_branch` and `squash_commit`. Put `Branch`, `FinalBranch` and `SquashCommit` in the index. Make `.users` an explicit scan skip and a reserved id. Add the per-user current-task file API to `MarkdownStorage`.
+- `Why this phase exists:` This is storage-level groundwork for the flows (P6–P8), the board (P10) and the pointer (P5). It changes no behaviour, and round-trips can be tested in isolation.
+- `Files likely to change:`
+  - `internal/task/task.go`
+  - `internal/storage/markdown.go`
+  - `internal/storage/index.go`
+  - `internal/storage/files.go`
+  - new `internal/storage/current.go`
+  - `internal/storage/storage_test.go` (or a new `current_test.go` plus additions to `storage_test.go` and `migrate_test.go`)
+- `Regeneration required:` No.
+- `Dependencies:` None.
+- `Implementation tasks:`
+  - **`task.Task`.** Append five fields after `VerifiedAt`, each `yaml:"<snake>,omitempty" json:"<snake>,omitempty"`: `Branch`, `BaseBranch`, `StartCommit`, `FinalBranch`, `SquashCommit`. Give each a doc comment taken from the design §4 table.
+  - **`MarkdownStorage.Save`.** Add the five keys to the anonymous frontmatter struct (with `omitempty`, after `verified_at`) and assign them.
+  - **`MarkdownStorage.parse`.** Add the five keys to the parse struct and map them.
+  - **Index.** Add `Branch`, `FinalBranch` and `SquashCommit` to `IndexEntry`, with a comment: the board and the parent gate read them from the index; `BaseBranch` and `StartCommit` stay out. Update `taskToEntry` and `entryToTask`.
+  - **`.users` skip.** In `LoadAll` and `isStaleOnDisk`, skip `entry.Name() == UsersDirName` next to `"archive"`. Check `maxMarkdownTaskID` and `migrate.go`: they already ignore non-numeric names, so add only a comment or none.
+  - **Reserved id.** Add `".users": "reserved for per-user state (current-task pointers)"` to `reservedTaskIDs` in `files.go`. Do not reserve `.current_task`.
+  - **New `current.go`.**
+    - Constants `UsersDirName = ".users"` and `CurrentTaskFileName = "current_task"`.
+    - `CurrentTaskPath(user string) string` returns `filepath.Join(s.dir, UsersDirName, user, CurrentTaskFileName)`.
+    - `ReadCurrentTask(user) (id string, ok bool, err error)` returns the trimmed first line. A missing file gives `("", false, nil)`, and an empty file gives `ok=false`.
+    - `WriteCurrentTask(user, id) error` does `MkdirAll` for the user dir, writes `id+"\n"` to a `.tmp` file, then renames it.
+    - `RemoveCurrentTask(user) error` treats `os.IsNotExist` as nil.
+    - Validate `user` with the existing `validatePathSegment("user", user)` so a crafted identity cannot escape the directory.
+- `Tests and checks:`
+  - `TestSaveParseBranchFieldsRoundTrip`: all five fields survive Save and Load.
+  - `TestSaveOmitsEmptyBranchFields`: a record without branch data has none of the keys, so existing files are byte-stable.
+  - `TestIndexEntryCarriesBranchFields`: `All()` and `GetSubtasks()` return `Branch`, `FinalBranch` and `SquashCommit`, and `BaseBranch` and `StartCommit` are empty.
+  - `TestUsersDirIgnoredByScans`:
+    - Build `.users/dev/current_task` plus a crafted `.users/.users.md`.
+    - `LoadAll` returns only real tasks.
+    - `isStaleOnDisk` count is unaffected (after a `Load`, no rebuild storm; assert via `Rebuild` count or `builtAt` stability, following existing stale tests).
+    - `NextID` is unaffected.
+    - `MigrateFlatLayout` leaves it alone.
+  - `TestValidateIDReservesUsers`: `.users` is rejected and `.current_task` is accepted.
+  - `TestCurrentTaskPointer`:
+    - Reading an absent pointer gives `ok=false`.
+    - A write then read returns the id.
+    - An overwrite works.
+    - A remove, then another remove, both succeed.
+    - The path is `<dir>/.users/dev/current_task`.
+    - A user containing `/` or `..` is rejected.
+  - Run the gate.
+- `Commit boundary:` `feat(storage): persist task branch fields and add per-user current-task pointer store`
+- `Definition of done:` Existing storage tests are unchanged and green. Old records load identically.
+- `Rollback note:` Revert. Old binaries ignore unknown frontmatter keys, so records written in the meantime stay readable.
+
+---
+
+- `Phase ID:` **P3 — `internal/vcs` package**
+- `Goal:` A stdlib-only wrapper around the system `git` that implements every method in design §1's table, plus `ResolveIdentity`, all tested against real temporary repositories.
+- `Why this phase exists:` This is the riskiest low-level surface: parsing, exit codes, the temporary index, compare-and-swap. Isolating it lets its semantics be proven before any service logic depends on them.
+- `Files likely to change:`
+  - new `internal/vcs/vcs.go`: `Repo`, `New`, the runner, `Check`, `Head`, `ResolveCommit`, `IsAncestor`, `TreeOf`, `ResolveIdentity`, `Identity`, `sanitizeUser`, sentinel errors
+  - new `internal/vcs/refs.go`: `BranchSHA`, `FirstExistingBranch`, `BranchAvailable`, `CreateBranch`, `MoveBranch`, `DeleteBranch`, `Switch`, `ResetKeep`
+  - new `internal/vcs/tree.go`: `DirtyPaths`, `IndexTree`, `RestoreIndex`, `Snapshot`, `MergeTrees`, `CommitTree`, `Replay`
+  - new `internal/vcs/vcs_test.go` (package `vcs_test`), and an in-package `sanitize_test.go` if needed
+  - `internal/testsupport/testsupport.go` (git primitives only)
+- `Regeneration required:` No.
+- `Dependencies:` None. Note that `vcs.Identity` is a vcs-local type; P4 converts it to `task.Identity` in `project.Build`, so `vcs` never imports `task`.
+- `Implementation tasks:`
+  - **Runner.**
+    - `run(ctx-less, stdin string, env []string, args ...string) (stdout string, exitCode int, err error)`.
+    - It uses `exec.CommandContext(context.WithTimeout(60s))`.
+    - Stdin is empty or the given string (for `commit-tree -F -`).
+    - The environment is `os.Environ()` plus `GIT_TERMINAL_PROMPT=0` and `LC_ALL=C`, plus extra env (a temporary `GIT_INDEX_FILE`).
+    - Errors read `git <args>: <trimmed stderr>`.
+    - `exec.ErrNotFound` maps to `ErrGitNotFound`.
+    - Expose exit codes so that callers can treat exit 1 as a non-error for `merge-base --is-ancestor`, `merge-tree` and `replay`.
+  - **Lazy init.** `New(root, tasksDir)` runs nothing. `Check()` (and a private `ensure()` that every method calls) caches:
+    - `top`, from `rev-parse --show-toplevel` with `EvalSymlinks` on both sides (macOS `/private/var` vs `/var` in `t.TempDir()`).
+    - `tasksRel`, when `tasksDir` lies strictly inside `top`. It is converted with `filepath.ToSlash` into the exclude pathspec `:(top,exclude)<rel>`.
+  - **`Check`.** It verifies:
+    - `git` is on PATH
+    - the directory is a worktree
+    - it is not bare
+    - no `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `rebase-merge`, `rebase-apply` or `BISECT_LOG` exists (via `rev-parse --git-path <x>` + `os.Stat`)
+    - `ls-files -u` is empty
+    - `var GIT_AUTHOR_IDENT` succeeds
+    - the tasks dir is not `top` and not an ancestor of `top`
+
+    Each failure has a distinct, clear message.
+  - **`Head`.** `symbolic-ref --quiet --short HEAD`; a non-zero exit gives `ErrDetachedHead`. Then `rev-parse HEAD`.
+  - **`BranchAvailable(name)`.**
+    - `check-ref-format --branch`.
+    - `BranchSHA` must not exist.
+    - Every proper prefix `a`, `a/b`, … must not exist as `refs/heads/<prefix>`.
+    - `for-each-ref --count=1 refs/heads/<name>/` must be empty.
+    - Each case has its own message naming the colliding ref.
+  - **Ref updates.**
+    - `CreateBranch` runs `update-ref refs/heads/<n> <sha> ""`.
+    - `MoveBranch` runs `update-ref refs/heads/<n> <new> <old>`.
+    - `DeleteBranch` runs `update-ref -d refs/heads/<n> <expect>`.
+    - Add `-m "mcp-task-manager: <op>"` so the reflog is readable.
+  - **Worktree-changing commands.** `Switch` runs `switch <name>`. `ResetKeep` runs `reset --keep <sha>`.
+  - **`DirtyPaths`.** `status --porcelain=v1 -z --untracked-files=all -- . <exclude>`, returning the parsed paths. Handle rename entries, which carry two NULs.
+  - **Index capture and restore.** `IndexTree` runs `write-tree`. `RestoreIndex(tree)` runs `read-tree <tree>`.
+  - **`Snapshot(msg)`.**
+    - Create a temporary index file in `os.MkdirTemp` and remove it with `defer`.
+    - With `GIT_INDEX_FILE` set to it: `read-tree HEAD`, then `add -A -- . <exclude>`, then `write-tree`.
+    - If the tree equals `TreeOf("HEAD")`, return `(headSHA, false, nil)`.
+    - Otherwise run `commit-tree <tree> -p HEAD -F -`, then `update-ref refs/heads/<branch> <new> <old>`, then, on the real index, `reset -q -- . <exclude>`.
+    - A detached HEAD gives `ErrDetachedHead`.
+    - A nested repo inside the tasks dir is never reached (it is excluded). A nested repo elsewhere is added as git would add it; this was accepted as out of scope.
+  - **`MergeTrees`.** Exit 0 gives `(tree, nil)`. Exit 1 gives `(tree, paths)`, parsing the lines after the first and up to the first blank line.
+  - **`CommitTree`.** `commit-tree <tree> -p <parent> -F -`, with msg on stdin.
+  - **`Replay(onto, upstream, branch)`.**
+    - Run `replay --ref-action=print --onto <onto> <upstream>..refs/heads/<branch>`.
+    - Exit 0 with empty output gives `newTip = onto`, which is correct for an empty range.
+    - Exit 0 with an `update refs/heads/<branch> <new> <old>` line gives `newTip = <new>`.
+    - Exit 1 is a conflict: compute paths via `MergeTrees(upstream, onto, branchTip)`. When no paths come out, return `ErrReplayConflict` with the generic message.
+    - Exit 128 containing `merge commits` gives `ErrReplayMerge`.
+    - Stderr containing `unknown option` or `ref-action` gives `ErrReplayUnsupported` ("git replay with --ref-action=print is required; upgrade git").
+    - Never move the ref.
+  - **`ResolveIdentity(root) Identity{Name string; FromGitEmail bool}`.**
+    - Run `git -C <root> config --get user.email`. This works outside a repo; if `root` does not exist, fall back to no `-C`.
+    - Take the local part and apply `sanitizeUser` in the order the design gives.
+    - Fall back to `os/user.Current().Username` (the part after `\`), then `$USER`, then `$USERNAME`, then `"default"`.
+  - **`testsupport` git primitives.**
+    - `RequireGit(t)`:
+      - Skip if `exec.LookPath("git")` fails.
+      - `t.Setenv` `GIT_CONFIG_GLOBAL=os.DevNull`, `GIT_CONFIG_NOSYSTEM=1`, `GIT_AUTHOR_DATE` and `GIT_COMMITTER_DATE` to a fixed value, and `GIT_AUTHOR_NAME`/`EMAIL` unset.
+      - Document that callers must not use `t.Parallel`.
+    - `RequireGitReplay(t)` skips unless `git replay -h` output contains `--ref-action`.
+    - `NewGitRepo(t, dir) string` runs `git init -b main_patched`, sets a local `user.email=dev@example.com` and `user.name=Dev`, and makes an initial commit of `README`.
+    - `Git(t, dir, args...) string` runs git, fails the test on error, and returns trimmed stdout.
+    - `WriteFile(t, path, content)` is a small convenience.
+- `Tests and checks` (`internal/vcs/vcs_test.go`, each test calls `RequireGit`):
+  - `TestCheck`, table-driven:
+    - a non-repo dir
+    - a bare repo
+    - merge in progress (a conflicting `git merge` leaves `MERGE_HEAD`)
+    - unmerged paths
+    - the tasks dir equals the toplevel
+    - the tasks dir is the parent of the toplevel
+    - a clean repo passes
+    - a linked worktree (`git worktree add`) passes
+  - `TestHead`: on a branch; detached gives `ErrDetachedHead`.
+  - `TestResolveIdentity`:
+    - `Igor.Cwer+x@Example.com` → `igor.cwer-x`
+    - `a..b.lock@x` → `a.b`
+    - `-.x.-@y` → `x`
+    - unicode local part → sanitized
+    - email unset → `FromGitEmail=false` with the OS user (`t.Setenv("USER","osuser")` does not guarantee `os/user`; assert only a non-empty result and `FromGitEmail=false`)
+    - an in-package `TestSanitizeUser` table for the pure function
+  - `TestBranchAvailable`: free; exists; prefix exists (`dev` exists, asking for `dev/wip/x`); child exists (`dev/wip/x/y` exists, asking for `dev/wip/x`); an invalid name (`a..b`, `a b`).
+  - `TestFirstExistingBranch`: priority order, and none exist.
+  - `TestCreateMoveDeleteCAS`:
+    - Creating an existing ref fails.
+    - Moving with a stale old value fails and leaves the ref unchanged.
+    - Deleting with the wrong expected SHA fails.
+  - `TestSnapshotExcludesTasksDir`, table over:
+    - tasks dir inside and tracked
+    - inside and ignored
+    - nested repo
+    - outside the worktree
+
+    It asserts:
+    - The snapshot commit's tree has the dirty and untracked code files and no tasks path changes.
+    - A user-staged task file stays staged, via `diff --cached --name-only`.
+    - The real index outside tasks matches the new HEAD (`diff --cached` is empty for code).
+    - The worktree bytes are unchanged.
+    - A nested tasks repo is never a gitlink (`ls-tree -r` has no mode 160000).
+  - `TestSnapshotNoopWhenOnlyTasksDirty`: `committed=false` and the ref is unchanged.
+  - `TestDirtyPathsExcludesTasks`.
+  - `TestIndexTreeRestore`: stage, capture, change the stage, restore, and `write-tree` equals the capture.
+  - `TestMergeTrees`: clean; conflicting gives the path list `["f"]`.
+  - `TestCommitTree`: parent and message.
+  - `TestReplay`, gated by `RequireGitReplay`:
+    - clean gives a new tip whose parent chain sits on onto, and the ref is **not** moved
+    - an empty range gives onto
+    - a conflict gives `conflicts == ["f"]`, the ref is unmoved, and `status` shows nothing in progress
+    - a merge commit gives `ErrReplayMerge`
+  - `TestSwitchRefusesOverwrite`: a local change to a file that differs on the target is refused; HEAD and the file are unchanged.
+  - `TestResetKeepRefusesConflict`.
+  - `TestGitNotFound`: `t.Setenv("PATH", "")` gives `ErrGitNotFound` from `Check`.
+  - Commands: `go test -race ./internal/vcs/...`, then the gate.
+- `Commit boundary:` `feat(vcs): add git wrapper package for branch-per-task operations`
+- `Definition of done:`
+  - Every method in the design §1 table exists with the exact contract above.
+  - The tests pass with `/opt/homebrew/bin/git` 2.55, and replay tests skip cleanly where replay print mode is missing.
+  - The package is unused by production code.
+- `Rollback note:` Revert. The package is unreferenced. If `git replay` proves unsuitable, implement the design's documented fallback with the same `Replay` contract inside this package: after a checkpoint, `rebase --onto` on a clean tree, and on conflict `rebase --abort`. Keep the method signature.
+
+---
+
+- `Phase ID:` **P4 — Service plumbing and wiring (no flow changes)**
+- `Goal:` Introduce `task.GitRepo`, `Identity`, `CurrentTaskStore`, `ServiceOption`, the variadic `NewService`, the pure naming and commit-message helpers, the rollback journal, and the unexported branch update option. `project.Build` injects them. `StartTask` and `CompleteTask` are untouched.
+- `Why this phase exists:` It separates the constructor/API churn and the pure logic from the transactional flows, so the P6–P8 diffs contain only flow logic.
+- `Files likely to change:`
+  - new `internal/task/git.go`
+  - new `internal/task/branching.go`: naming, `commitMessage`, `gitTxn`, `branchInfo`/`withBranch`
+  - `internal/task/service.go`: the `Service` fields `git`, `identity` and `current`; variadic `NewService`; `updateOpts.branch` and `updateOpts.commitMessage`; `WithCommitMessage`; `update` applying `withBranch`; `BranchingEnabled()`
+  - new `internal/task/naming_test.go`
+  - `internal/task/concurrency_test.go`
+  - `internal/project/resolver.go`
+  - `internal/project/resolver_test.go`
+- `Regeneration required:` No.
+- `Dependencies:` P1 (`cfg.Git`), P2 (fields, pointer store methods), P3 (`vcs`).
+- `Implementation tasks:`
+  - **`git.go`.**
+    - `type GitRepo interface` with exactly the P3 method set, whose signatures match `*vcs.Repo`.
+    - `type Identity struct{ Name string; FromGitEmail bool }`.
+    - `type CurrentTaskStore interface { ReadCurrentTask(user string) (string, bool, error); WriteCurrentTask(user, id string) error; RemoveCurrentTask(user string) error }`.
+    - `type ServiceOption func(*Service)`, with `WithGit(g GitRepo)` (nil means off), `WithIdentity(Identity)` and `WithCurrentTaskStore(CurrentTaskStore)`.
+    - Doc: a nil git means branching is off.
+  - **`NewService`.** `NewService(..., cfg *config.Config, opts ...ServiceOption)` applies the options after the struct literal. No call site changes.
+  - **`BranchingEnabled()`.** `func (s *Service) BranchingEnabled() bool { return s.git != nil }`. It is unlocked with the write-once rationale, exactly like `Config()`; update the comment on `EnsureProjectExists` that lists the unlocked methods. Add it to `TestServiceNoSelfDeadlock`.
+  - **Naming, in `branching.go`, per design §3:**
+    - `slugRe`
+    - `slugify(s)` (at most 40 characters, cut at a hyphen)
+    - `shortName(t *Task) string`
+    - `wipBranch(user, name)`
+    - `subWipBranch(parentBranch, sub)`
+    - `finalBranch(wip) (string, error)`, which errors when `/wip/` is absent
+  - **`commitMessage(t *Task, override string) string`.** Uses the override verbatim if it is non-blank. Otherwise builds title, blank line, description if non-empty, blank line, `Task: <id>`.
+  - **`checkpointMsg(id, op string)`**, plus the constants for the fixed bookkeeping subjects from design §7.
+  - **`gitTxn`.**
+    - `type gitTxn struct{ undo []func() error; names []string }`.
+    - `add(name string, f func() error)`.
+    - `rollback() error` runs the undos in reverse, `errors.Join`s the failures, and wraps them into an error that names every step.
+  - **Capture helpers**, `captureTask` and `capturePointer`:
+    - `captureTask(id)` loads the full task via `s.storage.Load` and registers an undo `storage.Save(copy)` plus `index.Set(copy)`.
+    - `capturePointer(user)` reads `(id, ok)` and registers an undo that rewrites it or removes it.
+    - Both are no-ops when `s.current == nil`.
+  - **`branchInfo` and `withBranch`.**
+    - `type branchInfo struct{ Branch, BaseBranch, StartCommit, FinalBranch, SquashCommit *string }`. Pointer fields mean "set when non-nil", so a restart can update `StartCommit` without clearing `FinalBranch`.
+    - Unexported `withBranch(b branchInfo) UpdateOption`.
+    - `update` applies it after the status logic.
+    - Assert (by test) that the reopen branch of `update` does **not** clear the branch fields.
+  - **`WithCommitMessage(msg string) UpdateOption`.** It stores `o.commitMessage` and `update` ignores it.
+  - **`project.Build`.**
+    - Signature becomes `Build(cfg *config.Config, extra ...task.ServiceOption)`.
+    - It always passes `task.WithCurrentTaskStore(mdStorage)`, and `task.WithIdentity(toTaskIdentity(vcs.ResolveIdentity(cfg.Resolution.Root)))` (guard a nil `Resolution` by using `tasksDir`).
+    - When `cfg.Git.Branching` is set, it also passes `task.WithGit(vcs.New(root, tasksDir))`.
+    - It appends `extra...` last, so tests can override.
+    - `Initialize` runs no git.
+    - Update the existing callers (`Resolver.resolve`, CLI `initServiceWithConfig`): no change is needed thanks to variadic parameters.
+  - **Twin discipline.** No exported method calls another exported one.
+- `Tests and checks:`
+  - `naming_test.go` (in-package):
+    - `TestShortName`:
+      - kebab id `add-login` → itself
+      - numeric `8` + title "Add login form!" → `8-add-login-form`
+      - id `wip` → a non-`wip` fallback
+      - id and title both empty after slugify → `task-<8hex>`
+      - unicode title → ASCII slug
+      - a long title is truncated at 40 at a hyphen
+      - an id with uppercase → slugified
+    - `TestWipAndFinalBranch`: round-trip; `finalBranch` without `/wip/` errors.
+    - `TestSubWipBranch`: a sibling at depth 3; the separator `--` never appears in a slug.
+    - `TestCommitMessage`: default layout, empty description, override verbatim.
+    - `TestGitTxnRollbackOrderAndErrors`: reverse order; all undos run even if one fails; the joined error names the failed step.
+  - `service_test.go`:
+    - `TestUpdateWithBranchSetsFields`
+    - `TestReopenKeepsBranchFields`: done → todo keeps all five fields and clears the resolution.
+    - `TestWithCommitMessageIgnoredByUpdate`
+    - `TestNewServiceOptionsApplied` (`BranchingEnabled` true or false)
+  - `concurrency_test.go`: add `svc.BranchingEnabled()`.
+  - `resolver_test.go`:
+    - `TestBuildBranchingOffHasNoGit`
+    - `TestBuildBranchingOnInjectsGit`: a temp dir with `mcp-tasks.yaml` containing `git: {branching: true}`, and `BranchingEnabled()` is true
+    - `TestBuildExtraOptionsWin`
+  - Run the gate.
+- `Commit boundary:` `refactor(task): add git/identity/pointer service options, branch naming and rollback journal`
+- `Definition of done:`
+  - It compiles with all call sites unchanged except `Build`'s signature, which is variadic.
+  - Behaviour is identical with branching off or on. The flows arrive in P6, and in this phase an enabled git is injected but unused.
+- `Rollback note:`
+  - Revert. Its only runtime effect is one `git config --get user.email` call per project build, and it is harmless if git is missing because of the fallback.
+  - Risk: CLI tests build projects that now call git. If a sandbox without git makes this slow, it is still correct because `exec.ErrNotFound` triggers the fallback.
+
+---
+
+- `Phase ID:` **P5 — Current-task pointer and `get_current_task`**
+- `Goal:` Implement the pointer rules of design §5.9/§6 on the existing (legacy) start and complete paths, the locked `CurrentTask()`/`currentTask()` pair, and the read-only MCP tool `get_current_task`.
+- `Why this phase exists:` The pointer is independent of git and is the only user-visible change when branching is off. Shipping it separately gives skills a stable read API before the branching flows land.
+- `Files likely to change:`
+  - new `internal/task/current.go`
+  - `internal/task/service.go` (`StartTask`/`CompleteTask` legacy paths call the pointer helpers inside a `gitTxn`)
+  - `internal/task/concurrency_test.go`
+  - new `internal/task/current_test.go` (in-package, with an in-memory `mockCurrentStore`)
+  - `internal/tools/workflow.go`
+  - new `internal/tools/descriptions/get_current_task.yaml`
+  - `internal/tools/tools_test.go` (or a new `current_test.go`)
+  - `internal/testsupport/testsupport.go` (`NewBacklog` passes `WithCurrentTaskStore(st)` and `WithIdentity(task.Identity{Name: "dev"})`)
+- `Regeneration required:` No. The embedded YAML is picked up by `go build`.
+- `Dependencies:` P2, P4.
+- `Implementation tasks:`
+  - **`current.go`.**
+    - `func (s *Service) CurrentTask() (*Task, bool, error)` locks and delegates to `currentTask()`.
+    - `currentTask()` reads the pointer for `s.identity.Name`. Absent or empty returns `(nil, false, nil)`. Otherwise `s.get(id)`, which falls back to the archive. An unknown id returns an error: "current task <id> not found".
+    - A nil store returns `(nil, false, nil)`.
+  - **Helpers.**
+    - `setPointer(txn, id)` captures the old value, then writes.
+    - `clearPointerIf(txn, id, parentID)`: if the pointer names `id`, set it to `parentID` when the parent is still open and non-empty, otherwise remove it.
+    - Both are no-ops when the store is nil.
+  - **Legacy `StartTask`.** After the existing writes, call `setPointer(txn, id)`. On a pointer write failure, `txn.rollback()` (the records captured before the status writes, including the auto-started parent) and return the error.
+  - **Legacy `CompleteTask`.** After the task's own update and the parent auto-complete, call `clearPointerIf` with a parent id that is open after the call. If the parent auto-completed, remove the pointer. Use the same journal for rollback.
+  - **Tool.**
+    - `get_current_task` has no params and is registered in `workflowTools`.
+    - The handler runs `EnsureProjectExists`, then `svc.CurrentTask()`.
+    - Not ok returns `mcp.NewToolResultText("No current task")`.
+    - An error returns a tool error.
+    - Otherwise it returns `taskResult(t)`.
+  - **`get_current_task.yaml`.** Describes the per-user pointer at `<tasks_dir>/.users/<user>/current_task`: written by `start_task`, moved to the parent or removed by `complete_task`, and archived tasks are still returned.
+- `Tests and checks:`
+  - `current_test.go`:
+    - `TestStartTaskWritesPointer`
+    - `TestStartSubtaskPointsAtSubtask`
+    - `TestCompleteClearsPointerOnlyIfNamed`: a pointer naming another task is untouched.
+    - `TestCompleteSubtaskMovesPointerToOpenParent`
+    - `TestCompleteLastSubtaskAutoCompletesParentRemovesPointer`
+    - `TestNonDeliveredCloseClearsPointer`
+    - `TestPointerWriteFailureRollsBackStart`: a failing mock store; the task and the auto-started parent are both back to `todo`.
+    - `TestCurrentTaskAbsentAndUnknown`
+    - `TestNilStoreIsNoop` (the existing mocks-only construction)
+  - `concurrency_test.go`: add `svc.CurrentTask()`.
+  - `tools` tests:
+    - `TestGetCurrentTask_None` ("No current task")
+    - `TestGetCurrentTask_AfterStart` (JSON id)
+    - `TestGetCurrentTask_Archived`: start, complete, rewrite the pointer by hand through `storage.NewMarkdownStorage(dir).WriteCurrentTask`, archive, and assert it is still returned.
+    - `TestGetCurrentTask_UnknownID` (tool error)
+    - `TestToolDescriptionsComplete`: builds the full tool set, which would panic on a missing YAML param. If an existing test already builds all tools, extend it.
+  - Run the gate. Existing tests `StartTask_*`/`CompleteTask_*` are unchanged because mocks have a nil store.
+- `Commit boundary:` `feat(task): per-user current-task pointer and get_current_task tool`
+- `Definition of done:` The pointer is written and cleared as specified with branching off. The tool works, and existing tests are green.
+- `Rollback note:` Revert. Leftover `.users/` directories are ignored by scans (P2) and are harmless.
+
+---
+
+- `Phase ID:` **P6 — Git backlog harness and start flows**
+- `Goal:` `start_task` with branching on handles three flows:
+  - fresh top-level (5.2)
+  - fresh subtask, including parent auto-start from `todo` inside the same journal (5.3)
+  - the `vacate` rule (5.1)
+
+  It also provides the reusable test harness: layouts, state capture, and a fault-injecting `GitRepo`.
+- `Why this phase exists:` Start is the first flow that mutates git. The harness built here is reused unchanged by P7 and P8.
+- `Files likely to change:`
+  - `internal/testsupport/testsupport.go`:
+    - `Layout` constants `TasksInRepoTracked`, `TasksInRepoIgnored`, `TasksNestedRepo`, `TasksSeparateRepo`, `TasksUntracked`
+    - `GitBacklog{Svc, Resolver, CodeDir, TasksDir, TasksRepo string}`
+    - `NewGitBacklog(t, layout, opts ...task.ServiceOption)`
+    - `AllLayouts`
+    - `CaptureState(t, b) State`
+    - `RequireStateEqual(t, before, after State)`
+  - `internal/task/branching.go`: `startBranched`, `startFresh`, `startSub`, `vacate`, `preflightIdentity`
+  - `internal/task/service.go`: `StartTask` dispatch
+  - new `internal/task/gitfault_test.go` (package `task_test`): `failingGit`
+  - new `internal/task/branching_start_test.go` (package `task_test`)
+- `Regeneration required:` No.
+- `Dependencies:` P3 (`vcs` and the `RequireGit` helpers), P4 (plumbing), P5 (pointer helpers).
+- `Implementation tasks:`
+  - **`NewGitBacklog`.**
+    - `RequireGit`, then `NewGitRepo(code)`.
+    - Lay out the tasks dir per layout:
+      - tracked: `.tasks` created with one committed placeholder task file
+      - ignored: `.gitignore` gets `.tasks/` (committed)
+      - nested: `.tasks` runs its own `git init` with a commit
+      - separate: a sibling temp dir with its own repo
+      - untracked: a temp dir with no repo
+    - Build `cfg` like `NewBacklog`, with `Git: {Branching: true, BaseBranches: config.DefaultBaseBranches}` and `Resolution{Root: code, TasksDir: tasks}`.
+    - Call `project.Build(cfg, opts...)`, so a test can pass `task.WithGit(wrap(vcs.New(code, tasks)))`.
+    - Seeding must use `svc.Create` only, since `Seed`'s `Update` status moves will be refused once the guard lands in P9. Document this.
+  - **`State`** captures, for fault-injection and refusal assertions:
+    - `for-each-ref --format=%(refname) %(objectname)`
+    - `symbolic-ref -q HEAD` (or `rev-parse HEAD`)
+    - `write-tree` of the real index
+    - `status --porcelain=v1 -z --untracked-files=all`
+    - a hash of the worktree bytes for dirty paths
+    - every parsed task record under the tasks dir (compared semantically via `storage.Load`, not by bytes)
+    - the pointer file content or its absence
+    - for nested and separate layouts: the tasks repo's HEAD, `log --oneline`, and index tree
+  - **`StartTask` dispatch**, under the lock:
+    - `s.git == nil` → legacy (P5).
+    - Load t. If `t.Branch != ""`, `BranchSHA(t.Branch)` exists and the status is `todo` or `in_progress`, this is a restart (P8). Until P8, return the error "restart of a branched task is not implemented", which is only reachable with branching on.
+    - `in_progress` without a branch → the existing error.
+    - Otherwise run the existing P0 checks (`todo`, not blocked), then `startSub` when `ParentID != ""`, else `startFresh`.
+  - **`startFresh(t, txn)`**, per 5.2 P1–P4 and M1–M5:
+    - Preflight identity: `!s.identity.FromGitEmail` gives the error "git config user.email is not set; it names your branches".
+    - `origBranch, origSHA, origIndex` are captured first; a detached HEAD is refused.
+    - The `final` availability rule allows `final == t.FinalBranch`.
+    - Split the work into `startFreshRecords(t, txn)`, which does M2–M4 without the switch, so `startSub` can reuse it for a `todo` parent.
+  - **`vacate(txn, op, carryFrom string)`**, per 5.1:
+    - Classify with `DirtyPaths`, HEAD, and `s.index` lookup "an in_progress task whose `Branch == HEAD`".
+    - A checkpoint is `Snapshot`, with undo `MoveBranch(head, origSHA, W)` followed by `RestoreIndex(origIndex)`.
+    - Carrying is allowed only when HEAD is the chosen base on a fresh top-level start.
+    - Otherwise refuse, listing at most 20 paths.
+  - **`startSub(s, p)`**, per 5.3:
+    - Legacy parent without a branch → P5 legacy path.
+    - Parent `todo` → `startFreshRecords(p)` in the same txn.
+    - Then preflight `BranchSHA(p.Branch)` and `BranchAvailable(subWip)`.
+    - `vacate`, with a checkpoint onto P's wip when HEAD is P's wip.
+    - Re-read `Ptip`, then `CreateBranch(subWip, Ptip)`, update S, set the pointer, `Switch(subWip)`.
+  - **After every successful switch:** `s.index.Load()`. A load error after a successful switch is logged and returned as success with a warning, because git state is final; document this.
+  - **On any error after the first mutation:** `txn.rollback()`. The returned error wraps the original error and any rollback error. A rollback failure names the refs and SHAs and says no content was lost.
+  - **`failingGit`** embeds `task.GitRepo`, with fields `failAt int` (the Nth mutating call fails) and `calls` (a counter over all calls).
+    - Mutating methods: `Snapshot`, `CreateBranch`, `MoveBranch`, `DeleteBranch`, `Switch`, `ResetKeep`, `RestoreIndex` (never fail undos: only count calls made before the first failure), `CommitTree`, `MergeTrees`, `Replay`.
+    - Also add a `failingStore` for `CurrentTaskStore` writes.
+- `Tests and checks` (`branching_start_test.go`; each is table-driven over `testsupport.AllLayouts` where the layout matters, and each checks that the tasks repo is unchanged and no server commit touches the tasks dir via `git log --name-only <range>`):
+  - `TestStartBaseSelection`:
+    - `main_patched` is preferred over `main`.
+    - Only `master_patched` and `master` exist → `master_patched`.
+    - No base exists → an error, with state unchanged.
+    - A custom list naming missing branches → an error.
+    - HEAD on a clean non-base branch still branches from the base tip.
+  - `TestStartFresh`:
+    - `refs/heads/dev/wip/<name>` equals the base tip.
+    - HEAD is the wip.
+    - The fields `branch`, `base_branch` and `start_commit` are set.
+    - The pointer is at `<tasks>/.users/dev/current_task`.
+    - The status is `in_progress`.
+  - `TestStartDirtyRules`:
+    - Dirty on the base → the changes are carried and no commit is made on the base.
+    - Dirty on another in-progress task's wip → a checkpoint commit on that wip, with subject `wip(<id>): checkpoint before start <new>`.
+    - Dirty on a foreign branch → refused, the paths are listed, and `RequireStateEqual`.
+    - Only the tasks dir is dirty → never blocks.
+  - `TestStartRefusals`: detached HEAD; a foreign existing `dev/<name>`; `dev` existing as a branch (prefix collision); identity without email (inject `task.WithIdentity(task.Identity{Name: "x"})`); a non-repo root. Each ends with `RequireStateEqual`.
+  - `TestStartSubtask`:
+    - From P's dirty wip → a checkpoint on P, and the subtask wip equals P's new tip.
+    - `subWip` name is `dev/wip/<p>--<s>`.
+    - The pointer names S.
+    - A `todo` parent is auto-started with its own wip (no switch to it), and HEAD ends on subWip.
+    - A legacy parent without a branch → no git calls; the subtask becomes `in_progress` without a branch.
+  - `TestStartFaultInjection`: for fresh and subtask-with-todo-parent, loop `failAt = 1..N` until success. Each failing run asserts `RequireStateEqual(before, after)` and that the returned error mentions the failed step. Include a `failingStore` pointer-write failure.
+  - `TestStartBranchingOffUnchanged`: `NewBacklog` (no git) keeps existing behaviour.
+  - Run the gate. Git tests call `RequireGit` and therefore do not use `t.Parallel`.
+- `Commit boundary:` `feat(task): create and switch per-task wip branches on start_task`
+- `Definition of done:` The start matrix passes in all five layouts, fault injection restores full state at every step, and branching-off behaviour is unchanged.
+- `Rollback note:`
+  - Revert. Tasks started with branching on keep inert branch fields, and the legacy complete ignores them until P7.
+  - Interim limitation, feature off by default: a branched task completed between P6 and P7 takes the legacy record-only path.
+
+---
+
+- `Phase ID:` **P7 — Completion flows and parent gate**
+- `Goal:` `complete_task` with branching on handles four flows:
+  - delivered top-level squash onto the final branch (5.5)
+  - delivered subtask squash-merge into the parent's wip (5.6)
+  - the parent gate (5.7)
+  - non-delivered safety snapshot and return (5.8, cases A and B)
+
+  A parent that has a branch is never auto-completed.
+- `Why this phase exists:` Completion is the core acceptance criterion: base + exactly one commit, and no loss.
+- `Files likely to change:`
+  - `internal/task/branching.go`: `completeDelivered`, `completeSubDelivered`, `completeAbandoned`, `subtaskGate`, `returnTarget`
+  - `internal/task/service.go`: `CompleteTask` dispatch; skip parent auto-complete when `parent.Branch != ""`, in both the legacy and branched paths
+  - new `internal/task/branching_complete_test.go`
+  - `internal/task/service_test.go`: a mock-level test for the auto-complete skip
+- `Regeneration required:` No.
+- `Dependencies:` P6.
+- `Implementation tasks:`
+  - **`CompleteTask` dispatch**, after the existing P0 checks, which keep their current order and messages:
+    - `s.git == nil` or `t.Branch == ""` → legacy (P5), plus the auto-complete skip.
+    - Delivered → `completeSubDelivered` when `t.ParentID != ""` and the parent has a branch, otherwise `completeDelivered`.
+    - Non-delivered → case B when `Head().branch == t.Branch`, else case A (legacy record-only plus the pointer rules).
+  - **`completeDelivered`**, per 5.5:
+    - P1: HEAD must equal `t.Branch` ("switch to <branch> first").
+    - P2: the start commit must resolve and be an ancestor of HEAD.
+    - P3: the final branch is absent, or it exists and `t.FinalBranch == final` (then a compare-and-swap move).
+    - P4: `subtaskGate(t)`.
+    - P5: `msg := commitMessage(t, o.commitMessage)`.
+    - Mutations M1–M6 exactly as the design lists them, including the undos.
+  - **`completeSubDelivered`**, per 5.6: `MergeTrees(S.StartCommit, Ptip, W)`. Conflicts produce the error "squash-merging <S> into <P.Branch> conflicts in: …; nothing was changed", followed by a rollback. Then `CommitTree(M, Ptip, msg)`, `MoveBranch(P.Branch, C, Ptip)`, record, pointer → P, `Switch(P.Branch)`.
+  - **`subtaskGate(p)`**, per 5.7, reading subtasks from `s.index.GetSubtasks` (now carrying `Branch` and `SquashCommit`). The message is the design's, with a 12-character SHA.
+  - **`completeAbandoned` (case B)**, per 5.8:
+    - Choose the target: `t.BaseBranch` if it exists, else the first existing base (top-level); `P.Branch` (subtask).
+    - Snapshot with subject `wip(<id>): closed as <resolution>`.
+    - Capture every open subtask record, then `closeSubtasksWith`, then `update(T → done …)`.
+    - Pointer → P or removed.
+    - `Switch(target)`.
+  - **Auto-complete skip.** In the "all siblings done" branch, skip when `parent.Branch != ""`, with a comment citing the design.
+  - `RunAutoArchive` in the handler is unchanged.
+- `Tests and checks` (`branching_complete_test.go`, all five layouts unless noted):
+  - `TestCompleteDelivered`:
+    - Start, commit one file on the wip, leave a second tracked file modified and a third untracked, then complete with `WithCommitMessage("feat: x")`.
+    - `rev-parse final^` equals `start_commit`, and `rev-list --count start..final` is 1.
+    - `final`'s tree has all three code files and no tasks-dir change.
+    - The wip keeps its commit plus the snapshot.
+    - HEAD is `final`.
+    - The record is done, with `final_branch` and `squash_commit`.
+    - The pointer is removed.
+    - `log -1 --format=%B final` equals the message.
+  - `TestCompleteDeliveredDefaultMessage`: title, description, and the `Task: <id>` trailer.
+  - `TestCompleteDeliveredRefusals`:
+    - HEAD is not the wip.
+    - `start_commit` is not an ancestor, after `update-ref` rewinds the wip.
+    - A foreign final branch exists.
+
+    Each ends with `RequireStateEqual`.
+  - `TestCompleteNonDeliveredCheckedOut`:
+    - An uncommitted file ends up in the safety commit on the wip.
+    - HEAD is on the base.
+    - The worktree no longer has the file (it lives on the wip).
+    - The record is done/obsolete.
+    - The pointer is removed.
+    - For a subtask: HEAD is the parent's wip and the pointer names the parent.
+  - `TestCompleteNonDeliveredNotCheckedOut`: record-only; refs and HEAD are unchanged (the wrapper counts zero mutating calls).
+  - `TestCompleteNonDeliveredCascade`: the parent is closed obsolete with open subtasks; the subtask records are closed and their wips untouched.
+  - `TestCompleteSubtaskDelivered`:
+    - Exactly one new commit on P's wip, whose parent is the old Ptip.
+    - `squash_commit` is set.
+    - HEAD is P's wip.
+    - The pointer names P.
+    - P stays `in_progress`: no auto-complete, even though it was the last subtask.
+  - `TestParentGate`:
+    - Passes after the subtask merge.
+    - Refuses while a subtask is `in_progress`.
+    - Refuses after `git update-ref refs/heads/<P.Branch> <pre-merge sha>`, with the message naming the subtask and SHA.
+    - A non-delivered branched subtask is accepted.
+    - A legacy branchless done subtask is accepted.
+  - `TestSubtaskMergeConflict`: P's wip and S change the same line; the error lists the path and `RequireStateEqual` holds (including the undo of S's snapshot).
+  - `TestCompleteFaultInjection`: a `failAt` loop over delivered top-level, delivered subtask and non-delivered case B, restoring full state each time.
+  - `TestLegacyInProgressTaskNoGitCalls`: a branchless `in_progress` task created before enabling (via `NewBacklog` records reopened by `NewGitBacklog` on the same dir, or seeded with `Update` before the P9 guard) completes with `calls == 0` for mutating methods.
+  - `service_test.go` `TestLastSubtaskDoesNotAutoCompleteBranchedParent` (mock-level, no git).
+  - Run the gate.
+- `Commit boundary:` `feat(task): squash, merge and switch branches on complete_task`
+- `Definition of done:` All acceptance criteria about completion hold in every layout, and fault injection is green.
+- `Rollback note:` Revert to P6 behaviour. Branches already created stay as plain git branches, and no data is lost.
+
+---
+
+- `Phase ID:` **P8 — Restart and rebase**
+- `Goal:` Running `start_task` again on a task whose wip ref exists (`todo` after a reopen, or `in_progress`) replays the wip onto its parent line with `git replay`. It then updates `start_commit`/`base_branch`, writes the pointer, and switches (or runs `reset --keep`). A conflict rolls back fully.
+- `Why this phase exists:` It depends on `Replay`, which is experimental in git, and it has its own `reset --keep` special case. Isolating it keeps P6 and P7 reviewable.
+- `Files likely to change:`
+  - `internal/task/branching.go`: `restart`, `restartOnto`
+  - `internal/task/service.go`: replace the P6 placeholder error in the dispatch
+  - new `internal/task/branching_restart_test.go`
+- `Regeneration required:` No.
+- `Dependencies:` P7. The restarted-then-delivered assertion needs completion.
+- `Implementation tasks:`
+  - **Restart**, per 5.4:
+    - Run the blocked check only when the status is `todo`.
+    - Choose `onto`: top-level uses `t.BaseBranch` if it exists, else the first existing base. A subtask uses `P.Branch`; if P is `todo`, start or restart P first in the same txn without switching; P without a branch gives the error "parent P has no branch; start it first".
+    - Preflight: `ontoTip`, `oldTip`, the start commit resolves and is an ancestor of `oldTip`, and `vacate` (a dirty HEAD on T's own wip counts as server-owned).
+    - M1: checkpoint. If HEAD was T's wip, `oldTip` becomes W.
+    - M2: skip the replay when `ontoTip == t.StartCommit` (`newTip = oldTip`). Otherwise `Replay(ontoTip, t.StartCommit, t.Branch)`:
+      - Conflicts give the error "rebasing <branch> onto <onto> conflicts in: …; nothing was changed", followed by a rollback.
+      - `ErrReplayMerge` or `ErrReplayUnsupported` give a clear error, followed by a rollback.
+    - M3: `MoveBranch(t.Branch, newTip, oldTip)` with a compare-and-swap undo, unless HEAD is `t.Branch`.
+    - M4: record with `withBranch{BaseBranch: onto, StartCommit: ontoTip}`, keeping `FinalBranch`/`SquashCommit`.
+    - M5: pointer.
+    - M6: `Switch(t.Branch)` or `ResetKeep(newTip)` (undo `ResetKeep(oldTip)`), then `index.Load()`.
+  - A `todo` task whose branch ref is missing takes the fresh path; this is already covered by the P6 dispatch.
+- `Tests and checks` (`branching_restart_test.go`, gated by `RequireGitReplay`; all layouts for the main case, the tracked and separate layouts for the rest):
+  - `TestRestartAfterBaseAdvanced`:
+    - Deliver, reopen via `Update(status todo)`, advance `main_patched`, then `StartTask`.
+    - The wip is replayed on the new tip.
+    - `start_commit` equals the new tip.
+    - HEAD is the wip.
+    - A second delivery gives `final^ == new tip` and one commit.
+    - `final` was moved with compare-and-swap (its old SHA is visible in `reflog dev/<name>`).
+  - `TestRestartInProgressFromOtherBranch`: HEAD is on the clean base → switch to the wip, with the replay applied.
+  - `TestRestartWhileOnWipDirty`: the checkpoint commit is made, `reset --keep` is used, the dirty content is preserved in the checkpoint, and the worktree equals the new tip.
+  - `TestRestartNoBaseMovementNoReplay`: the wrapper counts zero `Replay` calls.
+  - `TestRestartSubtaskOntoParentTip`: P's wip gained a commit, and S replays onto it.
+  - `TestRestartConflict`:
+    - The base and the wip edit the same line.
+    - The error lists `f`.
+    - `RequireStateEqual`: refs, HEAD, index tree, worktree status, records and pointer are unchanged, and the checkpoint is undone.
+  - `TestRestartMergeCommitRefused`: the wip contains a merge commit → a clear error and state unchanged.
+  - `TestRestartMissingWipTakesFreshPath`
+  - `TestRestartStartCommitNotAncestor` → an error and state unchanged.
+  - `TestRestartFaultInjection`: a `failAt` loop for both the switch and the reset-keep variants.
+  - Run the gate.
+- `Commit boundary:` `feat(task): restore and rebase existing wip branches on start_task via git replay`
+- `Definition of done:` The restart acceptance criterion holds, and conflicts provably change nothing.
+- `Rollback note:` Revert to the P7 state, where restart returns the placeholder error. If `git replay` misbehaves on some git, swap the implementation of `vcs.Replay` for the design's `rebase --onto` + `--abort` fallback without touching `task`.
+
+---
+
+- `Phase ID:` **P9 — `update_task` guard, `commit_message`, CLI, tool text**
+- `Goal:` Close the bypass paths and expose the new parameters. Specifically:
+  - the §5.10 guard in exported `Update` when `s.git != nil`
+  - the `commit_message` param on `complete_task`
+  - CLI `complete -m/--message`, and branch lines in CLI output
+  - updated `start_task`, `complete_task` and `update_task` YAML descriptions
+- `Why this phase exists:` These are agent- and user-facing surface changes on top of complete flows. They are kept apart so that the flow commits stay pure logic.
+- `Files likely to change:`
+  - `internal/task/service.go` (`Update` guard via a helper `branchingGuard(t, status, opts)` in `branching.go`)
+  - `internal/tools/workflow.go` (the `commit_message` param, read like `resolution_note`)
+  - `internal/tools/descriptions/{start_task,complete_task,update_task}.yaml`
+  - `internal/tools/tools_test.go` (or a new `workflow_git_test.go`)
+  - `internal/cli/cli.go` (`completeCmd.String(&completeMessage, "m", "message", …)`)
+  - `internal/cli/commands.go` (`cmdComplete` gains a `message` arg → `WithCommitMessage`; `cmdStart` and `cmdComplete` text messages mention the branch)
+  - `internal/cli/output.go` (`FormatTaskDetail` prints `Branch:`, `Final branch:`, `Base branch:` and `Start commit:` when set)
+  - `internal/cli/cli_test.go`, `internal/cli/output_test.go`
+- `Regeneration required:` No. The embedded YAML is picked up by `go build`.
+- `Dependencies:` P7, P8.
+- `Implementation tasks:`
+  - **Guard matrix**, evaluated in `Update` after locking and before `update`, only when `s.git != nil`. Error messages as in the design:
+    - `todo → in_progress` is refused.
+    - Closing (`status done` or any `WithResolution`) an `in_progress` task with a branch is refused.
+    - `done → in_progress` with a branch is refused.
+    - Reopening to `todo` is allowed.
+  - **CLI.**
+    - `cmdStart` text: `Task #<id> started on branch <b>.` when a branch is set.
+    - `cmdComplete` text: `… Final branch: <f>.` / `… Now on <branch>.` where applicable.
+    - To get the task back, use the returned `*Task`, which is currently discarded.
+  - **YAML text.** Covers the fresh branch from the base list, restart + rebase, the dirty-tree rule, the pointer, squash, subtask merge, the safety commit, where HEAD ends up, the `commit_message` param (used verbatim only when a squash commit is made, ignored otherwise), and the `update_task` refusals. Every text says "when git branching is enabled", so it stays true for disabled projects.
+- `Tests and checks:`
+  - `task` in-package: `TestUpdateGuardMatrix`, using a stub `GitRepo` (a nil-safe fake satisfying the interface), across the four rows plus title/priority edits, which are always allowed.
+  - A `task_test` git case: `TestReopenThenStartRestarts` (reopen via `Update` is allowed and the branch fields are kept).
+  - `tools`, over `NewGitBacklog` wrapped in `project.NewStatic`:
+    - `TestStartCompleteHandlersWithGit`: `commit_message` lands in `final`, and the JSON has `branch` and `final_branch`.
+    - `TestUpdateTaskRefusedUnderBranching`: the message text.
+    - `TestCompleteTaskCommitMessageParamDocumented`: the schema has `commit_message`.
+  - `cli`:
+    - `TestCompleteCommandMessageFlag`: `MCP_PROJECT_DIR` points at a temp git repo with `mcp-tasks.yaml` `git: {branching: true}`, then `start` + `complete -m "msg"`, and `git log -1 --format=%s` gives `msg`.
+    - `TestStartCommandPrintsBranch`.
+    - `output_test.go` `TestFormatTaskDetailBranchLines`.
+  - Run the gate.
+- `Commit boundary:` `feat(tools,cli): guard update_task under git branching, add commit_message and complete -m`
+- `Definition of done:` No path can move a branched task's status without going through the flows. `-m`/`commit_message` work end to end.
+- `Rollback note:` Revert. The flows remain intact, only unguarded.
+
+---
+
+- `Phase ID:` **P10 — Web branch chip and copy control**
+- `Goal:` The board card and the detail view show the task's branch as a chip with a client-side copy button, and the detail view gets a "Git" block. The UI stays GET-only.
+- `Why this phase exists:` It is the user-requested UI surface. It is independent of the git flows, since it reads only the persisted fields.
+- `Files likely to change:`
+  - `internal/web/view.go`: `CardView.Branch` (`FinalBranch` if set, else `Branch`) in `newCardView`; `DetailView` gains `Branch`, `FinalBranch`, `BaseBranch`, `StartCommit`, `StartCommitShort`, `SquashCommit`, `SquashCommitShort` in `newDetailView`
+  - `internal/web/templates/_card.html`: a row after the `<a>` block, inside `<article>`, per design §8
+  - `internal/web/templates/_detail.html`: the Git block
+  - `internal/web/templates/layout.html`: `<script src="/static/app.js" defer></script>`
+  - new `internal/web/static/app.js`: a delegated `[data-copy]` click handler with `stopPropagation`, `navigator.clipboard.writeText` in a secure context and a textarea + `execCommand('copy')` fallback, and a 1.5-second "copied" label
+  - `internal/web/assets.go`: `//go:embed static/app.css static/htmx.min.js static/app.js`, with the comment updated
+  - `internal/web/assets/input.css`: a `.copy-btn` component style (Tailwind source only)
+  - `internal/web/view_test.go`, `internal/web/handlers_test.go`
+- `Regeneration required:` The CSS **source** (`input.css`) and the templates change here. The regenerated `app.css` is committed separately in P11. Until then the button renders with browser defaults, which is functional.
+- `Dependencies:` P2 (fields in the index and the full task).
+- `Implementation tasks:` As listed above. Use no htmx attributes on the new elements, and use `html/template` auto-escaping for `data-copy`.
+- `Tests and checks:`
+  - `TestCardBranchPrefersFinal` (view mapping).
+  - `TestDetailViewGitFields` (short SHAs are 12 characters, and the full SHA is in `title`).
+  - `TestBoardShowsBranchChip`: seed a task with `Branch` set through `svc.Update`, reopen and restart, or write its frontmatter directly via the storage API into the `NewBacklog` dir.
+  - `TestEscaping` extended: a branch containing `"><script>` is escaped in both the text and `data-copy`.
+  - `TestStaticAssetsServed` extended: `/static/app.js` returns 200 with a JS content type.
+  - `TestNoMutatingRoutes` and `TestNoExternalAssetReferences` still pass (`app.js` is local).
+  - A new `TestCopyButtonHasNoHtmxAttributes` asserts no `hx-` attribute appears on `.copy-btn`.
+  - `TestHandlerRaceAgainstWrites` is still green under `-race`.
+  - Run the gate.
+- `Commit boundary:` `feat(web): show task branch chip with copy-to-clipboard`
+- `Definition of done:` The chip and button render, copying works in a manual browser check, and every read-only guarantee test passes.
+- `Rollback note:` Revert. It has no server-side effects.
+
+---
+
+- `Phase ID:` **P11 — Rebuild vendored CSS**
+- `Goal:` Regenerate `internal/web/static/app.css` from the templates and `input.css` changed in P10.
+- `Why this phase exists:` This is the project rule: regeneration is a distinct, verifiable commit that is never mixed with logic.
+- `Files likely to change:` `internal/web/static/app.css` only.
+- `Regeneration required:` **Yes, a full rebuild of app.css** with `scripts/build-css.sh`, a maintainer step that downloads pinned Tailwind v4.3.3 into `.cache/`, which is gitignored.
+- `Dependencies:` P10.
+- `Implementation tasks:` Run `scripts/build-css.sh`. Check that `git diff --stat` touches only `app.css`.
+- `Tests and checks:` The gate; `TestStaticAssetsServed`; a manual board check that the chip and button are styled.
+- `Commit boundary:` `chore(web): rebuild app.css for branch chip`
+- `Definition of done:` `app.css` contains the `.copy-btn` rules and any new utility classes, and nothing else changes.
+- `Rollback note:`
+  - Revert the CSS only. The UI still works unstyled.
+  - If the script cannot download offline, defer this commit and note it. P10 remains functional.
+
+---
+
+- `Phase ID:` **P12 — Documentation, skills, commands, config reference**
+- `Goal:` Document the feature everywhere the design's File Impact Map lists, and apply assumption 1 (`.gitignore`).
+- `Why this phase exists:` Docs should describe shipped behaviour. The embedded `instructions.md` is agent-facing text with no logic.
+- `Files likely to change:`
+  - **`CLAUDE.md`:**
+    - task schema: the five fields
+    - a new Design Decisions subsection "Git branching", covering the tasks dir never being committed, naming, the base list, the vacate rule, the sequences, restart/rebase, the gate, rollback, the pointer, and the `git replay` requirement
+    - Configuration `git:` block
+    - env table `MCP_GIT_BRANCHING`
+    - MCP tools: `get_current_task`, `commit_message`, the `update_task` guard, and the start/complete descriptions
+    - Project Structure: `internal/vcs/*`, `internal/task/{git,branching,current}.go`, `internal/storage/current.go`, `static/app.js`
+    - Concurrency: git runs under the lock and web reads wait
+    - Validation: reserved `.users`
+    - Subtasks: auto-complete is skipped for a branched parent
+  - **`README.md`:** a feature section, config, requirements (git with `replay --ref-action=print`, `user.email`), and the three tasks-dir layouts.
+  - **`internal/app/instructions.md`:** a "Git branching (when enabled)" section per design §9, and the implementation-loop text about `get_current_task`.
+  - **`mcp-tasks.yaml`:** a commented reference block `# git: {branching: false, base_branches: [main_patched, master_patched, main, master]}`. It is not enabled.
+  - **`.gitignore`:** add `tasks/.users/` under a comment and keep `.current_task`.
+  - **`begin_task` SKILL.md**, all three copies:
+    - `.claude/skills/begin_task/SKILL.md`
+    - `skills/begin_task/SKILL.md`
+    - `plugins/mcp-task-manager/skills/begin_task/SKILL.md`
+
+    Step 5 becomes: call `start_task` right away, then use `get_current_task`. Update the references to the current task in steps 2–5.
+  - **`begin-task.md` command**, both copies (`commands/`, `plugins/mcp-task-manager/commands/`): item 1 wording.
+  - **`superpowers-workflow`** (`skills/superpowers-workflow/SKILL.md` and its plugin mirror), around lines 340–344: add the note about branched tasks and `commit_message`.
+  - **`workflow` and `implementation` SKILL.md**, in `.claude/skills/`, `skills/` and `plugins/mcp-task-manager/skills/`: one sentence saying lifecycle commits are not agent commits.
+- `Regeneration required:` No. `instructions.md` is embedded and picked up by `go build`.
+- `Dependencies:` P1–P11.
+- `Implementation tasks:` Edit as listed. Keep the mirrors byte-identical. Leave the historical notes under `tasks/web-ui-kanban-module/` unchanged.
+- `Tests and checks` (final verification):
+  - **Gate and lint:**
+    - `gofmt -l .` (empty)
+    - `go build ./...`
+    - `go vet ./...`
+    - `go test -race ./...`
+    - `go test -race -count=3 ./internal/task/... ./internal/vcs/...` (flake check on the git tests)
+    - LSP diagnostics clean
+  - **Mirrors and references:**
+    - `diff -r .claude/skills/begin_task skills/begin_task`
+    - `diff -r skills plugins/mcp-task-manager/skills` (only the known `superpowers-workflow/agents` difference)
+    - `diff commands/begin-task.md plugins/mcp-task-manager/commands/begin-task.md`
+    - `grep -rn "\.current_task" --exclude-dir=.git --exclude-dir=tasks .` shows only the `.gitignore` line
+  - **This repo is still off:** `go run ./cmd/mcp-task-manager version` still resolves this repo with branching off, and `git status` shows no `tasks/.users/`.
+  - **Manual scenario from design §Testing Strategy 11**, in a scratch clone under the session scratchpad, with a separate tasks repo and `git.branching: true`:
+    1. begin → land on the wip; `get_current_task`.
+    2. Edit, then `complete_task` with a message; `git log --graph --all`.
+    3. Reopen, advance `main_patched`, restart → the rebase happens.
+    4. Force a conflict → a clean error and state unchanged.
+    5. Subtask delivered, then parent delivered.
+    6. `resolution: obsolete`.
+    7. The web chip copies.
+
+    Never do this in this repository.
+- `Commit boundary:` `docs: document git branch-per-task workflow and per-user current-task pointer`
+- `Definition of done:` Every item in the design's File Impact Map is addressed, and the acceptance criterion "CLAUDE.md / README / server instructions document the feature" is met.
+- `Rollback note:` Revert. It is docs and text only.
+
+### Cross-Phase Risks
+
+- **`git replay` is experimental.** Output format and flags may change between git versions, and the conflict path gives no diagnostics (verified: exit 1 with empty output).
+  - Mitigations: everything is confined to `vcs.Replay`, replay tests are gated by `RequireGitReplay`, the paths are derived through `merge-tree`, `ErrReplayUnsupported` is a clear error, and the design has a documented `rebase --onto`/`--abort` fallback with the same contract.
+  - `/usr/bin/git` (Apple 2.54) also supports `--ref-action`, so a PATH change is not fatal.
+- **Test environment leakage.** Git tests read the developer's global config and hooks unless isolated.
+  - `RequireGit` sets `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1` and fixes the dates.
+  - Because of `t.Setenv`, these tests cannot use `t.Parallel`; that makes them slower but deterministic.
+  - macOS temp dirs are symlinked (`/var` → `/private/var`). `vcs` must `EvalSymlinks` before comparing the tasks dir with `top`.
+- **Tracked tasks dir in the code repo** (this repo's own layout and `TasksInRepoTracked`). Record writes dirty the worktree between the record step and the switch. A `switch` refuses if tracked task files differ between trees and are locally modified; the flow rolls back.
+  - Test fixtures must commit the tasks dir on the base *before* creating wips, so trees agree.
+  - Add a dedicated test in P6 that creates this divergence and asserts a clean refusal.
+- **Record restore fidelity.** Rollback restores records via `storage.Save` of the captured `*Task`, which may not be byte-identical, for example time formatting. Tests compare records semantically through `Load`. The web race test and the index both see consistent state because `index.Set` is called in the undo.
+- **Lock duration.** Git runs under `s.mu`, typically 10–15 calls. `TestHandlerRaceAgainstWrites` stays green, but web polls wait. A per-command 60-second timeout bounds the worst case. The tool `ctx` is not propagated, as the design accepted.
+- **`Seed` vs the guard.** From P9, `testsupport.Seed` status moves are refused on git backlogs. All branching tests seed with `Create` only and use `StartTask`/`CompleteTask`. This is documented on `NewGitBacklog`.
+- **Interim states.** Between P6 and P7 a branched task completes record-only. Between P6 and P8 restart returns a placeholder error. Both are reachable only with branching explicitly enabled, and it is off by default everywhere, including this repo.
+- **Identity at build time.** From P4, every `project.Build` runs `git config --get user.email`. This is harmless when git is missing (fallback), but CLI and project tests now spawn one extra process.
+- **This task's own record** has no `branch`. It completes through the legacy path regardless of phase, and implementation commits stay on `main_patched` as usual.
+
+### Execution Order Rationale
+
+1. **P1–P3 first.** They are leaf units: config, persistence and the git wrapper. They have no behaviour change, are the easiest to prove in isolation, and can be developed in parallel.
+2. **P4** gathers the constructor/API churn and the pure helpers into one reviewable refactor, so the flow commits later contain only flow logic.
+3. **P5** ships the pointer and `get_current_task` on the legacy path. It is git-independent and gives skills a stable read API. It also establishes the journal and pointer helpers the git flows reuse.
+4. **P6 → P7 → P8** follow the task lifecycle. Start builds the harness (layouts, state capture, fault injection). Completion depends on started branches. Restart depends on completion for its "deliver again" assertions and isolates the experimental `git replay`.
+5. **P9** closes the bypasses and exposes parameters only once the flows it guards and parameterizes exist.
+6. **P10 → P11**: the UI change, then the separate regeneration commit, as the project's codegen-isolation rule requires. P10 can run in parallel with P5–P9 because it depends only on P2.
+7. **P12** comes last, so the documentation, skills and server instructions describe shipped behaviour. It also carries the `.gitignore` default for `tasks/.users/` (assumption 1).

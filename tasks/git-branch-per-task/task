@@ -1,0 +1,83 @@
+# Task: git-branch-per-task
+
+## Original input
+
+> давай начнем новый таск такой
+> нужно добавить бранчинг во время начала таска - т.е. когда мы начинаем таск надо создать новый бранч <git.user>/wip/<short task name> и работать в нем, когда мы заканчиваем таск надо софт ресетнуться на начало бранча с сохранением всех изменений и закоммитьит всё в бранч <git.user>/<short task name>
+> понятно ? есть возражения? получится сделать это в мсп и чтобы данные не терялись? видимо придется добавить новый скилл на завершение бранча?
+> но все гит магия должна делаться в функции мсп сервера а не отдаваться на скилл.
+> начни таск и проведи исследование
+
+## Clarifications
+
+Answers from the user after research (2026-09-29), verbatim first, then interpretation:
+
+> <git.user> надо брать из гит конфига - да часть емейла
+> подзадачи - подветка родителя - видимо придется удостоверится что подзадачи решены до главное задачи и вмержены в неё - ну это если мы конечно начнем над ними работать
+> если мы не решили задачу - надо оставить wip ветку как есть без сквоша и перейти в главную
+> после завершения оставаться в ветке таска - дальше уже задача пользователя замержить её в маин или отпарвить на пул реквест
+> этот таск делаем по старинке
+> в хттп просмотрщике надо добавить упоминание ветки таска - простой лейбл с вохможность копировать его в клипборд
+> так же дороление по .current_task - он должен храниться в ветке - свитч на ветку восстанавливает .current_task
+> так же перенести .current_task в папку тасков
+
+Interpretation:
+
+- **`<git.user>`** = local part of `git config user.email` (before `@`), e.g. `igor.cwer`. Must still be validated as a legal refname component.
+- **Short task name** = task id when it is a kebab custom id; otherwise a slug derived from the title (design decides details).
+- **Start point** is recorded on the task at `start_task` (start commit SHA and the base branch it was started from) rather than recomputed via merge-base.
+- **Subtasks** work in a sub-branch of the parent's wip branch. A subtask branch is only created if work on the subtask is actually started. Before the parent can be completed, every started subtask must be resolved and its work merged into the parent's wip branch. Note: git refs cannot have both `a/b` and `a/b/c` (file/directory conflict), so the subtask branch naming must avoid nesting under the parent's ref path.
+- **Delivered completion** (`completed`): squash everything since the start commit (including uncommitted changes and the task's own final status write) into one commit on `<user>/<name>`; keep the wip branch intact; stay checked out on `<user>/<name>` afterwards. Merging into main or opening a PR is the user's job.
+- **Non-delivered completion** (`obsolete`, `superseded`, `duplicate`, `wontfix`): no squash; leave the wip branch as is (any uncommitted work must be preserved, not discarded) and switch back to the base branch the task was started from.
+- **This task (`git-branch-per-task`) is done the old way**, without the new branching (it was started on `main_patched` before the feature existed).
+- **Web UI**: show the task's branch as a simple label with a copy-to-clipboard control (card and/or detail view).
+- ~~`.current_task` stored in the branch~~ — superseded, see second round below.
+- A dedicated skill is acceptable only as a thin caller (e.g. supplying the commit message); all git operations are performed by the MCP server.
+- The feature is opt-in via `mcp-tasks.yaml` so existing users are unaffected.
+
+Second round of answers, after the first design (2026-09-29), verbatim:
+
+> насчет .current_task я передумал - все таски у нас потенциально будут храниться в отдельном репозитории, так что для .current_task сделаем так - в папке тасков будет папка .users в которой у каждого уюзера будет своя папка и там будет лежать его current_task (теперь без точки)
+> после бегин таск да мы сразу переходим в вип ветку таска
+> повторные старт таск восстанавливает ветку - видимо придетс ещё делать ребейз на родительскую ветку (или маин или ветку родительского таска)
+> 5 - забей
+> 6 - да
+> 7 - да гит самы последний у нас
+> так ещё учитывай что маин ветка у нас может быть и маи и мастер и маин_патчед и мастер_патчед - надо где-то хранить список - причем в списке ветки в порядке приоритета - _патчед выше обынчных
+
+(The numbers refer to the first design's open questions as relayed to the user: 5 = git hooks on server-made commits, 6 = `git add -A` snapshot sweep, 7 = minimum git version.)
+
+Interpretation (supersedes the earlier `.current_task` bullet):
+
+- **The tasks directory may live in a separate git repository** from the code (or be untracked / in the same repo). Branching applies to the code repository at the project root; the design must not rely on task records riding along in code branches.
+- **Current-task pointer**: `<tasks_dir>/.users/<user>/current_task` (no leading dot on the file), one per user, `<user>` = the same email-local-part identity used for branch names. The server writes it; skills read it through the server. It is no longer restored by a code-branch checkout.
+- **begin_task starts the task immediately** (status `in_progress`, wip branch created and checked out right after intake, before research).
+- **Re-running `start_task`** on a task whose wip branch already exists restores it: switch to the existing wip branch and rebase it onto its parent branch (the main/base branch for a top-level task, the parent task's wip branch for a subtask). Conflicts must abort cleanly without data loss.
+- **Git hooks** on server-made commits: not a concern (skip).
+- **Snapshot via `git add -A`**: accepted.
+- **Git version**: the latest git may be assumed.
+- **Main/base branch list**: the main branch may be `main`, `master`, `main_patched` or `master_patched`. A priority-ordered list is stored (config with defaults), `_patched` variants ranked above the plain ones: `main_patched`, `master_patched`, `main`, `master`. The first existing branch in the list is the base for top-level tasks.
+- Accepted from the first design's recommendations: no `git.user` override for now; parent auto-complete is disabled for a parent that has a branch.
+
+## Problem statement
+
+`start_task` and `complete_task` must, when enabled, manage a per-task git branch pair inside the MCP server — creating and checking out `<user>/wip/<name>` from the current HEAD on start, and on completion producing a single squashed commit of everything done since that start point on `<user>/<name>` — without ever losing committed or uncommitted work.
+
+## Acceptance criteria
+
+- Branching is opt-in via config; with it disabled, `start_task`/`complete_task` behave exactly as today.
+- `start_task` on an enabled project creates `<user>/wip/<name>` from the current HEAD, checks it out, and records the start commit on the task.
+- `complete_task` creates `<user>/<name>` whose tree equals the wip tip (plus any uncommitted changes, per the design decision) and whose history is `start commit + exactly one commit`.
+- The wip branch and all its commits remain reachable after completion; no uncommitted change is discarded at any step.
+- Every git failure (not a repo, dirty tree conflicts, branch already exists, detached HEAD, missing start commit, ...) returns a clear tool error and leaves the repository and the task status unchanged (no half-applied state).
+- Git operations run in the resolved project root, not the server's cwd.
+- Subtasks get sub-branches of the parent's wip branch when started; the parent cannot complete until started subtasks are resolved and merged into the parent's wip branch.
+- A non-delivered resolution leaves the wip branch untouched (no squash, no lost uncommitted work) and checks out the base branch.
+- After a delivered completion the repository is left on `<user>/<name>`.
+- The web UI shows the task branch as a label with copy-to-clipboard.
+- The current-task pointer lives at `<tasks_dir>/.users/<user>/current_task`, is written by the server, and skills read it through the server.
+- Re-running `start_task` on a task whose wip branch exists switches to it and rebases it onto its parent branch; a rebase conflict aborts cleanly with no data loss.
+- Top-level tasks branch from the first existing branch of a configurable priority list (default `main_patched`, `master_patched`, `main`, `master`).
+- Works whether the tasks directory is in the code repo, in a separate repo, or untracked.
+- Behaviour is covered by tests against real temporary git repositories.
+- CLAUDE.md / README / server instructions document the feature.

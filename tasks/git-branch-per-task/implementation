@@ -1,0 +1,37 @@
+# Implementation: git-branch-per-task
+
+All 12 planned phases are implemented, one commit each, on main_patched (this task itself was implemented the old way: no branch, git.branching stays off in this repo).
+
+| Phase | Commit | Subject |
+|---|---|---|
+| P1 | 5fcfb74 | feat(config): add opt-in git branching section and MCP_GIT_BRANCHING override |
+| P2 | 4611da6 | feat(storage): persist task branch fields and add per-user current-task pointer store |
+| P3 | 475f66d | feat(vcs): add git wrapper package for branch-per-task operations |
+| P4 | 114fd99 | refactor(task): add git/identity/pointer service options, branch naming and rollback journal |
+| P5 | 0ce3237 | feat(task): per-user current-task pointer and get_current_task tool |
+| P6 | f7752ca | feat(task): create and switch per-task wip branches on start_task |
+| P7 | 3b7c46f | feat(task): squash, merge and switch branches on complete_task |
+| P8 | 1354c43 | feat(task): restore and rebase existing wip branches on start_task via git replay |
+| P9 | aa862af | feat(tools,cli): guard update_task under git branching, add commit_message and complete -m |
+| P10 | 2b420e7 | feat(web): show task branch chip with copy-to-clipboard |
+| P11 | 097af2d | chore(web): rebuild app.css for branch chip |
+| P12 | 507ac57 | docs: document git branch-per-task workflow and per-user current-task pointer |
+
+## Verification
+- Every phase: gofmt -l . (empty), go build ./..., go vet ./..., go test -race ./... all green.
+- Mutation checks: disabling rollback makes the fault-injection tests fail (refs/index/status/files reported); removing the parent gate makes TestParentGate fail; removing the .users scan skip makes TestUsersDirIgnoredByScans fail.
+- Fault injection fails every mutating git step in turn (start: 3-4 steps, complete: 11 per layout across 3 flows, restart: 3 per variant) and asserts full state restoration, in all 5 tasks-dir layouts.
+- Manual end-to-end scenario with the built CLI in a scratch code repo + separate tasks repo: start -> wip; complete -m -> one-commit final; reopen + base advance + start -> replayed; forced conflict -> clean error, byte-identical state; subtask merged then parent delivered; obsolete -> safety commit and return to base; tasks repo untouched; web board shows chips, copy buttons, Git block, app.js served.
+
+## Deviations from the plan
+- P3: Snapshot handles a gitignored tasks dir explicitly (git add rejects an exclude pathspec naming an ignored directory): add unexcluded, then reset the tasks path to HEAD in the temp index; check-ignore uses --no-index. The replay "unsupported" detection keys on "unknown option" / "is not a git command" (usage text always contains "ref-action").
+- P5: start/complete record writes now run through the journal (failed parent auto-start/auto-complete also rolls back); a non-delivered cascade also clears a pointer naming a cascaded subtask.
+- P6: vcs.FirstExistingBranch returns an empty name (no error) when none exists. A todo parent starting fresh allows carrying uncommitted changes from the base (the subtask lands on the base tip).
+- P8: restart skips the checkpoint when HEAD is already the task's wip and nothing needs replaying. Parent-line resolution (fresh start / in-place restart of a todo parent) is shared by the subtask start and restart paths.
+- P9: CLI complete prints "Final branch: X." or "Merged into <parent wip>." for delivered completions only (the CLI cannot read HEAD).
+- Flow code is split across branching_start.go / branching_complete.go / branching_restart.go instead of one branching.go.
+
+## Unverified / notes
+- Clipboard copy in a real browser (needs a manual click).
+- A restarted task whose final branch exists shows the final branch on its card (design rule: FinalBranch over Branch); may want the wip while in progress.
+- internal/task tests take ~90 s under -race (per-layout fault loops).

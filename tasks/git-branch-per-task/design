@@ -1,0 +1,875 @@
+# Design: git-branch-per-task (revised)
+
+### Design Summary
+
+With `git.branching` enabled in `mcp-tasks.yaml`, `start_task` and `complete_task` manage per-task branches in the **code repository at the project root**. The server does all git work itself by running the system `git` binary. No committed or uncommitted work is lost, and a failed call leaves the repository, the task records and the pointer exactly as they were.
+
+**Core rule: the server never puts the tasks directory into a code commit.** The tasks directory can sit in three places:
+- inside the code worktree, tracked
+- inside the code worktree but ignored or untracked, or as its own nested repo
+- in a separate repo, or in no repo at all
+
+In every case the server's code commits and the files it moves between branches never include the tasks directory. It is always treated as external, branch-independent state:
+- Task records do not change when you switch code branches.
+- The index always shows the true status.
+- No record ever has to be carried back after a switch.
+- The server never commits in a tasks repo.
+
+**Placement.** A new package `internal/vcs` wraps `os/exec` + `git`. It runs at the git top level of the resolved project root, with the tasks directory excluded from snapshots whenever it lies inside that worktree. `internal/task` consumes it through a narrow `GitRepo` interface. `project.Build` injects it with variadic `ServiceOption`s, together with a resolved user identity and the current-task pointer store. `nil` git means branching is off. The package boundary, the twin discipline and the single mutex are all unchanged.
+
+**Order of every operation.** Everything runs under `s.mu`:
+1. Preflight everything that can be checked.
+2. Git steps that only move refs or the index. Each one registers an undo in a rollback journal.
+3. Task record and pointer writes, also journaled.
+4. One final `git switch` (or `reset --keep`). This is the only step that changes the worktree.
+5. Index reload.
+
+If any step fails, the journal replays in reverse.
+
+**Branch names.** `<user>` is the sanitized local part of `git config user.email`.
+
+| Branch | Name |
+|---|---|
+| Top-level wip | `<user>/wip/<name>` |
+| Top-level final | `<user>/<name>` |
+| Subtask wip | `<user>/wip/<parent-name>--<sub-name>` |
+
+The short name `wip` is reserved and slugs never contain `--`, so these names can never collide as refs where one is a directory of another. Subtasks have no final branch.
+
+**Base branches.** `git.base_branches` defaults to `[main_patched, master_patched, main, master]`. A top-level task branches from the tip of the first branch in that list that exists, wherever HEAD currently is. Uncommitted changes are handled by a fixed rule (5.1) that never commits on a user branch and never discards anything.
+
+**Completion.**
+- **Delivered:** the server snapshot-commits the worktree (tasks directory excluded) onto the wip branch, which stays intact as the safety net. It then builds the final commit with `commit-tree`: the snapshot's tree, parented on the recorded `start_commit`, which gives "base + exactly one commit". The final branch is created (or, if this task created it earlier, moved atomically), and the server switches to it.
+- **Subtask, delivered:** the subtask is squash-merged into the parent's wip with `merge-tree` + `commit-tree` + a compare-and-swap `update-ref`. The resulting commit is recorded as the subtask's `squash_commit`, and the server switches back to the parent's wip.
+- **Non-delivered:** the server makes a safety snapshot on the wip branch and switches to the base.
+
+**Parent completion gate.** This is now a git check. Every subtask must be closed. Every subtask that has a branch and was closed as delivered must have a `squash_commit` that is an ancestor of the parent's wip tip.
+
+**Restart.** Running `start_task` again on a task whose wip branch exists restores it:
+- The wip branch is rebased onto its parent line (the current base tip for a top-level task, the parent's wip tip for a subtask). This uses `git replay`, which never touches the worktree.
+- `start_commit` is updated to the new base.
+- The server switches to the wip branch.
+- A conflict leaves nothing to abort: a full rollback runs and the error lists the conflicting paths.
+
+Branch fields survive a reopen. A final branch that this task created earlier is moved atomically on the next delivered completion.
+
+**Current-task pointer.** It lives at `<tasks_dir>/.users/<user>/current_task`, one per user. When git or the email is unavailable, `<user>` falls back to the OS user name. The server writes it on start and restart. On completion it is moved to the parent (for a subtask) or removed. The new read-only tool `get_current_task` reads it. `.users` is skipped by every scan and is reserved as a custom id.
+
+**Other decisions.**
+- `complete_task` gains an optional `commit_message`, and the CLI gains `complete -m`.
+- `update_task` refuses status changes that would bypass branching.
+- Auto-archive after `complete_task` is unchanged. Archive renames only touch the tasks directory, which server commits exclude.
+- A parent that has a branch is never auto-completed.
+- The web UI shows the branch as a chip with a client-side copy button (a new embedded `static/app.js`) and stays read-only.
+- Hooks, the `git add -A` snapshot scope and git-version gating are not concerns; only a basic sanity check remains.
+- This task (`git-branch-per-task`) is implemented the old way. Its record has no `branch`, so it always completes through the legacy path.
+
+### Current-State Evidence
+
+From the research report. The code was also read directly.
+
+- `StartTask` and `CompleteTask` hold `s.mu` for the whole call and persist only through `update`. `update` calls `storage.Save` then `index.Set` (`internal/task/service.go:574-611, 624-690, 390-485`). Nothing rolls back across files today.
+- Subtask side effects in the same file:
+  - Parent auto-start happens before the child's own write (`:596-608`).
+  - Parent auto-complete happens when all siblings are done (`:670-689`).
+  - The non-delivered cascade is `closeSubtasksWith` (`:696-708`).
+  - `Delivered()` is true for `""` and `completed` (`internal/task/task.go:167-169`).
+- The twin discipline is documented on `mu` (`service.go:107-115`) and enforced by `TestServiceNoSelfDeadlock` (`internal/task/concurrency_test.go:102-147`). `Config()` is unlocked because the config is written once.
+- `NewService(storage, archive, files, index, validTypes, cfg)` (`service.go:117-127`) has these callers:
+  - `project.Build`, the single construction site for both the resolver and the CLI (`internal/project/resolver.go:127-140`)
+  - `testsupport.NewBacklog` (`internal/testsupport/testsupport.go:21-41`)
+- Config (`internal/config/config.go`):
+  - Sections, `DefaultConfig`, `applyDefaults` and `applyEnvOverrides` are at `:92-246`. `applyDefaults` refills zeroed non-bool values. The env override pattern is `MCP_WEB_*`.
+  - The env constants are listed at `:14-32`, and `IsolateEnv` clears the same list (`testsupport.go:107-125`).
+  - `cfg.Resolution.Root` and `.TasksDir` hold the resolved paths (`:62-71`). Nothing checks for `.git`.
+  - An absolute `MCP_TASKS_DIR` makes `Root = filepath.Dir(TasksDir)` (`:163-167`). With the defaults, the tasks directory is inside the root (`:188-204`).
+- Adding a frontmatter field needs changes to:
+  - the `Save` struct and the `parse` struct (`internal/storage/markdown.go:47-75, 167-214`)
+  - `IndexEntry` and its converters, if list or board consumers need the field (`internal/storage/index.go:29-80`)
+- How scans treat a `.users/` directory:
+  - `LoadAll` skips non-directories and `archive`, then reads `<name>/<name>.md` and silently skips when that fails (`markdown.go:117-135`).
+  - `isStaleOnDisk` does the same with `Stat` (`index.go:194-212`).
+  - `maxMarkdownTaskID` uses `Atoi` on names (`markdown.go:343-356`).
+  - Flat migration only matches `^\d+\.md$` (`migrate.go:10`).
+  - So `.users/` is ignored today only as a side effect. The design makes it explicit.
+  - Reserved custom ids are a map in `internal/storage/files.go:~44`.
+- The index rebuilds when a file's mtime or the task count diverges (`index.go:176-229`). `Index.Load()` forces a rebuild.
+- `completeTaskHandler` runs `RunAutoArchive()` after `CompleteTask` and ignores its error (`internal/tools/workflow.go:81-103`). The CLI `complete` does not (`internal/cli/commands.go:467-501`, flags at `internal/cli/cli.go:149-158`).
+- Tool descriptions are embedded YAML, and a missing param makes `param()` panic (`internal/tools/descriptions.go:14-72`).
+- `update_task` with a `status` calls `svc.Update` directly (`internal/tools/management.go:253-299`).
+- Web UI:
+  - A card is an `<a>` wrapping its content (`internal/web/templates/_card.html`). A button cannot go inside it.
+  - View models are at `internal/web/view.go:44-96`.
+  - Static assets are embedded file by file (`internal/web/assets.go:12`).
+  - htmx is loaded in `layout.html:8`.
+- The repo has no `os/exec` or git code. Git on this machine is 2.55. `tasks/` is tracked in the code repo (this repo's layout). The legacy root `.current_task` is gitignored (`.gitignore:20`).
+- Every place that references `.current_task`:
+  - `.claude/skills/begin_task/SKILL.md:16`, `skills/begin_task/SKILL.md:16`, `plugins/mcp-task-manager/skills/begin_task/SKILL.md:16`
+  - `commands/begin-task.md:12`, `plugins/mcp-task-manager/commands/begin-task.md:12`
+  - `.gitignore:20`
+  - historical notes under `tasks/web-ui-kanban-module/` (left unchanged)
+- `skills/superpowers-workflow/SKILL.md:340-344` and its plugin mirror stage and commit after `complete_task`. The workflow and implementation skills forbid commits unless the user asks.
+
+### Proposed Architecture
+
+#### 1. Package placement and injection
+
+**`internal/vcs` (new).** Imports only the standard library; does not import `task`.
+
+`vcs.New(root, tasksDir string) *Repo` runs no git. On first use, `Check()` resolves and caches:
+- `top`: the output of `git -C <root> rev-parse --show-toplevel`.
+- `tasksRel`: the tasks directory relative to `top`, but only when it lies inside `top`. It becomes the exclude pathspec `:(top,exclude)<tasksRel>`. When the tasks directory is outside the worktree, there is no exclusion.
+
+Every command runs as `git -C <top> …`.
+
+How commands are run:
+- `exec.CommandContext` with a 60-second per-command timeout and `Stdin = nil`.
+- Environment: `os.Environ()` plus `GIT_TERMINAL_PROMPT=0` and `LC_ALL=C`.
+- Errors read `git <args>: <trimmed stderr>`. A missing binary maps to `ErrGitNotFound`.
+
+**Identity.** `vcs.ResolveIdentity(root string) Identity` returns `Identity{Name string; FromGitEmail bool}`.
+1. Run `git -C <root> config --get user.email`. This works outside a repo too, because it also reads the global config.
+2. Take the local part (before `@`) and sanitize it:
+   - lowercase
+   - replace every rune outside `[a-z0-9._-]` with `-`
+   - collapse repeated `-`
+   - trim leading and trailing `.` and `-`
+   - replace `..` with `.`
+   - strip a trailing `.lock`
+3. If the email is missing, git is missing, or the result is empty, fall back to `os/user.Current().Username` (take the part after any `\`), then `$USER`, then `$USERNAME`, then `default`. Sanitize the fallback the same way. `FromGitEmail` is then false.
+
+`GitRepo` methods, implemented by `*vcs.Repo`:
+
+| Method | Git |
+|---|---|
+| `Check() error` | Git is on PATH. `rev-parse --show-toplevel` works. `--is-bare-repository` is false. None of `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `rebase-merge`, `rebase-apply` or `BISECT_LOG` exists (checked with `rev-parse --git-path`). `ls-files -u` is empty. `var GIT_AUTHOR_IDENT` works. The tasks directory must not be `top` itself or an ancestor of it. |
+| `Head() (branch, sha string, err error)` | `symbolic-ref --quiet --short HEAD`; a detached HEAD returns `ErrDetachedHead`. Then `rev-parse HEAD`. |
+| `ResolveCommit(rev) (string, error)` | `rev-parse --verify --quiet <rev>^{commit}` |
+| `IsAncestor(a, b) (bool, error)` | `merge-base --is-ancestor` (exit code 1 means false) |
+| `BranchSHA(name) (sha string, ok bool, err error)` | `rev-parse --verify --quiet refs/heads/<name>` |
+| `FirstExistingBranch(names []string) (string, string, error)` | `BranchSHA` for each name in order |
+| `BranchAvailable(name) error` | `check-ref-format --branch`. The ref must not exist. No proper prefix of it may exist as a ref. `for-each-ref --count=1 refs/heads/<name>/` must be empty. |
+| `DirtyPaths() ([]string, error)` | `status --porcelain=v1 -z --untracked-files=all -- . <exclude>` |
+| `IndexTree() (string, error)` | `write-tree`, a snapshot of the real index used for rollback |
+| `Snapshot(msg string) (sha string, committed bool, err error)` | With a temporary `GIT_INDEX_FILE`: `read-tree HEAD`, then `add -A -- . <exclude>`, then `write-tree`. If the tree equals HEAD's tree, stop without committing. Otherwise `commit-tree <tree> -p HEAD -F -`, then `update-ref <HEAD's branch ref> <new> <old>` (compare-and-swap), then `reset -q -- . <exclude>` so real-index entries outside the tasks directory match the new HEAD. Entries under the tasks directory stay exactly as the user left them. |
+| `TreeOf(rev) (string, error)` | `rev-parse <rev>^{tree}` |
+| `MergeTrees(base, ours, theirs) (tree string, conflicts []string, err error)` | `merge-tree --write-tree --name-only --merge-base=<base> <ours> <theirs>`; exit code 1 means conflicts, with the paths listed |
+| `CommitTree(tree, parent, msg) (string, error)` | `commit-tree <tree> -p <parent> -F -` |
+| `Replay(onto, upstream, branch string) (newTip string, conflicts []string, err error)` | `git replay` in print mode (on current git, `--ref-action=print`; confirm against the installed git's `git replay -h` during implementation) with `--onto <onto> <upstream>..<branch>`. The `update refs/heads/<branch> <new> <old>` line is parsed and the ref is **not** moved. On a conflict, `CONFLICT … in <path>` lines are parsed; the raw stderr is used if none are found. Replaying a merge commit is reported as an error. The worktree and index are never touched. |
+| `CreateBranch(name, sha) error` | `update-ref refs/heads/<name> <sha> ""` (fails if the ref exists) |
+| `MoveBranch(name, newSHA, oldSHA) error` | `update-ref refs/heads/<name> <new> <old>` (compare-and-swap) |
+| `DeleteBranch(name, expectSHA) error` | `update-ref -d refs/heads/<name> <expect>` |
+| `Switch(name) error` | `switch <name>`. Git checks this atomically and refuses without changing anything if local changes would be overwritten. |
+| `ResetKeep(sha) error` | `reset --keep <sha>`, used when the rebased branch is the one checked out. Atomic refusal if it would conflict with local changes. |
+| `RestoreIndex(tree) error` | `read-tree <tree>` |
+
+**`internal/task/git.go` (new)** defines:
+- `GitRepo`: the interface above, exported so external test packages can wrap it for fault injection.
+- `Identity{Name string; FromGitEmail bool}`.
+- `CurrentTaskStore`.
+- `type ServiceOption func(*Service)`, with `WithGit(GitRepo)`, `WithIdentity(Identity)` and `WithCurrentTaskStore(CurrentTaskStore)`.
+
+`NewService(…, cfg *config.Config, opts ...ServiceOption)` becomes variadic, so no caller or mock has to change.
+
+**`project.Build`** always passes:
+- `WithCurrentTaskStore(mdStorage)`
+- `WithIdentity(vcs.ResolveIdentity(cfg.Resolution.Root))`. This is one fast git call at build time, which is already lazy (first tool call or CLI command).
+
+When `cfg.Git.Branching` is set, it also passes `WithGit(vcs.New(root, tasksDir))`. `Initialize` runs no git. A non-repo project fails only on the first `start_task`, with a clear error.
+
+**Locking.** All git steps run inside `StartTask` and `CompleteTask` while `s.mu` is held. That makes the ref changes and the record writes atomic with respect to every other tool call and every web read. Web handlers only read through locked service methods, so they wait (typically well under a second, bounded by the per-command timeout) and never see a half-applied state. Nothing in the web layer can reach git.
+
+#### 2. Config
+
+In `internal/config/config.go`:
+
+```go
+// GitConfig holds the opt-in git branch-per-task workflow.
+type GitConfig struct {
+    // Branching makes start_task/complete_task create, squash, rebase and
+    // switch per-task branches in the code repository. Off by default.
+    Branching bool `yaml:"branching"`
+    // BaseBranches is the priority list of mainline branches; a top-level
+    // task branches from the first one that exists. _patched variants rank
+    // above plain ones.
+    BaseBranches []string `yaml:"base_branches"`
+}
+// Config gains: Git GitConfig `yaml:"git"`
+var DefaultBaseBranches = []string{"main_patched", "master_patched", "main", "master"}
+```
+
+- `DefaultConfig` returns `Git{Branching: false, BaseBranches: DefaultBaseBranches}`.
+- `applyDefaults` trims each entry and drops empty ones. If the list ends up empty, it refills it with `DefaultBaseBranches`. `Branching` is a bool and is left as written.
+- Env override: `EnvGitBranching = "MCP_GIT_BRANCHING"`, a bool parsed like `MCP_WEB_ENABLED` (an unparseable value is ignored). It is added to `IsolateEnv` and to the CLAUDE.md env table. There is no env override for the base branch list.
+- This repo's `mcp-tasks.yaml` gets a commented reference block (`git: {branching: false, base_branches: [...]}`). Branching is not enabled by this task.
+
+#### 3. Naming (pure functions in `internal/task/branching.go`, tested in-package)
+
+- `slugRe = ^[a-z0-9]+(-[a-z0-9]+)*$`, maximum 48 characters.
+- `slugify(s)`: lowercase ASCII; every other rune becomes `-`; collapse repeats; trim; cut to at most 40 characters at a hyphen.
+
+`shortName(t)`:
+1. If `t.ID` matches `slugRe`, contains a letter and is not `wip`, use the id.
+2. Otherwise use `slugify(ID) + "-" + slugify(Title)`, dropping empty parts. For example, id `8` becomes `8-add-login-form`.
+3. If that is empty or equals `wip`, use `task-` plus the first 8 hex characters of `sha1(ID)`.
+
+Branch names:
+- `wipBranch(user, name) = user + "/wip/" + name`
+- `subWipBranch(parentBranch, sub) = parentBranch + "--" + sub`
+- `finalBranch(wip)`: split at the first `/wip/` and return `user/rest`. It is derived from the stored `branch`, so a later change of the email cannot desynchronize it.
+
+Why no ref can sit inside another:
+- Wip branches are always at depth 3.
+- Final branches are at depth 2, with a name other than `wip`.
+- A subtask wip is a sibling of its parent's wip, not a child.
+- The remaining hazards are branches that already exist, such as a branch literally named `<user>` or a foreign `<user>/<name>`. `BranchAvailable` catches them.
+
+#### 4. Task model and storage
+
+**New fields on `task.Task`.** Each has `yaml:"…,omitempty" json:"…,omitempty"`.
+
+| Field | Meaning |
+|---|---|
+| `Branch` | The wip branch |
+| `BaseBranch` | The base branch for a top-level task, or the parent's wip for a subtask |
+| `StartCommit` | The commit the wip branch currently sits on. Rewritten on restart. |
+| `FinalBranch` | Set on a delivered top-level completion |
+| `SquashCommit` | The final commit (top-level) or the commit merged into the parent's wip (subtask) |
+
+Where the fields go:
+- `markdown.go`: added to both the `Save` struct and the `parse` struct.
+- `IndexEntry` and its converters: `Branch`, `FinalBranch` and `SquashCommit`. The board needs them, and the parent gate reads subtasks from the index.
+- `BaseBranch` and `StartCommit` stay out of the index. Only the detail view and the flows need them, and the flows load full tasks.
+- Branch fields **survive a reopen**: `update` does not clear them. `Resolution`, `ResolutionNote` and `ClosedAt` are still cleared as before.
+- They are set only through an unexported update option, `withBranch(branchInfo)`, so `update` stays the single persistence path.
+- New `WithCommitMessage(string) UpdateOption`. `update` ignores it; `CompleteTask` reads it.
+
+**Pointer store**, in `internal/storage/current.go` (new):
+- `UsersDirName = ".users"` and `CurrentTaskFileName = "current_task"`.
+- MarkdownStorage methods:
+  - `CurrentTaskPath(user) string`
+  - `ReadCurrentTask(user) (id string, ok bool, err error)`: the trimmed first line
+  - `WriteCurrentTask(user, id) error`: `MkdirAll`, then an atomic write via tmp file and rename
+  - `RemoveCurrentTask(user) error`: removing an absent file is fine
+- `LoadAll` and `isStaleOnDisk` skip `.users` explicitly, next to `archive`, so a stray `.users/.users.md` can never be read as a task.
+- `.users` is added to the reserved custom ids in `storage/files.go`. `.current_task` is **not** reserved.
+
+**Legacy root `.current_task`.** Nothing reads or writes it any more, and it stays ignored by `.gitignore:20`. There are no `.gitignore` changes.
+
+#### 5. Operation sequences
+
+**Shared machinery.**
+- `gitTxn{undo []func() error}` with `add` and `rollback()`. Rollback runs the undos in reverse and joins their errors.
+- `captureTask(id)` and `capturePointer()` snapshot state; their undos rewrite exactly what was captured, including "absent".
+- Every flow captures `origBranch, origSHA := Head()` and `origIndex := IndexTree()`.
+- Only the final step changes the worktree: a `Switch` or a `ResetKeep`. Everything before it touches refs, the index, or files under the tasks directory. Those are undone exactly by `MoveBranch`/`DeleteBranch`, `RestoreIndex(origIndex)` and the record/pointer restores. The index restore is needed after a snapshot.
+- If rollback itself fails, the error names every branch and SHA involved and says that no content was lost. Everything stays reachable through the wip branch, the snapshot commits and the reflog.
+- After every successful switch, the flow calls `s.index.Load()`. It does not rely on mtime self-healing. This matters when the tasks directory is tracked in the code repo and trees differ.
+
+Key: **P** = preflight (no mutation); **M** = mutation, with its undo in [brackets].
+
+**5.1 Leaving the current HEAD (`vacate`).** This check is used by fresh start, restart and subtask start. Changes under the tasks directory are ignored and simply carried along; they are never dirty for this purpose. The rule:
+
+- `DirtyPaths()` is empty: nothing to do.
+- Dirty, and HEAD is the `Branch` of a task that is `in_progress` (looked up in the index; this includes the task being started): **M** `Snapshot("wip(<id>): checkpoint before <operation>")` on that server-owned wip branch. [undo: `MoveBranch(branch, origSHA, W)`, then `RestoreIndex`]
+- Dirty, HEAD equals the chosen start-point branch, and this is a fresh start that branches off exactly that branch (for example HEAD is on `main_patched`): the changes are carried by the switch. This is the familiar "edit on main, then start the task" flow.
+- Otherwise HEAD is a user branch that is not the start point. **P** refuses with: `uncommitted changes on <branch> (…up to 20 paths); commit or stash them before starting <id>`. The server never commits on user branches and never guesses where foreign changes belong.
+
+A detached HEAD is refused in every flow.
+
+**5.2 `start_task`: fresh top-level T** (no `Branch`, or `Branch` set but its ref no longer exists; status `todo`)
+
+- **P0.** The existing checks: T is `todo` and not blocked.
+- **P1.** `Check()`. `Identity.FromGitEmail` must be true, otherwise the error is "git config user.email is not set; it names your branches".
+- **P2.** Choose `base, baseTip := FirstExistingBranch(cfg.Git.BaseBranches)`. If none exists: "none of the base branches [..] exist; set git.base_branches".
+- **P3.** Compute `wip` and `final`. Run `BranchAvailable(wip)`. For `final`: it must be available, or it must equal `T.FinalBranch` (a task this server completed before). Otherwise: "branch <final> exists and was not created by task T".
+- **P4.** The `vacate` classification from 5.1.
+
+Mutations:
+- **M1.** `vacate`, if it needs a checkpoint commit.
+- **M2.** `CreateBranch(wip, baseTip)`. [undo: `DeleteBranch(wip, baseTip)`]
+- **M3.** `update(T → in_progress, withBranch{Branch: wip, BaseBranch: base, StartCommit: baseTip})`. [undo: restore record]
+- **M4.** `WriteCurrentTask(user, T)`. [undo: restore pointer]
+- **M5.** `Switch(wip)`, then `index.Load()`.
+
+Why the base list wins over "the current HEAD": after a delivered completion the user is usually still on the previous task's final branch. Branching from the first existing base means the next task never stacks on the previous one, and nobody has to switch by hand.
+
+**5.3 `start_task`: fresh subtask S of parent P**
+
+- P has no `Branch` (a legacy parent, or branching was off when it started): start S exactly as today (auto-start the parent, write the status) and write the pointer. No git.
+- P is `todo` while branching is enabled: first run 5.2 steps M2–M4 for P, in the same journal but without the switch. Then continue below using P's new wip.
+- P is `in_progress` with a `Branch`:
+  - **P.** `Check`, identity, `BranchSHA(P.Branch)` must exist, `subWip` must be available, and the `vacate` rule. If HEAD is P's wip and it is dirty, the checkpoint goes onto P's wip, so S starts from P's latest work.
+  - **M1.** `vacate`. Then read `Ptip`.
+  - **M2.** `CreateBranch(subWip, Ptip)`.
+  - **M3.** `update(S → in_progress, withBranch{Branch: subWip, BaseBranch: P.Branch, StartCommit: Ptip})`, then write the pointer as S.
+  - **M4.** `Switch(subWip)`, then `index.Load()`.
+
+**5.4 `start_task`: restart** (T has a `Branch` whose ref exists, and T is either `todo`, i.e. reopened, or `in_progress`; HEAD can be anywhere)
+
+- **P.** `Check` and identity.
+- **P.** Choose the parent line:
+  - Top-level: `onto` is `T.BaseBranch` if that branch still exists, otherwise the first existing entry of `base_branches`.
+  - Subtask: `onto = P.Branch`. If P is `todo`, restart or start P first, in the same journal. If P has no branch: "parent P has no branch; start it first".
+- **P.** `ontoTip := BranchSHA(onto)`, `oldTip := BranchSHA(T.Branch)`. `ResolveCommit(T.StartCommit)` must succeed and `IsAncestor(T.StartCommit, oldTip)` must hold. If not, the error says the wip history no longer contains its recorded start.
+- **P.** The `vacate` rule. Changes that are uncommitted while HEAD is T's own wip count as server-owned and get checkpointed.
+
+Mutations:
+- **M1.** `vacate`. If HEAD was T's wip, `oldTip` becomes the checkpoint commit.
+- **M2.** If `ontoTip != T.StartCommit`: `newTip, conflicts := Replay(ontoTip, T.StartCommit, T.Branch)`.
+  - On conflict, **fail** with "rebasing <T.Branch> onto <onto> conflicts in: a.go, b.go; nothing was changed". Full rollback: the checkpoint is undone. Nothing else was touched: `git replay` leaves no in-progress rebase state, so no `rebase --abort` is needed.
+  - Otherwise `newTip = oldTip`.
+- **M3.** `MoveBranch(T.Branch, newTip, oldTip)`. [undo: `MoveBranch(T.Branch, oldTip, newTip)`]
+  - Special case: if HEAD is `T.Branch`, skip this step and do `ResetKeep(newTip)` in M6 instead. Moving the checked-out ref behind git's back would leave a reverse diff in the worktree.
+- **M4.** `update(T → in_progress, withBranch{…, BaseBranch: onto, StartCommit: ontoTip})`. This keeps a later squash at "base + one commit". `FinalBranch` and `SquashCommit` are kept as history. [undo: restore]
+- **M5.** Write the pointer as T. [undo: restore]
+- **M6.** `Switch(T.Branch)`, or `ResetKeep(newTip)` when HEAD was already T's branch [undo: `ResetKeep(oldTip)`]. Then `index.Load()`.
+
+`start_task` on an `in_progress` task **without** a branch keeps today's error ("not in todo status").
+
+**5.5 `complete_task`, delivered, top-level T with a `Branch`**
+
+- **P0.** The existing checks: `in_progress`, and no subtask with status other than done.
+- **P1.** `Check`, identity, and HEAD must be `T.Branch` ("switch to <branch> first").
+- **P2.** `ResolveCommit(T.StartCommit)` must succeed and `IsAncestor(T.StartCommit, HEAD)` must hold.
+- **P3.** The final branch: absent, which means create it; or it exists and `T.FinalBranch == final`, which means move it with compare-and-swap. Anything else is an error.
+- **P4.** The subtask gate (5.7).
+- **P5.** Compute `msg` (section 7).
+
+Mutations:
+- **M1.** `W := Snapshot("wip(T): snapshot before completion")`. The wip branch keeps every commit plus W. [undo: `MoveBranch(T.Branch, origSHA, W)` and `RestoreIndex(origIndex)`]
+- **M2.** `C := CommitTree(TreeOf(W), T.StartCommit, msg)`. This only creates objects, so there is nothing to undo.
+- **M3.** `CreateBranch(final, C)` [undo: `DeleteBranch(final, C)`], or `MoveBranch(final, C, oldFinal)` [undo: move it back].
+- **M4.** `update(T → done, opts…, withBranch{…, FinalBranch: final, SquashCommit: C})`. [undo: restore]
+- **M5.** Pointer: if it names T, remove it. [undo: restore]
+- **M6.** `Switch(final)`. The worktree is clean outside the tasks directory, and `final`'s tree equals W's tree, so this cannot conflict. Then `index.Load()`.
+
+Result:
+- `final` = `start_commit` + exactly one commit, whose tree is W's.
+- Task records are not in it. They were never in any server commit; only whatever the user committed themselves is.
+- The repository ends on `final`.
+
+**5.6 `complete_task`, delivered, subtask S with a `Branch`**
+
+- **P.** As 5.5 P0–P2 for S. `Ptip := BranchSHA(P.Branch)` must exist. Compute `msg`.
+
+Mutations:
+- **M1.** `W := Snapshot(…)` on S's wip. [undo as above]
+- **M2.** `M, conflicts := MergeTrees(S.StartCommit, Ptip, W)`. Conflicts **fail** and trigger a full rollback that lists the paths.
+- **M3.** `C := CommitTree(M, Ptip, msg)`.
+- **M4.** `MoveBranch(P.Branch, C, Ptip)`. The compare-and-swap protects against a concurrent move of the parent's wip. [undo: move it back]
+- **M5.** `update(S → done, …, withBranch{…, SquashCommit: C})`. [undo: restore]
+- **M6.** Pointer: if it names S, set it to P. [undo: restore]
+- **M7.** `Switch(P.Branch)`, then `index.Load()`.
+
+The parent is **not** auto-completed when `P.Branch != ""`. It stays `in_progress` on its wip until `complete_task(P)` produces P's final branch. S's wip branch stays as history.
+
+**5.7 Parent completion gate** (a git check, evaluated before any mutation of a delivered P completion). For every subtask `s` of P, read from the index (records are branch-independent, so the index is authoritative):
+
+1. `s.Status == done`. This is the existing rule and covers subtasks that are started but unfinished, and never-started `todo` subtasks.
+2. If `s.Branch != ""` and `s.EffectiveResolution().Delivered()`:
+   - `s.SquashCommit` must be non-empty.
+   - `IsAncestor(s.SquashCommit, BranchSHA(P.Branch))` must hold.
+
+   If it fails: "subtask s was completed but its work (<short sha>) is not in <P.Branch>; it may have been reset away. Restart s or merge it back."
+3. A subtask that has a branch but was closed as non-delivered needs nothing: its abandoned work stays on its own wip.
+4. A done, delivered subtask without a branch (legacy, or done directly on P's wip) is accepted as-is.
+
+**5.8 `complete_task`, non-delivered** (`obsolete|superseded|duplicate|wontfix`)
+
+**Case A: T has no `Branch`, or `T.Branch` is not checked out.** Record-only, as today, including the cascade. No git runs, and any wip branch is left untouched. Pointer: if it names T, it moves to the parent (for a subtask whose parent is still open) or is removed.
+
+**Case B: `T.Branch` is HEAD.**
+
+Preflight **P**:
+- `Check`.
+- Choose the return target:
+  - Top-level: `T.BaseBranch` if it exists, otherwise the first existing entry of `base_branches`.
+  - Subtask: `P.Branch`, which must exist.
+  - If none is found, the error is "no branch to return to…".
+
+Mutations:
+- **M1.** `W := Snapshot("wip(T): closed as <resolution>")`. This is the safety commit: all uncommitted code work is preserved on the wip branch. [undo]
+- **M2.** The existing cascade `closeSubtasksWith` (records only; the subtasks' own wip branches are untouched), then `update(T → done, resolution, note)`. [undo: restore every touched record]
+- **M3.** Pointer: if it names T, set it to P (subtask) or remove it. [undo]
+- **M4.** `Switch(target)`, then `index.Load()`.
+
+Nothing has to be carried back: the records live outside the code branches.
+
+For a parent with a branch, the cascade never auto-completes it. Last-subtask auto-completion is also skipped when `P.Branch != ""`.
+
+**5.9 Pointer on disabled mode and legacy tasks.** Pointer writes follow the same rules everywhere:
+- start writes it;
+- delivered or non-delivered completion moves it to the parent or removes it, but only if it names the completed task.
+
+With branching disabled, this pointer is the only new side effect. There is no git.
+
+**5.10 `update_task` guard.** It lives in the exported `Update`, after the lock is taken and before `update`, and only applies when `s.git != nil`:
+
+| Transition | Result |
+|---|---|
+| `status: in_progress` from `todo` | Refused: "git branching is enabled; use start_task" |
+| Closing (`status: done`, or `resolution`) an `in_progress` task that has a `Branch` | Refused: "use complete_task" |
+| `done → in_progress` for a task with a `Branch` | Refused |
+| Reopening to `todo` | Allowed; branch fields are kept, so a later `start_task` takes the restart path |
+
+`testsupport.Seed` is unaffected because test backlogs have no git.
+
+**5.11 Auto-archive.** No change. `completeTaskHandler` still calls `RunAutoArchive()`, and the startup run stays. Archive renames only touch the tasks directory, which no server commit includes.
+
+**5.12 CLI.**
+- `cmdStart` and `cmdComplete` share the service and run the same flows.
+- `complete` gains `-m/--message`, which passes `WithCommitMessage`.
+- Table output prints `Branch:` (or `Final branch:`) when one is set. JSON includes the fields automatically.
+
+#### 6. Current-task pointer and `get_current_task`
+
+- **Path.** `<tasks_dir>/.users/<Identity.Name>/current_task`. The identity is the same one used for branch names when `FromGitEmail` is true; otherwise it is the OS-user fallback. The identity is resolved once per built project.
+- **Scope.** It is "the calling user's" pointer: an MCP server or CLI process runs as one user.
+- **Tool `get_current_task`.** Read-only, no parameters. It reads the pointer, then calls `get(id)`, which also finds archived tasks. It returns the task's JSON. A missing or empty pointer returns the text "No current task" (not an error). An unknown id returns a tool error.
+- **Service method.** `CurrentTask() (*Task, bool, error)`, with the unlocked twin `currentTask`. It is added to `TestServiceNoSelfDeadlock`.
+- **Committing.** Whether `.users/` is committed is up to the team; per-user folders mean no conflicts either way. The server never commits it. In a code repo that tracks the tasks directory (this repo), it shows up as an untracked path under `tasks/`. It is never part of server commits, and it is carried across switches unchanged.
+- **Skills:**
+  - `begin_task` SKILL.md, all three copies (`.claude/skills/`, `skills/`, `plugins/mcp-task-manager/skills/`). Step 5 becomes: "Call `start_task` with the new id right away. The server makes it your current task and, when git branching is enabled, creates and checks out its wip branch. In later steps, get the current task with `get_current_task`." The references to "the current task" in steps 2–5 are updated to match.
+  - `commands/begin-task.md` and its plugin mirror, item 1: "…create and start it (it becomes your current task)".
+
+#### 7. Commit messages; no new skill
+
+- **Default for squash commits** (a top-level final commit, or a subtask's commit onto the parent's wip):
+  - subject: the trimmed title
+  - blank line
+  - the description, if it is not empty
+  - blank line
+  - trailer `Task: <id>`
+- **`commit_message`** (optional string on `complete_task`; CLI `-m`) is used verbatim. It applies only when a squash commit is made and is ignored otherwise; the YAML says so.
+- **Bookkeeping commits** use fixed subjects: `wip(<id>): checkpoint before …`, `wip(<id>): snapshot before completion`, `wip(<id>): closed as <resolution>`.
+- **Hooks.** Server commits go through `commit-tree`, so hooks do not run. This was accepted as not a concern.
+- **No new skill.** The tool parameter is the "thin caller" surface.
+- **Skill edits:**
+  - `skills/superpowers-workflow/SKILL.md` and its mirror, around `:340-344`: "If the `complete_task` result has a `branch`, the server has already committed and switched branches. Pass your message as `commit_message`, and do not commit code yourself. Commit task records wherever your tasks directory is versioned."
+  - `.claude/skills/workflow/SKILL.md:51` and `implementation/SKILL.md:37`, plus their mirrors: one sentence saying that `start_task` and `complete_task` commits under git branching are part of the lifecycle, not agent commits.
+
+#### 8. Web UI (stays read-only)
+
+- `CardView.Branch`: `FinalBranch` if set, otherwise `Branch`.
+- `DetailView` gains `Branch`, `FinalBranch`, `BaseBranch`, `StartCommit` and `SquashCommit`. Commits show a 12-character prefix, with the full SHA in `title`.
+- **`_card.html`.** A row placed **after** the `<a>` block, inside `<article>`, and only rendered when `.Branch` is set: `<code class="chip chip-muted font-mono">{{ .Branch }}</code><button type="button" class="copy-btn" data-copy="{{ .Branch }}" aria-label="Copy branch name">copy</button>`.
+- **`_detail.html`.** A "Git" block that uses the same control for the wip and final branches.
+- **New `internal/web/static/app.js`** (about 25 lines):
+  - Added to the explicit `//go:embed` list in `assets.go`, and loaded with `defer` in `layout.html`.
+  - One click listener delegated on `document` for `[data-copy]`, so it survives htmx swaps. It calls `stopPropagation()` so the click never opens the card.
+  - It uses `navigator.clipboard.writeText` in a secure context. For LAN addresses it falls back to a hidden textarea and `execCommand('copy')`.
+  - The button shows "copied" for 1.5 seconds.
+- No htmx attribute, request or route is added. The UI stays read-only, with a GET-only mux.
+- Rebuild `static/app.css` with `scripts/build-css.sh` and commit the result.
+
+#### 9. Tool descriptions and server instructions
+
+- `start_task.yaml`: covers the fresh branch from the base list, restart plus rebase, the dirty-tree rule and the pointer.
+- `complete_task.yaml`: covers the squash, the subtask merge, the non-delivered safety commit and the switch. It adds the `commit_message` param entry, which is required or `param()` panics.
+- `update_task.yaml`: covers the refusals under branching.
+- New `get_current_task.yaml`.
+- `internal/app/instructions.md` gets a "Git branching (when enabled)" section:
+  - where you end up after each call
+  - do not commit or switch around these calls
+  - pass `commit_message`
+  - restart via `start_task`
+  - the current task comes from `get_current_task`
+
+### Context Diagram
+
+```mermaid
+flowchart LR
+  Agent[Claude / coding agent] -- MCP stdio --> Tools[internal/tools\nstart/complete/update/get_current_task]
+  Human[Terminal user] -- CLI start / complete -m --> CLI[internal/cli]
+  Browser -- GET only --> Web[internal/web\nboard + detail + app.js copy]
+  Tools --> Svc[task.Service\nsingle mutex]
+  CLI --> Svc
+  Web -- locked reads --> Svc
+  Svc --> Storage[internal/storage\nrecords + index + .users/<user>/current_task]
+  Svc -- GitRepo --> VCS[internal/vcs\ngit -C code toplevel\nexclude tasks dir]
+  VCS --> CodeRepo[(code repository\nrefs / index / worktree)]
+  Storage --> TasksDir[(tasks_dir\ninside code repo, separate repo, or untracked\nnever committed by the server)]
+  Config[mcp-tasks.yaml git.branching, git.base_branches\nMCP_GIT_BRANCHING] --> Build[project.Build]
+  Build -- WithGit / WithIdentity / WithCurrentTaskStore --> Svc
+  Build -- ResolveIdentity --> VCS
+```
+
+### Structure Diagram
+
+```mermaid
+classDiagram
+  class Service {
+    -storage Storage
+    -index Index
+    -config *config.Config
+    -git GitRepo «nil = branching off»
+    -identity Identity
+    -current CurrentTaskStore
+    -mu sync.Mutex
+    +StartTask(id)
+    +CompleteTask(id, opts...)
+    +Update(...) «guard»
+    +CurrentTask()
+    -startFresh / startSub / restart
+    -completeDelivered / completeSubDelivered / completeAbandoned
+    -subtaskGate / vacate
+  }
+  class GitRepo { <<interface, internal/task/git.go>> }
+  class Repo { <<internal/vcs>>
+    -root
+    -top
+    -tasksRel
+  }
+  class Identity { +Name +FromGitEmail }
+  class gitTxn { -undo []func() error +rollback() }
+  class CurrentTaskStore { <<interface>> }
+  class MarkdownStorage { +Read/Write/RemoveCurrentTask(user) }
+  class Task { +Branch +BaseBranch +StartCommit +FinalBranch +SquashCommit }
+  class IndexEntry { +Branch +FinalBranch +SquashCommit }
+  class Build { <<project.Build>> }
+  Repo ..|> GitRepo
+  MarkdownStorage ..|> CurrentTaskStore
+  Service --> GitRepo : owns (injected)
+  Service --> CurrentTaskStore
+  Service --> Identity
+  Service ..> gitTxn : per call
+  IndexEntry ..> Task
+  Build ..> Repo : vcs.New(root, tasksDir) if branching
+  Build ..> Identity : vcs.ResolveIdentity(root)
+  Build ..> Service : NewService(..., opts...)
+```
+
+Ownership:
+- `project.Build` creates `Repo` and `Identity` and hands them to the `Service` for the project's lifetime. They hold no OS resources, so there is nothing to clean up.
+- `gitTxn` is per call and discarded afterwards.
+- When the resolver invalidates the project, it rebuilds everything, identity included.
+
+### Data Flow Diagram
+
+```mermaid
+flowchart TD
+  subgraph Fresh[start_task fresh top-level]
+    F1[preflight: Check, email identity,\nfirst existing base_branches, names, vacate rule] --> F2[checkpoint on server wip if needed]
+    F2 --> F3[update-ref create wip at base tip]
+    F3 --> F4[record in_progress + branch/base/start_commit\npointer .users/u/current_task = T]
+    F4 --> F5[git switch wip; index.Load]
+  end
+  subgraph Restart[start_task restart]
+    R1[preflight: onto tip, start ancestor, vacate rule] --> R2[checkpoint if needed]
+    R2 --> R3[git replay onto..: newTip or conflicts => rollback]
+    R3 --> R4[update-ref wip CAS  or reset --keep if checked out]
+    R4 --> R5[record start_commit := onto tip; pointer]
+    R5 --> R6[switch wip; index.Load]
+  end
+  subgraph Deliver[complete delivered top-level]
+    D1[preflight + subtask gate] --> D2[Snapshot excl. tasks dir => W on wip]
+    D2 --> D3[commit-tree tree W -p start => C]
+    D3 --> D4[create/CAS-move final]
+    D4 --> D5[record done, final_branch, squash_commit; pointer removed]
+    D5 --> D6[switch final; index.Load]
+  end
+  subgraph Sub[complete delivered subtask]
+    S1[Snapshot => W] --> S2[merge-tree base=S.start ours=Ptip theirs=W]
+    S2 --> S3[commit-tree -p Ptip => C; CAS move P wip]
+    S3 --> S4[record squash_commit=C; pointer=P]
+    S4 --> S5[switch P wip]
+  end
+  subgraph Abandon[complete non-delivered, branch checked out]
+    A1[Snapshot safety commit] --> A2[records: cascade + done]
+    A2 --> A3[pointer parent/removed] --> A4[switch base or parent wip]
+  end
+```
+
+### Sequence Diagram
+
+```mermaid
+sequenceDiagram
+  participant H as start_task handler
+  participant S as task.Service (s.mu held)
+  participant G as vcs.Repo
+  participant St as Storage/Index
+  H->>S: StartTask(T)   (T todo/in_progress, T.Branch exists => restart)
+  S->>G: Check(); Head(); BranchSHA(onto); BranchSHA(T.Branch); IsAncestor(start, oldTip); DirtyPaths()
+  alt dirty on a user branch / precondition fails
+    S-->>H: error (nothing changed)
+  end
+  S->>G: IndexTree() (capture)
+  opt dirty on a server wip
+    S->>G: Snapshot("checkpoint") [undo: MoveBranch back + RestoreIndex]
+  end
+  S->>G: Replay(ontoTip, T.StartCommit, T.Branch)
+  alt conflicts
+    S->>S: rollback journal
+    S-->>H: error "conflicts in a.go, b.go; nothing was changed"
+  end
+  S->>G: MoveBranch(T.Branch, newTip, oldTip) [undo]
+  S->>St: update(T in_progress, start_commit=ontoTip) [undo]
+  S->>St: WriteCurrentTask(user, T) [undo]
+  S->>G: Switch(T.Branch)  (or ResetKeep(newTip) if already checked out)
+  alt switch refused
+    S->>S: rollback journal
+    S-->>H: error
+  end
+  S->>St: index.Load()
+  S-->>H: task JSON (branch, base_branch, start_commit)
+```
+
+### ADR
+
+- **Title**: Server-side branch-per-task on the code repository, with the tasks directory excluded from all server commits, journaled rollback under the service mutex, and worktree-free squash, merge and rebase.
+- **Status**: Proposed (revised after the second round of user answers).
+- **Date**: 2026-09-29.
+- **Context**:
+  - The user wants wip and final branches per task, with no data loss and all git logic in the server.
+  - Subtasks work on sub-branches and must be merged before their parent completes.
+  - A non-delivered task returns to its base.
+  - `start_task` run again restores the branch and rebases it.
+  - Base branches come from a priority list.
+  - Tasks may live in a separate repository, and the current-task pointer is per user in `.users/`.
+  - `task.Service` serializes everything behind one mutex, and the web UI reads concurrently.
+- **Decision**:
+  1. `internal/vcs` executes `git -C <code toplevel>`. `internal/task` consumes it through `GitRepo`, which is injected by `ServiceOption`s together with `Identity` and `CurrentTaskStore`.
+  2. **The server never commits or switches the tasks directory as code.**
+     - Snapshots use a temporary index with `:(exclude)` for the tasks directory whenever it lies inside the worktree.
+     - Task records and the pointer are branch-independent files.
+     - The server never commits in a tasks repository.
+  3. Every flow runs in a fixed order: preflight, then ref/index-only git steps, then record and pointer writes, then a single worktree-changing `switch`/`reset --keep`, then an index reload. Each mutation registers a reverse undo.
+  4. Squash, merge and rebase are built without touching the worktree:
+     - squash: `commit-tree` from a snapshot, parented on `start_commit`
+     - subtask merge: `merge-tree --write-tree` plus a compare-and-swap `update-ref`
+     - restart rebase: `git replay` plus a compare-and-swap `update-ref`
+  5. The parent gate is a git ancestry check on each subtask's recorded `squash_commit`.
+  6. Top-level tasks branch from the first existing entry of `git.base_branches`. The `vacate` rule governs uncommitted changes: it checkpoints on server wip branches, carries changes only from the chosen base, and otherwise refuses.
+  7. Branch fields survive a reopen. A final branch recorded by the task is moved with compare-and-swap on re-completion.
+  8. The pointer lives at `<tasks_dir>/.users/<user>/current_task` and is read through `get_current_task`.
+  9. Opt-in through `git.branching` or `MCP_GIT_BRANCHING`. A task without a `branch` takes the legacy path.
+- **Consequences**:
+  - Positive:
+    - The same behaviour whether the tasks directory is in the code repo, in a separate repo, or untracked.
+    - The index is always authoritative, so gates and `get_next_task` see the true state on any branch.
+    - No carry-back is needed.
+    - The server never commits a nested repository as a gitlink.
+    - Final branches contain only code, so merges never conflict on task records or pointers.
+    - Every failure leaves refs, HEAD, index, worktree, records and pointer unchanged.
+    - The wip branch always holds the full history plus snapshots.
+    - No new Go dependencies.
+  - Negative:
+    - Where the tasks directory is tracked in the code repo, the server's commits never include records. Users commit `tasks/` themselves, as this repo does today with "chore(tasks)" commits.
+    - A switch can be refused when tracked task files are modified locally and differ between the two branches. The call fails cleanly.
+    - Git runs under the lock, so web reads stall for that time.
+    - `git replay` must support print mode.
+    - Starting while sitting on a dirty user branch that is not the base is refused.
+    - The last subtask no longer auto-completes a parent that has a branch.
+    - Re-completion moves a final branch that may already have been pushed.
+- **Alternatives Rejected**:
+  - *Records ride inside code branches* (squash includes the tasks directory): breaks when the tasks directory is a separate repo, makes task state branch-local (stale records on the base, carry-back logic, a gate that depends on which branch is checked out), causes merge conflicts on records, and can add a nested tasks repo as a gitlink.
+  - *Include the tasks directory only when it is tracked in the code repo*: two behaviours to reason about and test, with every drawback above in one of them. Rejected for consistency.
+  - *Worktree `git rebase --autostash` for restart*: leaves a mid-rebase state that needs `rebase --abort`, and an autostash that fails to re-apply ends up in the stash list. `git replay` is atomic from the worktree's point of view. If replay turns out to be unsuitable during implementation, the fallback with the same contract is: clean tree (after a checkpoint), then `git rebase --onto <ontoTip> <start> <wip>`, and on conflict `git rebase --abort` followed by the same journal rollback.
+  - *Literal `reset --soft` squash on the wip branch*: rewrites the safety net. `commit-tree` gives the same tree and single-commit history without doing that.
+  - *`git stash` for non-delivered closure or dirty trees*: a global stack that is easy to lose. Commits on a server-owned wip branch are durable.
+  - *Branch from the current HEAD*: stacks tasks on the previous final branch, which is where users sit after a delivered completion. Replaced by the base list, per the user.
+  - *Require HEAD to be on the base before starting*: forces a manual switch after every completion. The `vacate` rule is just as safe.
+  - *Carry dirty changes from any branch*: silently moves unrelated work into the task.
+  - *Commit on user branches to vacate*: modifies branches the user owns.
+  - *Gate on "records on the parent's wip say done"*: invalid now that records are branch-independent. The ancestry check verifies the work is actually there.
+  - *A git library (go-git)*: adds a heavy dependency, its semantics diverge from the user's git, and it has neither `merge-tree` nor `replay`.
+  - *A skill does the git work*: rejected by the user.
+  - *Nested subtask refs*: impossible, because a ref cannot also be a directory of other refs.
+
+### Risk Analysis
+
+- **Correctness**
+  - *Tracked tasks directory inside the code repo.* The server's commits exclude it, and a `switch` carries local record edits. If tracked task files differ between the source and target trees (for example, the user committed `tasks/` on the base after the wip was created) while they are also modified locally, git refuses the switch. The flow rolls back and the error suggests committing the task records first. Restart's rebase brings the wip onto the base tip, which removes most such differences. Separate tasks repositories avoid the issue entirely.
+  - *Snapshot precision.* A temporary index plus `reset -q -- . :(exclude)` means records the user staged in the tasks directory are neither committed nor unstaged. With the tasks directory outside the worktree, the snapshot is a plain `add -A` equivalent. `git add -A` sweeping unrelated untracked files into the snapshot was accepted.
+  - *Rollback invariant.* Only the final switch or `reset --keep` touches the worktree, and git either applies it fully or refuses without changing anything. Fault-injection tests at every step enforce this. If a rollback step itself fails, the error lists refs and SHAs; content stays reachable through the wip branch, snapshots and the reflog.
+  - *Rebase semantics.*
+    - A wip whose previous squash is already merged into the base replays mostly as clean no-ops. This is expected.
+    - Merge commits on a wip cannot be replayed and are reported as an error.
+    - `start_commit` is rewritten, so the squash stays "base + one commit".
+    - Old wip commits remain reachable through the reflog.
+  - *Moving a final branch on re-completion.* Only when `T.FinalBranch` matches the existing ref, and only with compare-and-swap. If it was pushed, the user must force-push, which is normal for squash PR branches. The old commit stays in the reflog or on the remote.
+  - *Gate ancestry.* If a user rewrites the parent's wip by hand and drops a subtask's squash commit, the gate refuses with a precise message.
+  - *Identity.* When branching is enabled, a missing email is an error, so branch names and the pointer always agree. With branching disabled, the fallback to the OS user can differ from a later email identity. The pointer then "moves" to a new folder, and the old one stays harmless.
+- **Lifecycle and ordering**
+  - The existing checks run first and unchanged.
+  - Parent auto-start and restart are nested inside one journal.
+  - Parent auto-complete is skipped only for parents that have a branch.
+  - `Initialize` runs no git.
+  - Identity is resolved at build time, which is already lazy.
+  - An explicit `index.Load()` after each switch removes any dependence on mtimes. User checkouts still rely on the existing self-healing.
+- **Performance**
+  - A typical start takes 6–10 git calls; a completion or restart takes 10–15. That is tens to hundreds of milliseconds, under `s.mu`, and web polls wait for it.
+  - Each git call has a 60-second timeout.
+  - The tool context is not propagated: cancelling a call does not abort a git command already running.
+  - The web hot path gains one extra string per card, and `app.js` is a single cached asset.
+- **Codegen**: none.
+- **Compatibility**
+  - Branching is off by default. Disabled mode behaves as today except for the new per-user pointer file under `<tasks_dir>/.users/`, which every scan ignores.
+  - Old binaries ignore the new frontmatter keys.
+  - Legacy `in_progress` tasks without a branch (including this task) complete through the unchanged path.
+  - The variadic `NewService` means no churn at call sites.
+  - The latest git is assumed; `Check()` only verifies that git is present and the repository state is sane.
+  - SHA-256 repositories work: empty old value in `update-ref`, opaque SHA strings.
+  - Linked worktrees work via `--git-path`.
+  - Windows paths go through `filepath.ToSlash` for pathspecs. There is no Windows CI, so this is a manual note.
+  - The legacy root `.current_task` is ignored and unchanged.
+- **Input handling**: the only new client-side input is the copy click. The delegated handler stops propagation, so it never triggers the card's `hx-get`.
+
+### Testing Strategy
+
+**Test helpers**, in `internal/testsupport`:
+- `RequireGit(t)`: skips when `git` is not on PATH, and sets `GIT_CONFIG_GLOBAL=os.DevNull`, `GIT_CONFIG_NOSYSTEM=1` and fixed author and committer dates (`t.Setenv`, so these tests cannot use `t.Parallel`).
+- `NewGitRepo(t, dir) string`: `git init -b main_patched`, a local `user.email=dev@example.com`, `user.name`, and an initial commit.
+- `Git(t, dir, args...) string`.
+- `NewGitBacklog(t, layout)`, built through `project.Build` with branching on. The `layout` values:
+  - `TasksInRepoTracked`: `<repo>/.tasks`, with tasks committed.
+  - `TasksInRepoIgnored`: `.tasks/` listed in `.gitignore`.
+  - `TasksNestedRepo`: `<repo>/.tasks` is its own `git init`.
+  - `TasksSeparateRepo`: a sibling temporary directory with its own repo, passed as an absolute `MCP_TASKS_DIR`-style `Resolution{Root: codeRepo, TasksDir: other}`.
+  - `TasksUntracked`: outside any repo.
+
+Test files:
+
+1. **`internal/vcs/vcs_test.go`**
+   - `Check` failure cases: non-repo, bare repo, merge in progress, unmerged paths, a tasks directory that is the toplevel.
+   - `ResolveIdentity`: sanitisation and the fallback chain (email unset uses the OS user).
+   - `BranchAvailable`: the ref exists, a prefix exists, a child exists, invalid names.
+   - `Snapshot`: excludes the tasks directory; keeps the user's staged task entries; makes no commit when only the tasks directory is dirty; a nested repo is never added as a gitlink.
+   - `MergeTrees`: clean and conflicting.
+   - `Replay`: clean, conflict (paths parsed), merge commit reported as an error, ref not moved.
+   - `CreateBranch` and `MoveBranch` compare-and-swap.
+   - `ResetKeep` refuses when the worktree would conflict.
+   - `DirtyPaths` exclusion.
+2. **`internal/task/naming_test.go`** (in-package): `shortName`, `finalBranch`, `subWipBranch`, the reserved `wip`, unicode input, truncation.
+3. **`internal/task/branching_test.go`** (`package task_test`, which can import `testsupport` and `vcs` without a cycle). Every flow runs table-driven across all five layouts. In every layout it asserts that the tasks repository's HEAD, log and index are unchanged, and that no server commit touches the tasks directory.
+   - **Base selection:**
+     - `main_patched` is preferred over `main`.
+     - `master_patched` is used when only it and `master` exist.
+     - An error when none exists.
+     - An error for a custom list that names only missing branches.
+     - HEAD on a clean final branch still branches from the base tip.
+   - **Dirty rules:**
+     - HEAD on the base while dirty: changes are carried.
+     - HEAD on another in-progress task's wip while dirty: a checkpoint commit lands there.
+     - HEAD on a foreign user branch while dirty: refused, with paths listed and everything unchanged.
+     - A dirty tasks directory never blocks a start.
+   - **Fresh start:** branch, fields, pointer path `.users/dev/current_task`, HEAD.
+   - **Refusals:** detached HEAD, a foreign final branch, a missing email, a non-repo root. Each asserts full state unchanged.
+   - **Delivered completion:**
+     - `final^ == start_commit`, and exactly one commit in `start..final`.
+     - The tree includes uncommitted and untracked code files and excludes task records.
+     - The wip branch keeps its commits plus the snapshot.
+     - HEAD is on `final`; the pointer is removed; `commit_message` is honoured.
+   - **Non-delivered completion:**
+     - Branch checked out: the safety commit holds the uncommitted file; HEAD is on the base; the record is done; the pointer is removed (or points to the parent for a subtask).
+     - Branch not checked out: record-only, with no ref or worktree change.
+   - **Subtasks:**
+     - A start from the parent's wip while dirty makes a checkpoint on the parent.
+     - A delivered completion adds exactly one commit on the parent's wip, sets `squash_commit`, returns HEAD to the parent's wip and sets the pointer to the parent. The parent is not auto-completed.
+     - The gate passes after the merge. It refuses after `git update-ref` rewinds the parent's wip past the merge commit, and it refuses while a subtask is still in progress.
+     - A merge conflict fails with a full rollback.
+     - Parent auto-start from `todo`.
+   - **Restart and rebase:**
+     - Base advanced: the wip is replayed onto the new tip, `start_commit` equals the new tip, and a subsequent delivery gives `final = base + 1`.
+     - A reopened `todo` task.
+     - Restart while HEAD is the wip itself (`reset --keep` path, with a checkpoint when dirty).
+     - Restart from another branch.
+     - Subtask restart onto the parent's wip tip.
+     - **Conflict:** the error lists the paths; refs, HEAD, index tree, worktree status, records and pointer are all unchanged, and the checkpoint is undone.
+     - A recorded final branch is moved with compare-and-swap on re-completion.
+     - A missing wip ref on a `todo` task takes the fresh-start path.
+   - **Fault injection:** a `failingGit{task.GitRepo; failAt string}` wrapper fails each mutation step in turn, across fresh start, restart, delivered, subtask delivered and non-delivered. Each run asserts that all captured state is restored.
+   - **Legacy and disabled:**
+     - A branchless `in_progress` task completes with no git calls (the wrapper counts calls).
+     - Disabled mode in a non-repo works as before, and the pointer is written under the fallback identity.
+   - The `update_task` guard matrix; a reopen keeps the branch fields.
+4. **`internal/task/concurrency_test.go`**: add `CurrentTask()` to `TestServiceNoSelfDeadlock`.
+5. **`internal/storage`**:
+   - Frontmatter round-trip of the five fields.
+   - `IndexEntry` carries `Branch`, `FinalBranch` and `SquashCommit`.
+   - A `.users/` tree (including a crafted `.users/.users.md`) affects neither `LoadAll`, `isStaleOnDisk`, `NextID` nor migration.
+   - Pointer read, write and remove.
+   - The custom id `.users` is rejected, and `.current_task` is not reserved.
+6. **`internal/config/resolve_test.go`**:
+   - `git` section parsing.
+   - Default `base_branches`.
+   - An empty list or blank entries are refilled or trimmed.
+   - `MCP_GIT_BRANCHING`, including an unparseable value.
+7. **`internal/tools`**:
+   - start and complete handlers over a git backlog, including `commit_message` and restart.
+   - `get_current_task`: absent, present, archived.
+   - The `update_task` refusal messages.
+   - Every YAML param entry is present.
+8. **`internal/cli/cli_test.go`**: `complete -m`, and `start` output shows the branch.
+9. **`internal/web`**:
+   - Chip mapping (`FinalBranch` falls back to `Branch`).
+   - `data-copy` is escaped.
+   - No mutating attributes appear.
+   - `/static/app.js` is served.
+   - The existing GET-only and 405 tests still pass.
+10. **Regression**: `go test -race ./...` (branching is off by default everywhere else), `go vet ./...`, and LSP diagnostics.
+11. **Manual validation**: in a scratch clone with a separate tasks repo and `git.branching: true`:
+    - Run begin_task and confirm you land on the wip branch; `get_current_task` returns the task.
+    - Edit files, then `complete_task` with a message; inspect `git log --graph --all`.
+    - Reopen, advance `main_patched`, then `start_task` and confirm the rebase.
+    - Force a conflict and confirm the error and the unchanged state.
+    - Add a subtask, deliver it, then deliver the parent.
+    - Close a task with `resolution: obsolete`.
+    - Confirm the web chip copies the branch name.
+
+### Codegen Impact
+
+- This project has no code generation, so nothing needs regenerating.
+- These embedded inputs change and are picked up by a plain `go build`:
+  - `internal/tools/descriptions/{start_task,complete_task,update_task}.yaml` and the new `get_current_task.yaml`
+  - `internal/app/instructions.md`
+  - `internal/web/templates/{_card,_detail,layout}.html`
+  - the new `internal/web/static/app.js`, added to the embed list in `assets.go`
+- `internal/web/static/app.css` must be rebuilt with `scripts/build-css.sh` (a full rebuild of that one file) and committed. This is a maintainer step, not part of `go build`.
+
+### File Impact Map
+
+| File | Change |
+|---|---|
+| `internal/vcs/vcs.go` (new) | `Repo`, `New(root, tasksDir)`, runner, `Check`, `Head`, queries, `ResolveIdentity` |
+| `internal/vcs/refs.go` (new) | `BranchAvailable`, `FirstExistingBranch`, `CreateBranch`, `MoveBranch`, `DeleteBranch`, `Switch`, `ResetKeep` |
+| `internal/vcs/tree.go` (new) | `Snapshot` (temporary index, tasks excluded), `DirtyPaths`, `TreeOf`, `MergeTrees`, `CommitTree`, `Replay`, `IndexTree`, `RestoreIndex` |
+| `internal/vcs/vcs_test.go` (new) | tests against temporary repos |
+| `internal/task/git.go` (new) | `GitRepo`, `Identity`, `CurrentTaskStore`, `ServiceOption`, `WithGit`, `WithIdentity`, `WithCurrentTaskStore` |
+| `internal/task/branching.go` (new) | naming, `gitTxn`, `vacate`, the fresh, subtask and restart start flows, the three completion flows, the subtask gate, the `update_task` guard helper, the commit-message builder |
+| `internal/task/current.go` (new) | `CurrentTask`/`currentTask`; pointer update rules on start and complete |
+| `internal/task/service.go` | variadic `NewService`; new fields; `StartTask` and `CompleteTask` dispatch to the branching flows; parent auto-complete skipped for a parent with a branch; `Update` guard; `update` handles `withBranch` and no longer clears branch fields; `WithCommitMessage` |
+| `internal/task/task.go` | five new fields |
+| `internal/task/naming_test.go`, `branching_test.go` (new), `concurrency_test.go` | tests |
+| `internal/storage/markdown.go` | `Save`/`parse` fields; explicit `.users` skip in `LoadAll` |
+| `internal/storage/index.go` | `IndexEntry` fields and converters; `.users` skip in `isStaleOnDisk` |
+| `internal/storage/current.go` (new) | per-user pointer file methods and constants |
+| `internal/storage/files.go` | reserve id `.users` |
+| `internal/storage/*_test.go` | round-trip, scan and pointer tests |
+| `internal/config/config.go` | `GitConfig` (`Branching`, `BaseBranches`), `DefaultBaseBranches`, `applyDefaults` refill, `EnvGitBranching` override |
+| `internal/config/resolve_test.go` | config tests |
+| `internal/project/resolver.go` | `Build` passes `WithCurrentTaskStore` and `WithIdentity(vcs.ResolveIdentity(root))`, plus `WithGit(vcs.New(root, tasksDir))` when enabled |
+| `internal/testsupport/testsupport.go` | `RequireGit`, `NewGitRepo`, `Git`, `NewGitBacklog(layout)`; `MCP_GIT_BRANCHING` added to `IsolateEnv` |
+| `internal/tools/workflow.go` | `commit_message` param; `get_current_task` tool |
+| `internal/tools/descriptions/{start_task,complete_task,update_task}.yaml`, `get_current_task.yaml` (new) | tool text |
+| `internal/tools/*_test.go` | handler tests |
+| `internal/cli/cli.go`, `commands.go`, `output.go`, `cli_test.go` | `complete -m/--message`; branch line in table output |
+| `internal/web/view.go`, `templates/_card.html`, `_detail.html`, `layout.html`, `static/app.js` (new), `assets.go`, `static/app.css` (rebuilt), tests | branch chip, copy button, git block in the detail view |
+| `internal/app/instructions.md` | "Git branching" section |
+| `mcp-tasks.yaml` | commented `git:` reference block (not enabled) |
+| `CLAUDE.md` | task schema (five fields); Design Decisions, new "Git branching" subsection (tasks directory never committed, naming, base list, vacate rule, sequences, restart/rebase, gate, rollback, pointer); Configuration `git:`; env table; MCP tools (`get_current_task`, `commit_message`, guard); Project Structure (`internal/vcs`, new task and storage files, `static/app.js`); Concurrency (git under the lock); Validation (reserved `.users`) |
+| `README.md` | feature section, config, requirements (git with `replay`, `user.email`), the three tasks-directory layouts |
+| `.claude/skills/begin_task/SKILL.md`, `skills/begin_task/SKILL.md`, `plugins/mcp-task-manager/skills/begin_task/SKILL.md` | start right after intake; `get_current_task` instead of `.current_task` |
+| `commands/begin-task.md`, `plugins/mcp-task-manager/commands/begin-task.md` | item 1 wording |
+| `skills/superpowers-workflow/SKILL.md` and plugin mirror | no manual code commit when the task has a branch; pass `commit_message` |
+| `.claude/skills/{workflow,implementation}/SKILL.md` and `skills/` and plugin mirrors | one sentence on lifecycle commits |
+| `.gitignore` | unchanged (the legacy root `.current_task` stays ignored) |
+
+This task (`git-branch-per-task`) is itself implemented the old way. It gets no branch, and this change does not enable `git.branching` in this repository.
+
+### Open Questions
+
+1. **`.users/` in this repository.** Here the tasks directory is tracked inside the code repo, so `tasks/.users/` will show up as untracked. Should this repo gitignore it, or commit the per-user pointers?
+2. **Dirty foreign branch on start.** If HEAD is on a user branch other than the chosen base and has uncommitted changes, `start_task` refuses. Is that acceptable, or should those changes be carried into the new task?
+3. **Re-completion after a push.** Re-completing a reopened task moves its existing final branch to the new squash commit. If that branch was already pushed, the PR needs a force-push. Is that acceptable, or should re-completion create a new suffixed final branch (e.g. `<user>/<name>-2`)?
