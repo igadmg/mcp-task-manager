@@ -232,8 +232,8 @@ func TestFirstExistingBranch(t *testing.T) {
 		t.Errorf("FirstExistingBranch() = (%q, %q, %v), want (main, %s, nil)", name, sha, err, head)
 	}
 
-	if _, _, err := r.FirstExistingBranch([]string{"nope", "neither"}); err == nil {
-		t.Error("FirstExistingBranch() with no existing branch: error = nil")
+	if name, sha, err := r.FirstExistingBranch([]string{"nope", "neither"}); name != "" || sha != "" || err != nil {
+		t.Errorf("FirstExistingBranch() with no existing branch = (%q, %q, %v), want empty and no error", name, sha, err)
 	}
 }
 

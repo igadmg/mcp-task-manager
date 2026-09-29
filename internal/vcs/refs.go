@@ -31,7 +31,7 @@ func (r *Repo) branchSHA(name string) (string, bool, error) {
 }
 
 // FirstExistingBranch returns the first of names that exists as a local
-// branch, with its commit.
+// branch, with its commit. name is empty, with no error, when none exists.
 func (r *Repo) FirstExistingBranch(names []string) (string, string, error) {
 	if err := r.ensure(); err != nil {
 		return "", "", err
@@ -45,7 +45,7 @@ func (r *Repo) FirstExistingBranch(names []string) (string, string, error) {
 			return name, sha, nil
 		}
 	}
-	return "", "", fmt.Errorf("none of the branches %v exist", names)
+	return "", "", nil
 }
 
 // BranchAvailable reports, as an error naming the obstacle, why a branch

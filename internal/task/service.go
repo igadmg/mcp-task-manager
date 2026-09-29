@@ -618,6 +618,15 @@ func (s *Service) startTask(id string) (*Task, error) {
 		return nil, err
 	}
 
+	// A task whose wip branch still exists is restarted on it.
+	if s.git != nil && t.Branch != "" && (t.Status == StatusTodo || t.Status == StatusInProgress) {
+		if _, ok, err := s.git.BranchSHA(t.Branch); err != nil {
+			return nil, err
+		} else if ok {
+			return nil, fmt.Errorf("task %s: %w", id, errRestartNotImplemented)
+		}
+	}
+
 	if t.Status != StatusTodo {
 		return nil, fmt.Errorf("task %s is not in todo status (current: %s)", id, t.Status)
 	}
@@ -631,15 +640,22 @@ func (s *Service) startTask(id string) (*Task, error) {
 		return nil, fmt.Errorf("task %s is blocked by tasks: %s", id, strings.Join(parts, ", "))
 	}
 
+	if s.git != nil {
+		return s.startBranched(t)
+	}
+	return s.startPlain(t)
+}
+
+// startPlain starts t without git: the records and the pointer.
+func (s *Service) startPlain(t *Task) (*Task, error) {
 	var txn gitTxn
-	started, err := s.startTaskRecords(&txn, t)
-	if err == nil {
-		err = s.setPointer(&txn, id)
-	}
-	if err != nil {
-		return nil, withRollback(err, txn.rollback())
-	}
-	return started, nil
+	return runFlow(&txn, func() (*Task, error) {
+		started, err := s.startTaskRecords(&txn, t)
+		if err != nil {
+			return nil, err
+		}
+		return started, s.setPointer(&txn, t.ID)
+	})
 }
 
 // startTaskRecords writes the status changes of a start: the task, and its
@@ -671,12 +687,13 @@ func (s *Service) startTaskRecords(txn *gitTxn, t *Task) (*Task, error) {
 }
 
 // withRollback reports a failed flow together with anything its rollback
-// could not undo.
+// could not undo. Nothing is ever lost at that point: every commit a flow
+// made stays reachable through its branch or the reflog.
 func withRollback(err, rollbackErr error) error {
 	if rollbackErr == nil {
 		return err
 	}
-	return fmt.Errorf("%w; %w", err, rollbackErr)
+	return fmt.Errorf("%w; %w; no content was lost: every commit stays reachable through its branch or the reflog", err, rollbackErr)
 }
 
 // CompleteTask closes a task. Without options it is the original

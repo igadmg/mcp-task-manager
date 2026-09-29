@@ -13,6 +13,7 @@ type GitRepo interface {
 	TreeOf(rev string) (string, error)
 
 	BranchSHA(name string) (sha string, ok bool, err error)
+	// FirstExistingBranch returns an empty name when none of names exists.
 	FirstExistingBranch(names []string) (name, sha string, err error)
 	BranchAvailable(name string) error
 	CreateBranch(name, sha string) error
