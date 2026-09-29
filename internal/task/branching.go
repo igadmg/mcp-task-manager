@@ -183,6 +183,9 @@ func (s *Service) captureTask(txn *gitTxn, id string) error {
 	if err != nil {
 		return err
 	}
+	if t == nil {
+		return fmt.Errorf("task not found: %s", id)
+	}
 	saved := *t
 	txn.add("record of task "+id, func() error {
 		restored := saved

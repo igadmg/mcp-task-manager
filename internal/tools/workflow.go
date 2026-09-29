@@ -47,7 +47,31 @@ func workflowTools(rs *project.Resolver) []server.ServerTool {
 		),
 	)
 	tools = append(tools, server.ServerTool{Tool: completeTool, Handler: completeTaskHandler(rs)})
+
+	// get_current_task
+	currentText := textFor("get_current_task")
+	currentTool := mcp.NewTool("get_current_task",
+		mcp.WithDescription(currentText.Description),
+	)
+	tools = append(tools, server.ServerTool{Tool: currentTool, Handler: getCurrentTaskHandler(rs)})
 	return tools
+}
+
+func getCurrentTaskHandler(rs *project.Resolver) server.ToolHandlerFunc {
+	return withService(rs, func(ctx context.Context, svc *task.Service, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		if err := svc.EnsureProjectExists(); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
+		t, ok, err := svc.CurrentTask()
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		if !ok {
+			return mcp.NewToolResultText("No current task"), nil
+		}
+		return taskResult(t)
+	})
 }
 
 func getNextTaskHandler(rs *project.Resolver) server.ToolHandlerFunc {

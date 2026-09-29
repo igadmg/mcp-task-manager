@@ -609,7 +609,10 @@ func (s *Service) GetNextTask() *Task {
 func (s *Service) StartTask(id string) (*Task, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.startTask(id)
+}
 
+func (s *Service) startTask(id string) (*Task, error) {
 	t, err := s.get(id)
 	if err != nil {
 		return nil, err
@@ -628,6 +631,21 @@ func (s *Service) StartTask(id string) (*Task, error) {
 		return nil, fmt.Errorf("task %s is blocked by tasks: %s", id, strings.Join(parts, ", "))
 	}
 
+	var txn gitTxn
+	started, err := s.startTaskRecords(&txn, t)
+	if err == nil {
+		err = s.setPointer(&txn, id)
+	}
+	if err != nil {
+		return nil, withRollback(err, txn.rollback())
+	}
+	return started, nil
+}
+
+// startTaskRecords writes the status changes of a start: the task, and its
+// parent when that is still todo. Every record is journaled before it is
+// written.
+func (s *Service) startTaskRecords(txn *gitTxn, t *Task) (*Task, error) {
 	// Auto-start parent if this is a subtask
 	if t.ParentID != "" {
 		parent, err := s.get(t.ParentID)
@@ -635,6 +653,9 @@ func (s *Service) StartTask(id string) (*Task, error) {
 			return nil, fmt.Errorf("parent task not found: %s", t.ParentID)
 		}
 		if parent.Status == StatusTodo {
+			if err := s.captureTask(txn, t.ParentID); err != nil {
+				return nil, err
+			}
 			status := StatusInProgress
 			if _, err := s.update(t.ParentID, nil, nil, &status, nil, nil); err != nil {
 				return nil, fmt.Errorf("failed to start parent task: %w", err)
@@ -642,8 +663,20 @@ func (s *Service) StartTask(id string) (*Task, error) {
 		}
 	}
 
+	if err := s.captureTask(txn, t.ID); err != nil {
+		return nil, err
+	}
 	status := StatusInProgress
-	return s.update(id, nil, nil, &status, nil, nil)
+	return s.update(t.ID, nil, nil, &status, nil, nil)
+}
+
+// withRollback reports a failed flow together with anything its rollback
+// could not undo.
+func withRollback(err, rollbackErr error) error {
+	if rollbackErr == nil {
+		return err
+	}
+	return fmt.Errorf("%w; %w", err, rollbackErr)
 }
 
 // CompleteTask closes a task. Without options it is the original
@@ -659,7 +692,10 @@ func (s *Service) StartTask(id string) (*Task, error) {
 func (s *Service) CompleteTask(id string, opts ...UpdateOption) (*Task, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.completeTask(id, opts...)
+}
 
+func (s *Service) completeTask(id string, opts ...UpdateOption) (*Task, error) {
 	t, err := s.get(id)
 	if err != nil {
 		return nil, err
@@ -686,44 +722,78 @@ func (s *Service) CompleteTask(id string, opts ...UpdateOption) (*Task, error) {
 			incompleteCount++
 		}
 	}
-	if incompleteCount > 0 {
-		if resolution.Delivered() {
-			return nil, fmt.Errorf("cannot complete task %s: has %d incomplete subtask(s)", id, incompleteCount)
+	if incompleteCount > 0 && resolution.Delivered() {
+		return nil, fmt.Errorf("cannot complete task %s: has %d incomplete subtask(s)", id, incompleteCount)
+	}
+
+	var txn gitTxn
+	completed, closed, openParent, err := s.completeTaskRecords(&txn, t, subtasks, resolution, opts)
+	if err == nil {
+		err = s.clearPointerIf(&txn, openParent, closed...)
+	}
+	if err != nil {
+		return nil, withRollback(err, txn.rollback())
+	}
+	return completed, nil
+}
+
+// completeTaskRecords writes the records of a completion: the open
+// subtasks a non-delivered close cascades to, the task, and the parent a
+// last subtask auto-completes. It returns every task it closed, and the
+// parent when that is still open afterwards. Every record is journaled
+// before it is written.
+func (s *Service) completeTaskRecords(txn *gitTxn, t *Task, subtasks []*Task, resolution Resolution, opts []UpdateOption) (completed *Task, closed []string, openParent string, err error) {
+	for _, sub := range subtasks {
+		if sub.Status == StatusDone {
+			continue
 		}
-		if err := s.closeSubtasksWith(id, subtasks, resolution); err != nil {
-			return nil, err
+		if err := s.captureTask(txn, sub.ID); err != nil {
+			return nil, nil, "", err
 		}
+		closed = append(closed, sub.ID)
+	}
+	if err := s.closeSubtasksWith(t.ID, subtasks, resolution); err != nil {
+		return nil, nil, "", err
 	}
 
 	// Complete this task
+	if err := s.captureTask(txn, t.ID); err != nil {
+		return nil, nil, "", err
+	}
 	status := StatusDone
-	completed, err := s.update(id, nil, nil, &status, nil, nil, opts...)
+	completed, err = s.update(t.ID, nil, nil, &status, nil, nil, opts...)
 	if err != nil {
-		return nil, err
+		return nil, nil, "", err
+	}
+	closed = append(closed, t.ID)
+
+	if t.ParentID == "" {
+		return completed, closed, "", nil
 	}
 
 	// If this is a subtask, check if all siblings are done -> auto-complete parent
-	if t.ParentID != "" {
-		siblings := s.index.GetSubtasks(t.ParentID)
-		allDone := true
-		for _, sib := range siblings {
-			if sib.Status != StatusDone {
-				allDone = false
-				break
-			}
-		}
-		if allDone {
-			// The parent closes as completed even when the last subtask was
-			// closed as obsolete: from the parent's side every child has
-			// been dealt with. Give the parent its own resolution
-			// explicitly when that reading is wrong.
-			if _, err := s.update(t.ParentID, nil, nil, &status, nil, nil); err != nil {
-				return nil, fmt.Errorf("failed to auto-complete parent: %w", err)
-			}
+	siblings := s.index.GetSubtasks(t.ParentID)
+	allDone := true
+	for _, sib := range siblings {
+		if sib.Status != StatusDone {
+			allDone = false
+			break
 		}
 	}
-
-	return completed, nil
+	if !allDone {
+		return completed, closed, t.ParentID, nil
+	}
+	// The parent closes as completed even when the last subtask was
+	// closed as obsolete: from the parent's side every child has
+	// been dealt with. Give the parent its own resolution
+	// explicitly when that reading is wrong.
+	if err := s.captureTask(txn, t.ParentID); err != nil {
+		return nil, nil, "", err
+	}
+	if _, err := s.update(t.ParentID, nil, nil, &status, nil, nil); err != nil {
+		return nil, nil, "", fmt.Errorf("failed to auto-complete parent: %w", err)
+	}
+	return completed, append(closed, t.ParentID), "", nil
 }
 
 // closeSubtasksWith closes every still-open subtask with the parent's

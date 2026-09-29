@@ -1,0 +1,8 @@
+description: >-
+  Get the task you are currently working on. Each user has their own
+  current-task pointer, kept at <tasks_dir>/.users/<user>/current_task:
+  start_task points it at the started task; complete_task (with any
+  resolution) moves it to the still-open parent of a completed subtask, or
+  removes it. Archived tasks are still returned. Returns "No current task"
+  when there is no pointer, and an error when it names a task that no longer
+  exists.
