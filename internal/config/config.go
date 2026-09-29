@@ -29,6 +29,9 @@ const (
 	// EnvWebAddr sets the dashboard listen address. It never enables the
 	// dashboard on its own - the two levers stay orthogonal.
 	EnvWebAddr = "MCP_WEB_ADDR"
+	// EnvGitBranching turns the git branch-per-task workflow on or off,
+	// parsed as a bool. There is no override for the base branch list.
+	EnvGitBranching = "MCP_GIT_BRANCHING"
 )
 
 // DefaultWebAddr is loopback-only on purpose: the dashboard is unauthenticated,
@@ -107,12 +110,24 @@ type WebConfig struct {
 	WithMCP bool `yaml:"with_mcp"`
 }
 
+// GitConfig holds the opt-in git branch-per-task workflow.
+type GitConfig struct {
+	// Branching makes start_task/complete_task create, squash, rebase and
+	// switch per-task branches in the code repository. Off by default.
+	Branching bool `yaml:"branching"`
+	// BaseBranches is the priority list of mainline branches; a top-level
+	// task branches from the first one that exists. _patched variants rank
+	// above plain ones.
+	BaseBranches []string `yaml:"base_branches"`
+}
+
 // Config holds application configuration
 type Config struct {
 	TaskTypes     []string          `yaml:"task_types"`
 	RelationTypes []string          `yaml:"relation_types,omitempty"`
 	AutoArchive   AutoArchiveConfig `yaml:"auto_archive"`
 	Web           WebConfig         `yaml:"web"`
+	Git           GitConfig         `yaml:"git"`
 	// TasksDirName is the tasks directory, relative to the project root.
 	TasksDirName string      `yaml:"tasks_dir,omitempty"`
 	DataDir      string      `yaml:"-"` // Resolved tasks directory
@@ -124,6 +139,10 @@ type Config struct {
 // superseded_by is the edge behind the "superseded" resolution: the task that
 // took over the work, kept as a link rather than a copy of an id in a field.
 var DefaultRelationTypes = []string{"blocked_by", "relates_to", "duplicate_of", "superseded_by"}
+
+// DefaultBaseBranches is the base branch priority list used when the config
+// names none.
+var DefaultBaseBranches = []string{"main_patched", "master_patched", "main", "master"}
 
 // DefaultConfig returns configuration with defaults
 func DefaultConfig() *Config {
@@ -139,6 +158,12 @@ func DefaultConfig() *Config {
 			Enabled: false,
 			Addr:    DefaultWebAddr,
 			WithMCP: false,
+		},
+		Git: GitConfig{
+			Branching: false,
+			// A copy, so a caller mutating its config cannot change the
+			// package default.
+			BaseBranches: append([]string(nil), DefaultBaseBranches...),
 		},
 	}
 }
@@ -229,11 +254,22 @@ func (c *Config) applyDefaults() {
 	if strings.TrimSpace(c.Web.Addr) == "" {
 		c.Web.Addr = d.Web.Addr
 	}
+	var bases []string
+	for _, b := range c.Git.BaseBranches {
+		if b = strings.TrimSpace(b); b != "" {
+			bases = append(bases, b)
+		}
+	}
+	if len(bases) == 0 {
+		bases = d.Git.BaseBranches
+	}
+	c.Git.BaseBranches = bases
 }
 
-// applyEnvOverrides lets the environment override the web section. The two
-// variables are orthogonal: an address never enables the dashboard, and an
-// unparseable MCP_WEB_ENABLED is ignored rather than guessed at.
+// applyEnvOverrides lets the environment override the web section and the
+// git branching switch. The two web variables are orthogonal: an address
+// never enables the dashboard. An unparseable MCP_WEB_ENABLED or
+// MCP_GIT_BRANCHING is ignored rather than guessed at.
 func (c *Config) applyEnvOverrides() {
 	if addr := strings.TrimSpace(os.Getenv(EnvWebAddr)); addr != "" {
 		c.Web.Addr = addr
@@ -241,6 +277,11 @@ func (c *Config) applyEnvOverrides() {
 	if raw := strings.TrimSpace(os.Getenv(EnvWebEnabled)); raw != "" {
 		if enabled, err := strconv.ParseBool(raw); err == nil {
 			c.Web.Enabled = enabled
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv(EnvGitBranching)); raw != "" {
+		if enabled, err := strconv.ParseBool(raw); err == nil {
+			c.Git.Branching = enabled
 		}
 	}
 }

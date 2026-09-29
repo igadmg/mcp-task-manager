@@ -115,6 +115,7 @@ func IsolateEnv(t *testing.T) {
 		config.EnvRootSource,
 		config.EnvWebEnabled,
 		config.EnvWebAddr,
+		config.EnvGitBranching,
 	} {
 		// t.Setenv registers the restore; Unsetenv then makes it actually
 		// absent rather than set-to-empty, which resolution treats alike but
