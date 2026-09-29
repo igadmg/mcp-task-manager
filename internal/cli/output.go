@@ -46,6 +46,16 @@ func FormatTaskDetail(t *task.Task, opts *TaskDetailOptions) string {
 	if t.ResolutionNote != "" {
 		sb.WriteString(fmt.Sprintf("Why:         %s\n", t.ResolutionNote))
 	}
+	for _, line := range []struct{ label, value string }{
+		{"Branch:      ", t.Branch},
+		{"Base branch: ", t.BaseBranch},
+		{"Start commit:", t.StartCommit},
+		{"Final branch:", t.FinalBranch},
+	} {
+		if line.value != "" {
+			sb.WriteString(fmt.Sprintf("%s %s\n", line.label, line.value))
+		}
+	}
 	if len(t.Relations) > 0 {
 		sb.WriteString("\nRelations:\n")
 		for _, rel := range t.Relations {

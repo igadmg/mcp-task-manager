@@ -320,3 +320,26 @@ func TestRestartFaultInjection(t *testing.T) {
 		})
 	})
 }
+
+// Reopening to todo is the one status move update_task allows on a branched
+// task; the branch is kept, so the next start resumes on it.
+func TestReopenThenStartRestarts(t *testing.T) {
+	b := testsupport.NewGitBacklog(t, testsupport.TasksInRepoTracked)
+	mustCreate(t, b, "alpha", "")
+	mustStart(t, b, "alpha")
+	tip := commitCode(t, b, "a.txt", "a\n", "wip commit")
+	b.Git(t, "switch", "-q", "main_patched")
+
+	reopen(t, b, "alpha")
+	if got := mustGet(t, b, "alpha"); got.Status != task.StatusTodo || got.Branch != "dev/wip/alpha" {
+		t.Fatalf("reopened = status %s, branch %q; want todo with the branch kept", got.Status, got.Branch)
+	}
+	started := mustStart(t, b, "alpha")
+	if started.Status != task.StatusInProgress {
+		t.Errorf("status = %s", started.Status)
+	}
+	requireHead(t, b, "dev/wip/alpha")
+	if got := b.Git(t, "rev-parse", "HEAD"); got != tip {
+		t.Errorf("HEAD = %s, want the wip work %s back", got, tip)
+	}
+}

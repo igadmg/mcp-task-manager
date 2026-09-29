@@ -1,3 +1,21 @@
-description: Move a task from todo to in_progress
+description: |
+  Move a task from todo to in_progress, and make it your current task (see
+  get_current_task).
+
+  When git branching is enabled (git.branching in mcp-tasks.yaml), the server
+  also does the branch work - do not create or switch branches yourself:
+  - A top-level task gets <user>/wip/<name>, cut from the tip of the first
+    existing base branch (git.base_branches), and HEAD is switched to it. A
+    subtask gets <parent wip>--<name>, cut from its parent's wip branch; a
+    todo parent is started along with it.
+  - Starting a task whose wip branch still exists (in progress, or reopened
+    to todo) restarts it: the branch is rebased onto the current tip of its
+    base (or parent) and checked out. A conflicting rebase changes nothing
+    and lists the conflicting paths.
+  - Uncommitted code on a task's wip branch is saved there in a checkpoint
+    commit first; uncommitted code on the base branch is carried to the new
+    branch; uncommitted code on any other branch refuses the start. Changes
+    under the tasks directory never count.
+  The result's branch field names the branch you are now on.
 params:
   id: Task ID to start

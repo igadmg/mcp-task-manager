@@ -409,10 +409,18 @@ func buildUpdateOpts(opts []UpdateOption) updateOpts {
 	return o
 }
 
-// Update modifies a task
+// Update modifies a task. With git branching on, status moves that belong to
+// start_task and complete_task are refused (see branchingGuard).
 func (s *Service) Update(id string, title, description *string, status *Status, priority *Priority, taskType *string, opts ...UpdateOption) (*Task, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.git != nil {
+		if t, err := s.get(id); err == nil {
+			if err := branchingGuard(t, status, buildUpdateOpts(opts)); err != nil {
+				return nil, err
+			}
+		}
+	}
 	return s.update(id, title, description, status, priority, taskType, opts...)
 }
 

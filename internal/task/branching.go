@@ -218,6 +218,25 @@ func (s *Service) capturePointer(txn *gitTxn, user string) error {
 	return nil
 }
 
+// branchingGuard refuses the update_task status moves that would bypass the
+// git flows (design 5.10): starting, closing a task that works on a branch,
+// and resuming a done one. Reopening to todo stays allowed - the branch
+// fields are kept, so the next start_task restarts on the branch - and so
+// does every edit that leaves the status alone.
+func branchingGuard(t *Task, status *Status, o updateOpts) error {
+	moving := func(to Status) bool { return status != nil && *status == to && t.Status != to }
+	closing := o.resolution != nil || moving(StatusDone)
+	switch {
+	case t.Status == StatusTodo && moving(StatusInProgress):
+		return fmt.Errorf("git branching is enabled; use start_task to start task %s", t.ID)
+	case t.Status == StatusInProgress && t.Branch != "" && closing:
+		return fmt.Errorf("git branching is enabled; use complete_task to close task %s, which works on branch %s", t.ID, t.Branch)
+	case t.Status == StatusDone && t.Branch != "" && moving(StatusInProgress):
+		return fmt.Errorf("git branching is enabled; reopen task %s to todo and use start_task to resume it on %s", t.ID, t.Branch)
+	}
+	return nil
+}
+
 // branchInfo carries branch field changes into update. A nil field is left
 // as it is, so a restart can move StartCommit without clearing FinalBranch.
 type branchInfo struct {

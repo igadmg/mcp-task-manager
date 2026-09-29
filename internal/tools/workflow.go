@@ -45,6 +45,9 @@ func workflowTools(rs *project.Resolver) []server.ServerTool {
 		mcp.WithString("resolution_note",
 			mcp.Description(completeText.param("resolution_note")),
 		),
+		mcp.WithString("commit_message",
+			mcp.Description(completeText.param("commit_message")),
+		),
 	)
 	tools = append(tools, server.ServerTool{Tool: completeTool, Handler: completeTaskHandler(rs)})
 
@@ -113,6 +116,9 @@ func completeTaskHandler(rs *project.Resolver) server.ToolHandlerFunc {
 		}
 		if _, ok := args["resolution_note"]; ok {
 			opts = append(opts, task.WithResolutionNote(req.GetString("resolution_note", "")))
+		}
+		if msg := req.GetString("commit_message", ""); msg != "" {
+			opts = append(opts, task.WithCommitMessage(msg))
 		}
 
 		t, err := svc.CompleteTask(id, opts...)

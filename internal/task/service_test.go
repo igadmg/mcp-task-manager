@@ -2062,3 +2062,58 @@ func TestLastSubtaskDoesNotAutoCompleteBranchedParent(t *testing.T) {
 		t.Errorf("parent status = %s, want in_progress", got.Status)
 	}
 }
+
+func TestUpdateGuardMatrix(t *testing.T) {
+	// The guard never calls git: a nil-backed GitRepo only turns it on.
+	svc := NewService(newMockStorage(), nil, nil, newMockIndex(), []string{"feature", "bug"}, nil, WithGit(nopGit{}))
+	svc.Initialize()
+	seed := func(status Status, branch string) string {
+		created, _ := svc.Create("Task", "", PriorityHigh, "feature", "", "")
+		var opts []UpdateOption
+		if branch != "" {
+			opts = append(opts, withBranch(branchInfo{Branch: &branch}))
+		}
+		if _, err := svc.update(created.ID, nil, nil, &status, nil, nil, opts...); err != nil {
+			t.Fatalf("seeding %s: %v", status, err)
+		}
+		return created.ID
+	}
+	st := func(s Status) *Status { return &s }
+
+	for _, tc := range []struct {
+		name   string
+		from   Status
+		branch string
+		status *Status
+		opts   []UpdateOption
+		want   string // "" = allowed
+	}{
+		{"start via update", StatusTodo, "", st(StatusInProgress), nil, "use start_task"},
+		{"close a branched task", StatusInProgress, "dev/wip/x", st(StatusDone), nil, "use complete_task"},
+		{"close a branched task by resolution", StatusInProgress, "dev/wip/x", nil, []UpdateOption{WithResolution(ResolutionObsolete)}, "use complete_task"},
+		{"resume a done branched task", StatusDone, "dev/wip/x", st(StatusInProgress), nil, "reopen task"},
+		{"reopen a done branched task", StatusDone, "dev/wip/x", st(StatusTodo), nil, ""},
+		{"close a branchless task in progress", StatusInProgress, "", st(StatusDone), nil, ""},
+		{"edit title of a branched task", StatusInProgress, "dev/wip/x", nil, nil, ""},
+		{"re-send the current status", StatusInProgress, "dev/wip/x", st(StatusInProgress), nil, ""},
+		{"close a todo task", StatusTodo, "", nil, []UpdateOption{WithResolution(ResolutionWontfix)}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			id := seed(tc.from, tc.branch)
+			title := "edited"
+			_, err := svc.Update(id, &title, nil, tc.status, nil, nil, tc.opts...)
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("Update() error = %v, want allowed", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "git branching is enabled") {
+				t.Fatalf("Update() error = %v, want a refusal containing %q", err, tc.want)
+			}
+			if got, _ := svc.Get(id); got.Status != tc.from || got.Title == title {
+				t.Errorf("a refused update changed the task: status %s, title %q", got.Status, got.Title)
+			}
+		})
+	}
+}

@@ -155,3 +155,24 @@ func TestFormatJSONMessage(t *testing.T) {
 		t.Errorf(`expected id field as a JSON string ("id": "5"), got:\n%s`, output)
 	}
 }
+
+func TestFormatTaskDetailBranchLines(t *testing.T) {
+	tk := &task.Task{ID: "7", Title: "Branched", Status: task.StatusDone, Priority: task.PriorityHigh, Type: "feature",
+		Branch: "dev/wip/7-branched", BaseBranch: "main_patched", StartCommit: "abc123", FinalBranch: "dev/7-branched"}
+	output := FormatTaskDetail(tk, nil)
+	for _, want := range []string{
+		"Branch:       dev/wip/7-branched\n",
+		"Base branch:  main_patched\n",
+		"Start commit: abc123\n",
+		"Final branch: dev/7-branched\n",
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("output lacks %q:\n%s", want, output)
+		}
+	}
+
+	plain := FormatTaskDetail(&task.Task{ID: "8", Title: "Plain", Status: task.StatusTodo}, nil)
+	if strings.Contains(plain, "branch") || strings.Contains(plain, "Branch") {
+		t.Errorf("a task without branch data prints branch lines:\n%s", plain)
+	}
+}

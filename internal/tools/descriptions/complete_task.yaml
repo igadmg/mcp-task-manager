@@ -3,6 +3,23 @@ description: |
   must be in_progress and moves to done. Pass a resolution other than
   "completed" to close a task whose work is not going to happen - that form
   also accepts a todo task and closes its open subtasks along with it.
+  Closing your current task moves your current-task pointer to its open
+  parent, or clears it.
+
+  When git branching is enabled and the task has a branch, the server
+  commits and switches for you - do not commit code or switch yourself:
+  - Completed top-level task (its wip branch must be checked out): all work
+    on the wip branch, committed or not, becomes exactly one commit on top
+    of the task's start commit, on <user>/<name>, and HEAD ends there. The
+    wip branch keeps the full history.
+  - Completed subtask: its work is squash-merged as one commit onto the
+    parent's wip branch, and HEAD ends there. The parent stays in progress
+    until it is completed itself; it is refused while a completed
+    subtask's commit is missing from its branch.
+  - Any other resolution, with the task's branch checked out: uncommitted
+    work is saved in a safety commit on the wip branch, and HEAD returns to
+    the base branch (or the parent's wip). If the branch is not checked
+    out, only the record changes.
 params:
   id: Task ID to close
   resolution: |
@@ -12,3 +29,7 @@ params:
     deliberately not done. For superseded/duplicate also add the matching
     relation, so the replacement is a link and not just prose.
   resolution_note: One line on why, e.g. the commit that landed it or what replaced it.
+  commit_message: |
+    Message of the squash commit a completion makes under git branching,
+    used verbatim. Defaults to the task's title and description with a
+    "Task: <id>" trailer. Ignored when no squash commit is made.

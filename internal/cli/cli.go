@@ -149,11 +149,12 @@ func RunWithContext(ctx context.Context, args []string, stdout, stderr io.Writer
 	completeCmd := flaggy.NewSubcommand("complete")
 	completeCmd.Description = "Close a task (in_progress -> done, or any status when closed with a non-completed resolution)"
 	var completeIDStr string
-	var completeResolution, completeNote string
+	var completeResolution, completeNote, completeMessage string
 	var completeJSON bool
 	completeCmd.AddPositionalValue(&completeIDStr, "id", 1, true, "Task ID")
 	completeCmd.String(&completeResolution, "", "resolution", fmt.Sprintf("How the task left the backlog (%s)", strings.Join(task.ResolutionStrings(), "|")))
 	completeCmd.String(&completeNote, "", "note", "One line on why")
+	completeCmd.String(&completeMessage, "m", "message", "Squash commit message under git branching (default: title, description, Task trailer)")
 	completeCmd.Bool(&completeJSON, "j", "json", "Output as JSON")
 	flaggy.AttachSubcommand(completeCmd, 1)
 
@@ -251,7 +252,7 @@ func RunWithContext(ctx context.Context, args []string, stdout, stderr io.Writer
 	}
 
 	if completeCmd.Used {
-		return cmdComplete(stdout, stderr, completeJSON, completeIDStr, completeResolution, completeNote)
+		return cmdComplete(stdout, stderr, completeJSON, completeIDStr, completeResolution, completeNote, completeMessage)
 	}
 
 	if archiveCmd.Used {

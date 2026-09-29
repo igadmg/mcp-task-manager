@@ -364,12 +364,16 @@ func cmdStart(stdout, stderr io.Writer, jsonOutput bool, id string) int {
 		return 1
 	}
 
-	if _, err := svc.StartTask(id); err != nil {
+	started, err := svc.StartTask(id)
+	if err != nil {
 		fmt.Fprintf(stderr, "Error: %v\n", err)
 		return 1
 	}
 
 	msg := fmt.Sprintf("Task #%s started.", id)
+	if started.Branch != "" {
+		msg = fmt.Sprintf("Task #%s started on branch %s.", id, started.Branch)
+	}
 	if jsonOutput {
 		if err := FormatJSONMessage(stdout, msg, id); err != nil {
 			fmt.Fprintf(stderr, "Error: %v\n", err)
@@ -464,7 +468,7 @@ func cmdListTaskFiles(stdout, stderr io.Writer, id string) int {
 }
 
 // cmdComplete handles the complete command
-func cmdComplete(stdout, stderr io.Writer, jsonOutput bool, id, resolution, resolutionNote string) int {
+func cmdComplete(stdout, stderr io.Writer, jsonOutput bool, id, resolution, resolutionNote, commitMessage string) int {
 	svc, _, err := initService()
 	if err != nil {
 		fmt.Fprintf(stderr, "Error: %v\n", err)
@@ -478,8 +482,12 @@ func cmdComplete(stdout, stderr io.Writer, jsonOutput bool, id, resolution, reso
 	if resolutionNote != "" {
 		opts = append(opts, task.WithResolutionNote(resolutionNote))
 	}
+	if commitMessage != "" {
+		opts = append(opts, task.WithCommitMessage(commitMessage))
+	}
 
-	if _, err := svc.CompleteTask(id, opts...); err != nil {
+	done, err := svc.CompleteTask(id, opts...)
+	if err != nil {
 		fmt.Fprintf(stderr, "Error: %v\n", err)
 		return 1
 	}
@@ -487,6 +495,15 @@ func cmdComplete(stdout, stderr io.Writer, jsonOutput bool, id, resolution, reso
 	msg := fmt.Sprintf("Task #%s completed.", id)
 	if resolution != "" && resolution != string(task.ResolutionCompleted) {
 		msg = fmt.Sprintf("Task #%s closed as %s.", id, resolution)
+	}
+	// A delivered completion under git branching ends on a known branch:
+	// the final one, or the parent's wip a subtask was merged into.
+	if svc.BranchingEnabled() && done.Branch != "" && done.EffectiveResolution().Delivered() {
+		if done.FinalBranch != "" {
+			msg += fmt.Sprintf(" Final branch: %s.", done.FinalBranch)
+		} else if done.ParentID != "" {
+			msg += fmt.Sprintf(" Merged into %s.", done.BaseBranch)
+		}
 	}
 	if jsonOutput {
 		if err := FormatJSONMessage(stdout, msg, id); err != nil {
