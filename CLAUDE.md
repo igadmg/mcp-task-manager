@@ -16,10 +16,10 @@ A Go-based MCP server for task management, designed for Claude and coding agents
 ├──────────────────┴───────────────────┴────────────────────────┤
 │                        Task Service                           │
 │       (business logic, validation, sorting, one mutex)        │
-├───────────────────────────────────────────────────────────────┤
-│                           Storage                             │
-│              (markdown files + in-memory index)               │
-└───────────────────────────────────────────────────────────────┘
+├───────────────────────────────┬───────────────────────────────┤
+│            Storage            │     VCS (git branching)       │
+│ (markdown files + mem index)  │ (system git, opt-in, vcs pkg) │
+└───────────────────────────────┴───────────────────────────────┘
          │                        │
          ▼                        ▼
     ./tasks/{id}/{id}.md           (source of truth)
@@ -32,6 +32,11 @@ A Go-based MCP server for task management, designed for Claude and coding agents
 `internal/storage` is private to it. A consumer that needs data the service
 does not expose gets a new method on `task.Service` (see
 `internal/task/view.go`), never its own storage handle.
+
+`internal/vcs` wraps the system `git` binary and imports only the standard
+library. `project.Build` is the only place that constructs it; `task.Service`
+drives it through the `task.GitRepo` interface, which tests wrap for fault
+injection.
 
 ## Development Process
 
@@ -89,6 +94,11 @@ resolution: obsolete  # optional, done tasks only: completed | obsolete | supers
 resolution_note: "one line on why"   # optional, done tasks only
 closed_at: 2025-01-20T09:00:00Z      # optional, set when the task became done
 verified_at: 2025-01-19T12:00:00Z    # optional, last time the task's text was checked against reality
+branch: dev/wip/42-add-login         # git branching only: the wip branch (kept across a reopen)
+base_branch: main_patched            # git branching only: base branch, or the parent's wip for a subtask
+start_commit: 3f2a...                # git branching only: the commit the wip branch grows from
+final_branch: dev/42-add-login       # git branching only: set by a delivered top-level completion
+squash_commit: 9c1b...               # git branching only: the final commit, or the subtask's merge onto the parent's wip
 ---
 
 Markdown description here.
@@ -97,7 +107,7 @@ Markdown description here.
 ### Task Identification
 - Ids are strings. By default `create_task` still allocates an auto-incrementing numeric-looking id, now unpadded (e.g. `"8"`, not `"008"`).
 - Optionally, `create_task` accepts a caller-supplied custom text id via its `id` parameter; it is used verbatim as the id and never advances or collides with the numeric auto-increment counter (a numeric-looking custom id like `"5"` still participates correctly in future auto-increment collision avoidance).
-- Custom ids are validated the same way attached filenames are: non-empty, no `/` or `\`, not `..`; additionally `"0"`, `"archive"`, and `".index.json"` are reserved (they collide with this package's own on-disk sentinels, the last being the retired index cache filename) and rejected.
+- Custom ids are validated the same way attached filenames are: non-empty, no `/` or `\`, not `..`; additionally `"0"`, `"archive"`, `".index.json"` and `".users"` are reserved (they collide with this package's own on-disk sentinels: the retired index cache filename, and the per-user state directory) and rejected.
 - Creating a task with an id that already exists (active or archived) is rejected with a clear error, never silently overwritten or disambiguated.
 - Per-task directory is always named after the exact id string used: `7/`, `my-feature/`, etc., each containing `{id}.md` (e.g. `7/7.md`) plus any attached files
 
@@ -112,6 +122,9 @@ Markdown description here.
   `completed`. See [_design.md](_design.md)
 - `verified_at` is orthogonal to the lifecycle: when the task's own text was
   last checked against reality. Inert — it gates nothing
+- With git branching enabled, `start_task` and `complete_task` also move git
+  branches (see Git branching), and `update_task` refuses the status moves
+  that would bypass them
 
 ### Priority Ordering
 - Named levels: `critical` > `high` > `medium` > `low`
@@ -127,7 +140,7 @@ Tasks support single-level nesting via the `parent_id` field.
 **Automatic Behaviors:**
 - **Auto-start parent:** Starting a subtask automatically starts its parent (if parent is `todo`)
 - **Block parent completion:** Cannot complete a parent task while it has incomplete subtasks
-- **Auto-complete parent:** When the last incomplete subtask is completed, the parent is automatically marked `done`
+- **Auto-complete parent:** When the last incomplete subtask is completed, the parent is automatically marked `done` — unless the parent has a git branch: it is then delivered by its own `complete_task`, which squashes its wip branch
 
 **Delete Protection:**
 - Deleting a parent with subtasks requires explicit action:
@@ -223,6 +236,68 @@ A read-only kanban dashboard, served by `internal/web` (`net/http` +
 - **Danger zone.** In-progress tasks are highlighted and named in a banner, so a human reading the board knows an agent may be editing those areas. Presentation only; the UI stays read-only.
 - **Archived tasks are not on the board** (the snapshot is the active index); the detail route still serves them, read-only.
 - **Logging goes to stderr.** Nothing in `internal/web` writes to stdout — in stdio mode stdout is the JSON-RPC channel.
+- **Branch chip.** A card shows the task's branch (final once delivered, wip before) with a copy button; the detail view has a Git block. Copying is `static/app.js`, one delegated click listener with no request and no htmx attribute.
+
+### Git branching
+
+Opt-in (`git.branching`, or `MCP_GIT_BRANCHING`). `start_task` and
+`complete_task` then manage per-task branches in the git repository at the
+project root, running the system `git` (`internal/vcs`). The full rationale,
+sequences and rejected alternatives are in `tasks/git-branch-per-task/design`.
+
+- **The tasks directory is never committed by the server.** Server commits are
+  built in a temporary index that excludes it (`:(top,exclude)`), wherever it
+  lives: tracked, gitignored or nested in the code repo, a separate repo, or
+  outside any repo. Records and the pointer are branch-independent files, so
+  the index is authoritative on any branch. Users commit `tasks/` themselves.
+- **Naming.** `<user>/wip/<name>` for a top-level task, `<parent wip>--<name>`
+  for a subtask (a sibling, never a child ref), final branch `<user>/<name>`.
+  `<user>` is the sanitized local part of `user.email`, required when
+  branching; `<name>` is the id if it is a readable slug, else id + slugified
+  title, else `task-<sha1>`. `BranchAvailable` refuses collisions.
+- **Base.** A top-level task branches from the first existing entry of
+  `git.base_branches` (default `main_patched`, `master_patched`, `main`,
+  `master`), wherever HEAD is.
+- **Vacate rule.** Before switching away: uncommitted code on a server-owned
+  wip branch is checkpointed there; on the chosen base of a fresh start it is
+  carried; anywhere else the call refuses (listing up to 20 paths). Tasks-dir
+  changes never count. A detached HEAD is refused.
+- **Start** creates the wip at the base tip (a subtask: at the parent's wip
+  tip, starting a todo parent in the same journal) and switches to it.
+  **Restart** (`start_task` on a task whose wip ref exists, in progress or
+  reopened to todo) replays the wip onto the current base or parent tip with
+  `git replay` (print mode; the ref is moved with compare-and-swap, or with
+  `reset --keep` when checked out) and rewrites `start_commit`.
+- **Complete, delivered.** Snapshot everything onto the wip, then
+  `commit-tree` its tree on `start_commit`: the final branch is base + exactly
+  one commit (re-completion moves a final branch the task recorded, with
+  compare-and-swap). A subtask is squash-merged instead (`merge-tree`) as one
+  commit onto the parent's wip. The parent is never auto-completed, and its
+  own delivery is refused while a delivered subtask's `squash_commit` is not
+  an ancestor of its wip (the parent gate).
+- **Complete, not delivered**, branch checked out: a safety snapshot on the
+  wip, records closed (with the usual cascade), HEAD back to the base or the
+  parent's wip. Branch not checked out: record-only, no git.
+- **Rollback.** Every flow is preflight, then journaled ref/index/record/
+  pointer mutations (`gitTxn`), then one worktree-changing `switch` or
+  `reset --keep`, then an explicit `index.Load()`. Any failure rolls the
+  journal back: refs, HEAD, index, worktree, records and pointer end up as
+  they were. Fault-injection tests fail every mutating step in turn.
+- **`update_task` guard.** Refuses `todo → in_progress`, closing an
+  `in_progress` task that has a branch, and `done → in_progress` for one;
+  reopening to `todo` is allowed and keeps the branch fields.
+- **Legacy tasks.** A task without `branch` (started while branching was off)
+  takes the old record-only paths.
+
+### Current-task pointer
+
+`<tasks_dir>/.users/<user>/current_task`, one per user (`<user>` from the git
+email, falling back to the OS user). `start_task` writes it; `complete_task`
+with any resolution moves it to the still-open parent of a subtask, or removes
+it — only when it names a task that call closed. `get_current_task` reads it
+(archived tasks included). It is written in both modes and journaled with the
+rest of a flow. `.users` is skipped by every scan and reserved as an id; this
+repository gitignores `tasks/.users/`.
 
 ## MCP Tools
 
@@ -230,7 +305,7 @@ A read-only kanban dashboard, served by `internal/web` (`net/http` +
 | Tool | Description |
 |------|-------------|
 | `create_task` | Create a new task with title, description, priority, type, optional `parent_id` for subtasks, and optional `id` for a caller-supplied custom task id |
-| `update_task` | Modify task fields, including `resolution` / `resolution_note` (closes the task) and `verified` (stamps `verified_at`) |
+| `update_task` | Modify task fields, including `resolution` / `resolution_note` (closes the task) and `verified` (stamps `verified_at`). Under git branching, refuses status moves that belong to `start_task` / `complete_task` |
 | `list_tasks` | List tasks with optional filters (status, priority, type, parent_id, resolution, archived); top-level tasks by default |
 | `get_task` | Get full details of a task by ID (includes subtasks for parent tasks; falls back to archive) |
 | `delete_task` | Remove a task; use `delete_subtasks: true` to cascade delete subtasks |
@@ -258,8 +333,9 @@ A read-only kanban dashboard, served by `internal/web` (`net/http` +
 | Tool | Description |
 |------|-------------|
 | `get_next_task` | Returns highest priority `todo` task (skips parents with incomplete subtasks and blocked tasks) |
-| `start_task` | Move task from `todo` to `in_progress` (auto-starts parent if subtask; refuses if blocked) |
-| `complete_task` | Close a task: `in_progress` → `done` (auto-completes parent if last subtask; triggers auto-archive if enabled). With a `resolution` other than `completed` it also accepts a `todo` task and closes its open subtasks along with it |
+| `start_task` | Move task from `todo` to `in_progress` (auto-starts parent if subtask; refuses if blocked) and point the current-task pointer at it. Under git branching: create and check out its wip branch, or restart (rebase and check out) an existing one |
+| `complete_task` | Close a task: `in_progress` → `done` (auto-completes parent if last subtask; triggers auto-archive if enabled). With a `resolution` other than `completed` it also accepts a `todo` task and closes its open subtasks along with it. Under git branching: squash onto the final branch (or merge into the parent's wip) with optional `commit_message`, or save a safety commit and return to the base |
+| `get_current_task` | Return the task the calling user's current-task pointer names; "No current task" when there is none |
 
 ## Configuration
 
@@ -281,11 +357,19 @@ web:                  # optional
   enabled: false      # start the dashboard with the MCP server; default: false
   addr: 127.0.0.1:7777  # default
   with_mcp: false     # `serve web` also serves MCP over stdio; default: false
+git:                  # optional
+  branching: false    # git branch per task; default: false
+  base_branches:      # first existing one is the base; default: these four
+    - main_patched
+    - master_patched
+    - main
+    - master
 ```
 
 A partially written section keeps the defaults for the keys it omits
 (`config.applyDefaults`), so `web: {enabled: true}` still listens on the
-default address and `auto_archive: {enabled: true}` still waits 30 days.
+default address, `auto_archive: {enabled: true}` still waits 30 days, and a
+`base_branches` list that is empty after trimming falls back to the defaults.
 
 Environment overrides:
 
@@ -297,6 +381,7 @@ Environment overrides:
 | `MCP_ROOT_SOURCE` | restrict resolution to one source (`roots` to exercise the protocol path) |
 | `MCP_WEB_ENABLED` | start the web dashboard with the MCP server (bool; unparseable values ignored) |
 | `MCP_WEB_ADDR` | dashboard listen address; never enables it on its own |
+| `MCP_GIT_BRANCHING` | git branch per task on/off (bool; unparseable values ignored). No override for the base list |
 
 `mcp-task-manager version` prints the resolved root, tasks directory and source.
 
@@ -335,13 +420,22 @@ mcp-task-manager/
 │   │   ├── markdown.go          # Markdown file operations (per-task directory layout)
 │   │   ├── migrate.go           # Legacy flat-layout migration
 │   │   ├── files.go             # Attached-file read/write/list
+│   │   ├── current.go           # Per-user current-task pointer (.users/<user>/current_task)
 │   │   └── index.go             # In-memory index over the task directories
 │   ├── task/
-│   │   ├── task.go              # Task model/types (status, priority, resolution)
+│   │   ├── task.go              # Task model/types (status, priority, resolution, branch fields)
 │   │   ├── service.go           # Business logic (single mutex, twin discipline)
+│   │   ├── git.go               # GitRepo, Identity, CurrentTaskStore, ServiceOptions
+│   │   ├── branching.go         # Branch naming, commit messages, rollback journal, update guard
+│   │   ├── branching_start.go   # Fresh and subtask start flows, vacate rule
+│   │   ├── branching_complete.go # Delivered / subtask / abandoned completion, parent gate
+│   │   ├── branching_restart.go # Restart: replay the wip onto its parent line
+│   │   ├── current.go           # CurrentTask and the pointer rules
 │   │   └── view.go              # Board/detail composites for read-only consumers
 │   ├── testsupport/
-│   │   └── testsupport.go       # Shared test backlog helpers (NewBacklog, Seed, IsolateEnv)
+│   │   ├── testsupport.go       # Shared test backlog helpers (NewBacklog, Seed, IsolateEnv)
+│   │   ├── git.go               # RequireGit, NewGitRepo, Git, WriteFile
+│   │   └── gitbacklog.go        # NewGitBacklog layouts, CaptureState, RequireStateEqual
 │   ├── tools/
 │   │   ├── tools.go             # Tool registration + the WebStarter interface
 │   │   ├── management.go        # create, update, list, get, delete
@@ -349,6 +443,10 @@ mcp-task-manager/
 │   │   ├── relations.go         # add_relation, remove_relation
 │   │   ├── files.go             # write_task_file, read_task_file, list_task_files
 │   │   └── web.go               # start_web_ui
+│   ├── vcs/
+│   │   ├── vcs.go               # Repo, runner, Check, Head, ResolveIdentity
+│   │   ├── refs.go              # Branch queries and compare-and-swap ref updates, switch
+│   │   └── tree.go              # Snapshot (tasks dir excluded), merge-tree, commit-tree, replay
 │   └── web/
 │       ├── server.go            # Route table (GET only)
 │       ├── handlers.go          # board, board fragment, detail, panel, health
@@ -358,7 +456,7 @@ mcp-task-manager/
 │       ├── assets.go            # Embedded static assets
 │       ├── templates/           # layout, board, card, detail, placeholder
 │       ├── assets/input.css     # Tailwind entry (input to scripts/build-css.sh)
-│       └── static/              # app.css + htmx.min.js, committed and embedded
+│       └── static/              # app.css + htmx.min.js + app.js, committed and embedded
 ├── scripts/
 │   └── build-css.sh             # Maintainer step: rebuild the vendored Tailwind CSS
 ├── mcp-tasks.yaml               # Default config (for reference)
@@ -386,13 +484,14 @@ mcp-task-manager/
 ### Concurrency
 - A single `sync.Mutex` on `task.Service` serializes every task operation. It is the only lock over the index and the markdown storage, both of which are reachable solely through that type.
 - **Twin discipline:** exported methods lock once on entry and delegate to an unexported, unlocked twin (`Get`/`get`, `Update`/`update`, …). Service methods never call each other's exported forms — Go mutexes are not reentrant. `TestServiceNoSelfDeadlock` fails if a new method breaks the shape.
-- `EnsureProjectExists`, `ProjectFound` and `Config` are deliberately unlocked: they read only the write-once config field.
+- `EnsureProjectExists`, `ProjectFound`, `Config` and `BranchingEnabled` are deliberately unlocked: they read only write-once fields.
+- Git runs inside `StartTask` / `CompleteTask` while the lock is held, so a flow's ref, record and pointer changes are atomic to every other call; web reads wait for it (each git command has a 60 s timeout).
 - The lock matters because mcp-go's stdio server dispatches tool calls across a worker pool, and because the web dashboard reads the same service concurrently. `go test -race` covers both (`internal/task/concurrency_test.go`, `internal/web/race_test.go`).
 - File writes are atomic (write to temp file, then rename)
 - Cross-process coordination (file locks, PID files) stays out of scope: whichever transport the process runs, the other comes up inside it.
 
 ### Validation
-- Task IDs: strings, format-validated the same way attached filenames are (non-empty, no `/` or `\`, not `..`), plus three reserved names (`"0"`, `"archive"`, `".index.json"` - the last a retired cache filename) rejected for a caller-supplied custom id
+- Task IDs: strings, format-validated the same way attached filenames are (non-empty, no `/` or `\`, not `..`), plus four reserved names (`"0"`, `"archive"`, `".index.json"` - a retired cache filename - and `".users"`, the per-user state directory) rejected for a caller-supplied custom id
 - Status: `todo` | `in_progress` | `done`
 - Priority: `critical` | `high` | `medium` | `low`
 - Type: must be in configured list (default: `feature`, `bug`)

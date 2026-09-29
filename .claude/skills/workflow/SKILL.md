@@ -48,5 +48,5 @@ When delegation is used, preserve these project-level invariants regardless of w
 1. Do not start a later phase until the required artifact from the previous phase exists and is approved or explicitly accepted for the current task.
 2. Do not hand off unreviewed or evidence-free artifacts to the next phase.
 3. Run the repository quality gates listed above before reporting implementation complete.
-4. Do not commit, push, tag, or publish unless the user explicitly requested that action.
+4. Do not commit, push, tag, or publish unless the user explicitly requested that action. Under git branching, the commits `start_task` and `complete_task` make are part of the task lifecycle, not agent commits.
 5. Report stage transitions, blockers, quality-gate results, and final status without secrets or raw command dumps.

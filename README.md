@@ -11,7 +11,8 @@ MCP Task Manager provides a simple but powerful task management system that inte
 - **Markdown-based storage** - Each task lives in its own directory (`tasks/{id}/{id}.md`) with YAML frontmatter
 - **Attached files** - `write_task_file`, `read_task_file`, `list_task_files` let an agent attach free-form notes, research, or design docs to a task; they move and are removed together with the task on archive/delete
 - **Priority-based workflow** - Critical > High > Medium > Low, with oldest-first tiebreaker
-- **Agent-friendly tools** - `get_next_task`, `start_task`, `complete_task` for automated workflows
+- **Agent-friendly tools** - `get_next_task`, `start_task`, `complete_task`, `get_current_task` for automated workflows
+- **Git branch per task (opt-in)** - `start_task` creates and checks out a wip branch, `complete_task` squashes it into one commit on a final branch; see [Git Branch-per-Task](#git-branch-per-task)
 - **Self-healing index** - in-memory index rebuilds automatically from the task files
 - **Configurable task types** - Default: `feature`, `bug`; extensible via config
 
@@ -145,6 +146,7 @@ mcp-task-manager delete 1
 mcp-task-manager next              # Get highest priority todo task
 mcp-task-manager start 1           # Start a task (todo -> in_progress)
 mcp-task-manager complete 1        # Complete a task (in_progress -> done)
+mcp-task-manager complete 1 -m "feat: login form"   # ...with the squash commit message (git branching)
 mcp-task-manager archive 1         # Archive a completed task
 
 # Attached files
@@ -170,8 +172,8 @@ mcp-task-manager --help
 | `update <id>` | Update task fields, including `type` (allowed task types depend on config and default to `feature`, `bug`) |
 | `delete <id>` | Delete a task |
 | `next` | Get highest priority todo task |
-| `start <id>` | Move task to in_progress |
-| `complete <id>` | Move task to done |
+| `start <id>` | Move task to in_progress (under git branching: create or restore its wip branch and check it out) |
+| `complete <id>` | Move task to done; `--resolution`/`--note` close it without delivering, `-m`/`--message` sets the squash commit message under git branching |
 | `archive <id>` | Archive a completed task (moves its directory, including attached files, to `tasks/archive/`) |
 | `write-task-file <task-id> <filename> <content>` | Create or overwrite a file attached to a task (rejected for archived tasks) |
 | `read-task-file <task-id> <filename>` | Print the content of a file attached to a task |
@@ -306,7 +308,7 @@ To make the server available across every workspace instead of configuring it pe
 | Tool | Description |
 |------|-------------|
 | `create_task` | Create a new task with title, description, priority, `type`, optional `parent_id` for subtasks, and optional `id` for a caller-supplied custom task id (used verbatim as the id and storage directory name instead of the next auto-increment id). Allowed task `type` values come from config and default to `feature`, `bug`. |
-| `update_task` | Modify task fields (title, description, status, priority, `type`). Allowed task `type` values come from config and default to `feature`, `bug`. |
+| `update_task` | Modify task fields (title, description, status, priority, `type`). Allowed task `type` values come from config and default to `feature`, `bug`. Under git branching, starting a task and closing a branched one are refused here: use `start_task` / `complete_task`. |
 | `list_tasks` | List tasks with optional filters (status, priority, `type`); use `parent_id` filter for subtasks. Allowed task `type` values come from config and default to `feature`, `bug`. |
 | `get_task` | Get full details of a task by ID (includes subtasks for parent tasks) |
 | `delete_task` | Remove a task; use `delete_subtasks` to cascade |
@@ -325,8 +327,9 @@ To make the server available across every workspace instead of configuring it pe
 | Tool | Description |
 |------|-------------|
 | `get_next_task` | Returns highest priority `todo` task |
-| `start_task` | Move task from `todo` to `in_progress` |
-| `complete_task` | Move task from `in_progress` to `done` |
+| `start_task` | Move task from `todo` to `in_progress` and make it your current task; under git branching, create (or restore and rebase) its wip branch and check it out |
+| `complete_task` | Move task from `in_progress` to `done`; under git branching, squash its wip branch into one commit (optional `commit_message`) and check out the result |
+| `get_current_task` | Return the task your per-user current-task pointer names (`<tasks_dir>/.users/<user>/current_task`), archived tasks included |
 
 ### Web Dashboard
 
@@ -361,11 +364,15 @@ web:
   enabled: false          # start the dashboard alongside the MCP server
   addr: 127.0.0.1:7777    # listen address
   with_mcp: false         # `serve web` also serves MCP over stdio
+git:
+  branching: false        # git branch per task, see below
+  base_branches: [main_patched, master_patched, main, master]
 ```
 
 A partially written section keeps the defaults for the keys it does not
-mention, so `web: {enabled: true}` still listens on `127.0.0.1:7777` and
-`auto_archive: {enabled: true}` still waits 30 days.
+mention, so `web: {enabled: true}` still listens on `127.0.0.1:7777`,
+`auto_archive: {enabled: true}` still waits 30 days, and
+`git: {branching: true}` still uses the default base branches.
 
 The `task_types` list defines the allowed values for every task `type` field in the CLI, MCP tools, and task frontmatter. If omitted, the default allowed values are `feature` and `bug`.
 The `relation_types` list defines the allowed values for every relation `type` field in MCP tools and task metadata. If omitted, the default allowed values are `blocked_by`, `relates_to`, and `duplicate_of`.
@@ -380,6 +387,48 @@ The `relation_types` list defines the allowed values for every relation `type` f
 | `MCP_ROOT_SOURCE` | Restricts resolution to a single source: `MCP_PROJECT_DIR`, `CLAUDE_PROJECT_DIR`, `roots` or `cwd`. Useful for testing the roots path, which the environment variables would otherwise always win | unset |
 | `MCP_WEB_ENABLED` | Starts the web dashboard with the MCP server. Parsed as a bool; an unparseable value is ignored | `false` |
 | `MCP_WEB_ADDR` | Dashboard listen address, `host:port`. Never enables the dashboard on its own | `127.0.0.1:7777` |
+| `MCP_GIT_BRANCHING` | Turns git branch-per-task on or off. Parsed as a bool; an unparseable value is ignored | `false` |
+
+### Git Branch-per-Task
+
+With `git.branching: true` (or `MCP_GIT_BRANCHING=true`), `start_task` and
+`complete_task` manage branches in the git repository at the project root. The
+server runs the system `git` itself; agents and skills never commit or switch
+around these calls.
+
+- **Start.** A top-level task gets `<user>/wip/<name>`, cut from the tip of the
+  first existing entry of `git.base_branches`, and HEAD moves to it. A subtask
+  gets `<parent wip>--<name>`, cut from its parent's wip branch. `<user>` is
+  the local part of `git config user.email`; `<name>` is the task id if it is
+  readable, otherwise the id plus the slugified title.
+- **Uncommitted changes.** On a task's own wip branch they are saved there in a
+  checkpoint commit; on the base branch they are carried to the new branch; on
+  any other branch the start is refused. Changes under the tasks directory
+  never count.
+- **Complete.** Everything on the wip branch, committed or not, becomes exactly
+  one commit on top of the task's start commit, on `<user>/<name>`, and HEAD
+  moves there. A subtask is instead squash-merged as one commit onto its
+  parent's wip branch; the parent is completed on its own and is refused while
+  a completed subtask's commit is missing from its branch. The wip branch keeps
+  the full history.
+- **Close without delivering** (`obsolete`, `wontfix`, ...) while the branch is
+  checked out: the leftovers go into a safety commit on the wip branch and HEAD
+  returns to the base branch (or the parent's wip).
+- **Restart.** `start_task` on a task whose wip branch still exists (in
+  progress, or reopened to `todo`) rebases the branch onto the current base
+  with `git replay` and checks it out. A conflict changes nothing and lists
+  the paths.
+- **Nothing is lost.** Every call either completes or leaves refs, HEAD, index,
+  worktree, task records and the current-task pointer exactly as they were.
+
+The server never commits task records: where the tasks directory is tracked in
+the code repository, commit it yourself. It works the same with the tasks
+directory tracked in the code repository, gitignored or nested in it, in a
+separate repository, or outside any repository.
+
+Requirements: a `git` whose `git replay` supports `--ref-action=print` (used
+for restarts; verified with git 2.54 and 2.55), and `user.email` set - it
+names your branches.
 
 ## Task Format
 
@@ -403,7 +452,7 @@ Detailed description in Markdown format.
 - Links and references
 ```
 
-Ids are strings on the wire (JSON responses and `--json` CLI output render `"id": "1"`, not a bare number); a bare YAML scalar like `id: 1` above still parses fine into that string field. By default `create_task` allocates the next auto-incrementing numeric-looking id, unpadded (`"8"`, not `"008"`). Optionally, pass `id` (MCP) or `--id` (CLI `create`) to use a caller-supplied custom text id instead — it's validated like an attached filename (non-empty, no `/` or `\`, not `..`; `"0"`, `"archive"`, and `".index.json"` are reserved, the last being a retired cache filename) and rejected if it collides with an existing active or archived task.
+Ids are strings on the wire (JSON responses and `--json` CLI output render `"id": "1"`, not a bare number); a bare YAML scalar like `id: 1` above still parses fine into that string field. By default `create_task` allocates the next auto-incrementing numeric-looking id, unpadded (`"8"`, not `"008"`). Optionally, pass `id` (MCP) or `--id` (CLI `create`) to use a caller-supplied custom text id instead — it's validated like an attached filename (non-empty, no `/` or `\`, not `..`; `"0"`, `"archive"`, `".index.json"` and `".users"` are reserved - a retired cache filename and the per-user state directory) and rejected if it collides with an existing active or archived task.
 
 The `type` field must be one of the configured `task_types` values. With the default configuration, allowed values are `feature` and `bug`.
 
@@ -435,7 +484,7 @@ create_task with parent_id parameter
 
 **Automatic behaviors:**
 - Starting a subtask auto-starts its parent task
-- Completing the last subtask auto-completes the parent
+- Completing the last subtask auto-completes the parent, unless the parent works on a git branch
 - Parent tasks cannot be completed while subtasks remain incomplete
 - `get_next_task` returns subtasks instead of parents with incomplete subtasks
 
@@ -453,6 +502,7 @@ mcp-task-manager/
 │   ├── task/                # Task model, service and view API
 │   ├── testsupport/         # Shared test backlog helpers
 │   ├── tools/               # MCP tool handlers
+│   ├── vcs/                 # git wrapper for branch-per-task
 │   └── web/                 # Read-only kanban dashboard (htmx + Tailwind)
 ├── scripts/build-css.sh     # Maintainer step: rebuild the vendored CSS
 ├── tasks/                   # Task storage (created at runtime); tasks/{id}/{id}.md plus attached files

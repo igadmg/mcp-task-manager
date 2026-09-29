@@ -16,8 +16,12 @@ coverage.out
 # Retired index cache file, removed on load but still written by old binaries
 .index.json
 
-# Scratch pointer written by the workflow skills
+# Legacy scratch pointer, written by older versions of the workflow skills
 .current_task
+
+# Per-user current-task pointers (tasks/.users/<user>/current_task): they
+# say what one person is working on, not project state
+tasks/.users/
 
 # Downloaded maintainer tooling (Tailwind standalone CLI)
 /.cache/

@@ -337,12 +337,13 @@ If issues are found:
 
 #### Step 5: Complete Subtask
 
-1. Call `mcp__task-manager__complete_task` with the subtask ID.
-2. Parent task auto-completes when its last subtask is done.
-3. Review `git status` and stage all files changed for this completed subtask, including `tasks/`; do not stage unrelated pre-existing or user changes.
-4. Commit immediately using the commit message reported by the coder.
-5. If there are no staged changes, do not create an empty commit; escalate because a completed subtask should normally leave task-state changes at minimum.
-6. Return to Phase 1.
+1. Call `mcp__task-manager__complete_task` with the subtask ID, passing the commit message reported by the coder as `commit_message` (it is only used under git branching).
+2. Parent task auto-completes when its last subtask is done, unless the parent works on a git branch.
+3. If the `complete_task` result has a `branch`, the server has already committed the code and switched branches: do not commit code yourself. Commit task records wherever your tasks directory is versioned, then return to Phase 1.
+4. Otherwise review `git status` and stage all files changed for this completed subtask, including `tasks/`; do not stage unrelated pre-existing or user changes.
+5. Commit immediately using the commit message reported by the coder.
+6. If there are no staged changes, do not create an empty commit; escalate because a completed subtask should normally leave task-state changes at minimum.
+7. Return to Phase 1.
 
 ## Error Handling
 

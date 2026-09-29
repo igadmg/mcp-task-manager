@@ -13,7 +13,7 @@ Use this skill to formalize a new development task from a vague or informal tick
 2. If the task is vague, ambiguous, missing acceptance criteria, or contains undefined terms — ask targeted clarifying questions before continuing. Gather only what is needed to produce an unambiguous problem statement. Do not over-ask.
 3. Once the task is sufficiently clear, generate a short kebab-case task name (3–5 words, e.g. `add-tooltip-control`, `fix-input-scheme-leak`).
 4. Ask the task manager MCP server to create a task for you with that kebab name as the id.
-5. Store the task id in `.current_task` for future references.
+5. Call `start_task` on it right away. It becomes your current task: every later step finds it with `get_current_task`, so the id never has to be written down. When the project enables git branching, this also creates the task's wip branch and checks it out.
 6. Write a `task` file with the task manager MCP tool to the current task — a `.md` document with the following content:
    - **Original input** — verbatim text from the user or ticket
    - **Clarifications** — any Q&A gathered in this step (omit if none needed)

@@ -9,7 +9,7 @@ Expected setup:
 - Make sure the packaged `.mcp.json` can launch the `task-manager` server
 
 The workflow will:
-1. Turn the input into a task on the task manager MCP server and record its id in `.current_task`
+1. Turn the input into a task on the task manager MCP server and start it, making it your current task (see `get_current_task`)
 2. Dispatch a sub-agent with the `research` skill and save its output to the task
 3. Wait for approval, then dispatch a sub-agent with the `design` skill and save its output to the task
 4. Wait for approval, then dispatch a sub-agent with the `planning` skill and save its output to the task

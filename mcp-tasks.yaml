@@ -9,3 +9,8 @@ auto_archive:
 web:
   enabled: false
   addr: 127.0.0.1:7777
+# Git branch per task. Left off here: this repository commits its own tasks/
+# directory and its tasks predate the feature. Reference values:
+# git:
+#   branching: false
+#   base_branches: [main_patched, master_patched, main, master]
