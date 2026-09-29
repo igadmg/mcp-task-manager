@@ -19,10 +19,6 @@ import (
 // the branches, and a fallback name would scatter one user's work.
 var errNoEmail = errors.New("git config user.email is not set; it names your branches")
 
-// errRestartNotImplemented marks the restart flow, which arrives with
-// branch rebasing.
-var errRestartNotImplemented = errors.New("restart of a branched task is not implemented")
-
 // maxListedPaths bounds the paths a refusal lists.
 const maxListedPaths = 20
 
@@ -297,9 +293,9 @@ func (s *Service) startFreshRecords(txn *gitTxn, t *Task, plan freshPlan) (*Task
 }
 
 // startSub creates subtask t's wip branch at the tip of its parent's and
-// switches to it (design 5.3). A parent that is still todo is started in
-// the same journal; a parent started without branching keeps the subtask
-// out of git too.
+// switches to it (design 5.3). A parent that is still todo is started - or
+// restarted, when its branch still exists - in the same journal; a parent
+// started without branching keeps the subtask out of git too.
 func (s *Service) startSub(t *Task) (*Task, error) {
 	p, err := s.get(t.ParentID)
 	if err != nil {
@@ -316,58 +312,37 @@ func (s *Service) startSub(t *Task) (*Task, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	var parentPlan *freshPlan
-	parentBranch, carryFrom := p.Branch, ""
-	if p.Status == StatusTodo {
-		if p.Branch != "" {
-			if _, ok, err := s.git.BranchSHA(p.Branch); err != nil {
-				return nil, err
-			} else if ok {
-				return nil, fmt.Errorf("parent task %s: %w", p.ID, errRestartNotImplemented)
-			}
-		}
-		plan, err := s.planFresh(p)
-		if err != nil {
-			return nil, fmt.Errorf("starting parent task %s: %w", p.ID, err)
-		}
-		parentPlan, parentBranch = &plan, plan.wip
-		// The subtask lands on the base tip, exactly where a fresh start
-		// of the parent would, so changes made on the base are carried.
-		carryFrom = plan.base
-	} else if _, ok, err := s.git.BranchSHA(p.Branch); err != nil {
+	line, err := s.parentLineFor(t, h)
+	if err != nil {
 		return nil, err
-	} else if !ok {
-		return nil, fmt.Errorf("the branch %s of parent task %s no longer exists", p.Branch, p.ID)
 	}
 
-	subWip := subWipBranch(parentBranch, shortName(t))
+	subWip := subWipBranch(line.branch, shortName(t))
 	if err := s.git.BranchAvailable(subWip); err != nil {
 		return nil, err
 	}
 	op := "start " + t.ID
-	owner, err := s.classifyVacate(h, carryFrom, "", t.ID)
+	owner, err := s.classifyVacate(h, line.carryFrom, "", t.ID)
 	if err != nil {
 		return nil, err
 	}
+	parentBranch := line.branch
 
 	var txn gitTxn
 	started, err := runFlow(&txn, func() (*Task, error) {
 		if _, err := s.checkpoint(&txn, h, owner, op); err != nil {
 			return nil, err
 		}
-		if parentPlan != nil {
-			if _, err := s.startFreshRecords(&txn, p, *parentPlan); err != nil {
-				return nil, fmt.Errorf("starting parent task %s: %w", p.ID, err)
+		if line.step != nil {
+			if err := line.step(&txn); err != nil {
+				return nil, err
 			}
 		}
-		// Re-read the parent's tip: a checkpoint may just have moved it.
-		ptip, ok, err := s.git.BranchSHA(parentBranch)
+		// Read the parent's tip now: a checkpoint or the parent's own
+		// start may just have moved it.
+		ptip, err := s.lineTip(parentBranch)
 		if err != nil {
 			return nil, err
-		}
-		if !ok {
-			return nil, fmt.Errorf("the branch %s of parent task %s no longer exists", parentBranch, p.ID)
 		}
 		if err := s.createBranch(&txn, subWip, ptip); err != nil {
 			return nil, err

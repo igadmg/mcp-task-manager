@@ -18,17 +18,22 @@ var errInjected = errors.New("injected failure")
 // failingGit wraps a GitRepo and fails its failAt-th mutating call (1-based;
 // 0 disables it). After that one failure every call passes through, so the
 // rollback's own undo calls never fail. calls counts every mutating call,
-// armed or not.
+// armed or not, and ops counts them per method.
 type failingGit struct {
 	task.GitRepo
 	failAt    int
 	mutations int
 	failed    bool
 	calls     int
+	ops       map[string]int
 }
 
 func (f *failingGit) step(op string) error {
 	f.calls++
+	if f.ops == nil {
+		f.ops = map[string]int{}
+	}
+	f.ops[op]++
 	if f.failAt == 0 || f.failed {
 		return nil
 	}

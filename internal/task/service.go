@@ -623,7 +623,7 @@ func (s *Service) startTask(id string) (*Task, error) {
 		if _, ok, err := s.git.BranchSHA(t.Branch); err != nil {
 			return nil, err
 		} else if ok {
-			return nil, fmt.Errorf("task %s: %w", id, errRestartNotImplemented)
+			return s.restartBranched(t)
 		}
 	}
 
