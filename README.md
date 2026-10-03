@@ -198,7 +198,7 @@ Add to your Claude Desktop configuration (`~/.config/claude/claude_desktop_confi
 
 ### Claude Code Integration
 
-Use this path for Claude Code specifically. The Claude plugin now bundles its own `.mcp.json` (repo root), so installing the plugin also wires up the `task-manager` MCP server — no separate `claude mcp add` step needed.
+Use this path for Claude Code specifically. The plugin package (`plugins/mcp-task-manager/`) bundles its own `.mcp.json`, so installing the plugin also wires up the `task-manager` MCP server — no separate `claude mcp add` step needed.
 
 **Setup:**
 
@@ -235,13 +235,15 @@ This always runs the checked-out source, with no build step between debug runs. 
 - Use `/mcp-task-manager:begin-task` (backed by the packaged `begin_task` skill) to turn a ticket into a task-manager task and drive it through research → design → planning → implementation, with an approval gate between each phase.
 - Use `/mcp-task-manager:execute-all` (backed by the packaged `superpowers-workflow` skill) to instead loop over the existing task-manager backlog, spawning planner/coder/reviewer subagents per task.
 
+See [Agent Workflows](#agent-workflows) for what each one does.
+
 ### Codex Integration
 
 Use this path for Codex specifically. This repository now acts as a Codex marketplace root: the marketplace catalog lives in `.agents/plugins/marketplace.json`, and the installable Codex plugin package is `plugins/mcp-task-manager/`.
 
-**Prerequisite: the Go toolchain**
+**Prerequisite: the `mcp-task-manager` binary**
 
-The Codex plugin package includes `begin_task`, `superpowers-workflow`, the `/begin-task` and `/execute-all` commands, and a packaged `.mcp.json`. The `.mcp.json` launches the server with `go run -C ${CLAUDE_PLUGIN_ROOT}/../.. ./cmd/mcp-task-manager`, so it runs the checked-out source directly — you need the Go toolchain available, but not a pre-installed `mcp-task-manager` binary.
+The Codex plugin package is the same one Claude Code installs: all the skills listed under [Agent Workflows](#agent-workflows), the `/begin-task` and `/execute-all` commands, and a packaged `.mcp.json`. That `.mcp.json` launches `mcp-task-manager`, so the binary must be on your `PATH` (`go install github.com/gpayer/mcp-task-manager/cmd/mcp-task-manager@latest`).
 
 **Add this marketplace and install the plugin**
 
@@ -263,6 +265,84 @@ The plugin package wires in the MCP server definition from `plugins/mcp-task-man
 - Use the Codex skill `$superpowers-workflow` or the packaged command `/execute-all` to instead loop over the existing task-manager backlog, spawning planner/coder/reviewer subagents per task.
 
 The model/reasoning settings for `superpowers-workflow` are capability-based recommendations. The workflow applies them only when the active subagent tool supports those controls and they are not overridden by user choice, model availability, policy, cost/latency constraints, or task-specific needs.
+
+### Agent Workflows
+
+The plugin ships two ways to drive work through the task manager. Both keep
+all state in the task manager, so a workflow can be interrupted and resumed in
+a new session.
+
+| | `begin-task` | `execute-all` |
+|---|---|---|
+| Input | One new ticket, feature request or bug report | The existing backlog |
+| Driven by | `begin_task` skill | `superpowers-workflow` skill |
+| Phases | research → design → planning → implementation | planning → coding → review, per task |
+| Human approval | Required between every phase | Only when blocked |
+| Artifacts | Files attached to the task: `task`, `research`, `design`, `plan`, `implementation` | Subtasks created by the planner |
+
+**`begin-task`: one ticket, phase by phase**
+
+1. **Intake.** The agent asks only the questions it needs, picks a kebab-case
+   id (e.g. `add-tooltip-control`), creates the task and starts it right
+   away. The task becomes your current task (`get_current_task`), so later
+   steps never need its id. The agent writes the `task` file: the original
+   input, clarifications, a one-sentence problem statement and the acceptance
+   criteria.
+2. **Research.** A subagent with the `research` skill maps the current code,
+   with file and line references, and the result is saved as `research`.
+   It gathers facts only and proposes no changes.
+3. **Design.** A subagent with the `design` skill turns the research into an
+   architecture proposal, saved as `design`.
+4. **Planning.** A subagent with the `planning` skill splits the design into
+   commit-sized phases, each one testable on its own. The result is saved as
+   `plan`.
+5. **Implementation.** A subagent with the `implementation` skill carries out
+   the approved phases one at a time, running the repository's quality gates
+   (format, build, tests) after each. A summary is saved as `implementation`.
+
+After each phase you see a short summary and must answer "yes" before the
+next one starts. If you reject an output, the agent revises it first. Each
+subagent receives the full files from the earlier phases, not summaries.
+`research`, `design`, `planning` and `implementation` also work on their own,
+and the `workflow` skill enforces the same phase order when you ask for "the
+whole process" without a ticket.
+
+**`execute-all`: work through the backlog**
+
+The `superpowers-workflow` skill is a controller that loops until no `todo`
+task is left:
+
+1. `get_next_task` picks the next task, by priority and blockers.
+2. **A parent task without subtasks** is started, and a *planner* subagent
+   breaks it into implementation subtasks.
+3. **For each subtask:** the controller starts it, a *coder* subagent
+   implements it, and a *reviewer* subagent checks it. Coding tasks are
+   always reviewed; documentation tasks only on request. Review findings go
+   back to the coder until the review passes. Then the controller completes
+   the subtask, passing the coder's commit message.
+4. **The controller checks the working tree** before and after every
+   subagent, and stops with a report instead of reverting if it finds
+   unexpected changes.
+
+Each subagent gets a complete, self-contained role prompt. Subagents never
+commit, tag or create branches; only the controller touches git.
+
+**Commits.** With git branching off, `execute-all` commits once per completed
+subtask (the code plus `tasks/`) using the coder's message, while `begin-task`
+commits nothing unless you ask. With [Git Branch-per-Task](#git-branch-per-task)
+on, `start_task` and `complete_task` do the git work instead:
+
+- every started task gets its own wip branch;
+- every completed subtask is squash-merged into its parent's branch;
+- the agents run no git command for code;
+- the controller commits only task records, wherever the tasks directory is
+  versioned.
+
+When `execute-all` finishes a parent's subtasks, it leaves the parent
+`in_progress`. Complete the parent yourself to get its one-commit final branch.
+
+**Where the skills live.** `plugins/mcp-task-manager/skills/` is the only
+copy to edit. See [Editing the Packaged Skills](#editing-the-packaged-skills).
 
 ### VS Code Integration
 
@@ -430,6 +510,9 @@ Requirements: a `git` whose `git replay` supports `--ref-action=print` (used
 for restarts; verified with git 2.54 and 2.55), and `user.email` set - it
 names your branches.
 
+For a walkthrough, subtask rules and troubleshooting, see
+[docs/git-branching.md](docs/git-branching.md).
+
 ## Task Format
 
 Each task is stored at `tasks/{id}/{id}.md` (e.g. `tasks/7/7.md`, unpadded) as a Markdown file with YAML frontmatter. Any files attached via `write_task_file` / `write-task-file` live alongside it in the same `tasks/{id}/` directory.
@@ -504,7 +587,12 @@ mcp-task-manager/
 │   ├── tools/               # MCP tool handlers
 │   ├── vcs/                 # git wrapper for branch-per-task
 │   └── web/                 # Read-only kanban dashboard (htmx + Tailwind)
+├── plugins/mcp-task-manager/ # The installable Claude Code / Codex plugin: skills, commands, .mcp.json
+├── .claude-plugin/          # Claude Code marketplace catalog (points at plugins/mcp-task-manager)
+├── .agents/plugins/         # Codex marketplace catalog (points at plugins/mcp-task-manager)
+├── .claude/skills/          # Generated dogfooding copy of the phase skills (scripts/sync-skills.sh)
 ├── scripts/build-css.sh     # Maintainer step: rebuild the vendored CSS
+├── scripts/sync-skills.sh   # Maintainer step: mirror plugin skills into .claude/skills
 ├── tasks/                   # Task storage (created at runtime); tasks/{id}/{id}.md plus attached files
 ├── mcp-tasks.yaml           # Configuration file
 └── CLAUDE.md                # AI assistant instructions
@@ -525,6 +613,29 @@ The script downloads the pinned Tailwind standalone CLI (**v4.3.3**, no Node
 required) into the gitignored `.cache/` directory and runs it over
 `internal/web/assets/input.css`. It is never invoked by `go build`,
 `go generate` or `go test`. htmx is pinned at **2.0.4**.
+
+### Editing the Packaged Skills
+
+`plugins/mcp-task-manager/` is the only source for skills and commands: both
+marketplace catalogs install that directory. Edit skills there and nowhere
+else.
+
+This repository also uses its own phase skills (`begin_task`, `research`,
+`design`, `planning`, `implementation`, `workflow`) through `.claude/skills/`,
+without installing the plugin. Installing it would start a second
+`task-manager` server next to the project-scoped `go run` one. That directory
+is a generated copy, not a symlink, because symlinks break on Windows checkouts.
+After editing one of those skills, refresh the copy:
+
+```bash
+bash scripts/sync-skills.sh          # rewrite .claude/skills/
+bash scripts/sync-skills.sh --check  # fail if the copy has drifted
+```
+
+When you change the plugin, bump `version` in
+`plugins/mcp-task-manager/.claude-plugin/plugin.json`,
+`plugins/mcp-task-manager/.codex-plugin/plugin.json` and
+`.claude-plugin/marketplace.json`, so installed copies pick up the change.
 
 ## License
 

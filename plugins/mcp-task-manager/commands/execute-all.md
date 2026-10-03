@@ -2,7 +2,7 @@
 description: Execute all pending tasks using superpowers workflow
 ---
 
-Use the packaged `superpowers-workflow` skill from the `mcp-task-manager` Codex plugin to execute all pending tasks from the task manager MCP server.
+Use the packaged `superpowers-workflow` skill from the `mcp-task-manager` plugin to execute all pending tasks from the task manager MCP server.
 
 Expected setup:
 - Install the plugin from this marketplace with `/plugin install mcp-task-manager@mcp-task-manager`
