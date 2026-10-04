@@ -2,6 +2,7 @@ package task
 
 import (
 	"fmt"
+	"slices"
 	"testing"
 )
 
@@ -28,6 +29,7 @@ func TestPhaseFromFiles(t *testing.T) {
 
 		{[]string{"plan"}, PhaseImplementation},
 		{[]string{"task", "research", "design", "plan"}, PhaseImplementation},
+		{[]string{"plan", "task", "design", "research"}, PhaseImplementation},
 		{[]string{"implementation"}, PhaseImplementation},
 		{[]string{"plan.md"}, PhaseImplementation},
 		{[]string{"PLAN"}, PhaseImplementation},
@@ -51,64 +53,25 @@ func TestPhaseFromFiles(t *testing.T) {
 			if got := phaseFromFiles(tt.names); got != tt.want {
 				t.Errorf("phaseFromFiles(%q) = %q, want %q", tt.names, got, tt.want)
 			}
+			// Order-independent: the reversed list proves the same phase.
+			reversed := slices.Clone(tt.names)
+			slices.Reverse(reversed)
+			if got := phaseFromFiles(reversed); got != tt.want {
+				t.Errorf("phaseFromFiles(%q) = %q, want %q", reversed, got, tt.want)
+			}
 		})
 	}
 }
 
-// permutations returns every ordering of names.
-func permutations(names []string) [][]string {
-	if len(names) <= 1 {
-		return [][]string{append([]string(nil), names...)}
-	}
-	var out [][]string
-	for i := range names {
-		rest := make([]string, 0, len(names)-1)
-		rest = append(rest, names[:i]...)
-		rest = append(rest, names[i+1:]...)
-		for _, p := range permutations(rest) {
-			out = append(out, append([]string{names[i]}, p...))
-		}
-	}
-	return out
-}
-
-func TestPhaseFromFilesIsOrderIndependent(t *testing.T) {
-	cases := []struct {
-		names []string
-		count int
-		want  Phase
-	}{
-		{[]string{"task", "research", "design", "plan"}, 24, PhaseImplementation},
-		{[]string{"task", "research", "design"}, 6, PhasePlanning},
-	}
-	for _, c := range cases {
-		perms := permutations(c.names)
-		if len(perms) != c.count {
-			t.Fatalf("permutations(%q) = %d orders, want %d", c.names, len(perms), c.count)
-		}
-		for _, p := range perms {
-			if got := phaseFromFiles(p); got != c.want {
-				t.Errorf("phaseFromFiles(%q) = %q, want %q", p, got, c.want)
-			}
-		}
-	}
-}
-
 func TestPhaseOrder(t *testing.T) {
-	tests := []struct {
-		phase Phase
-		want  int
-	}{
-		{PhaseResearch, 0},
-		{PhaseDesign, 1},
-		{PhasePlanning, 2},
-		{PhaseImplementation, 3},
-		{Phase(""), 0},
-		{Phase("bogus"), 0},
+	for i, p := range Phases() {
+		if got := p.Order(); got != i {
+			t.Errorf("Phase(%q).Order() = %d, want %d", p, got, i)
+		}
 	}
-	for _, tt := range tests {
-		if got := tt.phase.Order(); got != tt.want {
-			t.Errorf("Phase(%q).Order() = %d, want %d", tt.phase, got, tt.want)
+	for _, p := range []Phase{"", "bogus"} {
+		if got := p.Order(); got != 0 {
+			t.Errorf("Phase(%q).Order() = %d, want 0", p, got)
 		}
 	}
 }

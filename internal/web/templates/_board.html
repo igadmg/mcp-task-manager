@@ -23,7 +23,7 @@
         {{ range .Lanes }}
         <section class="lane lane-{{ .Phase }}" data-phase="{{ .Phase }}">
           <header class="flex items-center gap-2 px-1 pb-1.5">
-            <h3 class="text-[11px] font-medium uppercase tracking-wider text-neutral-500">{{ .Title }}</h3>
+            <h3 class="text-[11px] font-medium uppercase tracking-wider text-neutral-500">{{ .Phase }}</h3>
             <span class="chip chip-muted ml-auto">{{ .Count }}</span>
           </header>
           {{ if .Cards }}

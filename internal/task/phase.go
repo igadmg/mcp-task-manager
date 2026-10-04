@@ -1,6 +1,9 @@
 package task
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // Phase is the delivery-workflow phase an in-progress task is in. It is
 // derived on read from the names of the task's attached workflow files and
@@ -14,20 +17,21 @@ const (
 	PhaseImplementation Phase = "implementation"
 )
 
-// Order is the phase's position in the workflow, 0..3. Anything unknown,
-// the empty Phase included, is 0: no information reads as the earliest
-// phase, and Order is always a valid lane index.
-func (p Phase) Order() int {
-	switch p {
-	case PhaseDesign:
-		return 1
-	case PhasePlanning:
-		return 2
-	case PhaseImplementation:
-		return 3
-	default:
-		return 0
+// Phases lists every phase in workflow order.
+func Phases() []Phase {
+	return []Phase{
+		PhaseResearch,
+		PhaseDesign,
+		PhasePlanning,
+		PhaseImplementation,
 	}
+}
+
+// Order is the phase's index in Phases. Anything unknown, the empty Phase
+// included, is 0: no information reads as the earliest phase, and Order is
+// always a valid index into Phases.
+func (p Phase) Order() int {
+	return max(slices.Index(Phases(), p), 0)
 }
 
 // phaseMarkers maps a normalized attached-file name to the phase a task
@@ -48,12 +52,11 @@ var phaseMarkers = map[string]Phase{
 // convention), then must match a marker exactly; anything else is
 // ignored. Order-independent; no marker at all means PhaseResearch.
 func phaseFromFiles(names []string) Phase {
-	best := PhaseResearch
+	rank := 0
 	for _, name := range names {
-		key := strings.TrimSuffix(strings.ToLower(name), ".md")
-		if p, ok := phaseMarkers[key]; ok && p.Order() > best.Order() {
-			best = p
+		if p, ok := phaseMarkers[strings.TrimSuffix(strings.ToLower(name), ".md")]; ok {
+			rank = max(rank, p.Order())
 		}
 	}
-	return best
+	return Phases()[rank]
 }

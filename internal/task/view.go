@@ -71,7 +71,7 @@ func (s *Service) boardSnapshot() (*BoardSnapshot, error) {
 	for _, t := range all {
 		ids = append(ids, t.ID)
 		if t.Status == StatusInProgress {
-			snap.Phases[t.ID] = s.taskPhase(t.ID)
+			snap.Phases[t.ID] = phaseFromFiles(s.attachedFiles(t.ID))
 		}
 		if t.ParentID == "" {
 			continue
@@ -89,19 +89,19 @@ func (s *Service) boardSnapshot() (*BoardSnapshot, error) {
 	return snap, nil
 }
 
-// taskPhase reads one task's workflow phase from its attached file
-// names. Caller holds s.mu. No file store, or a failed listing, reads as
-// PhaseResearch: the board never fails over it, and the next poll
-// corrects a transient error (the same tolerance as detail()).
-func (s *Service) taskPhase(id string) Phase {
+// attachedFiles lists a task's attached file names for a read-only view.
+// Caller holds s.mu. No file store, or a failed listing, reads as no files:
+// a view never fails over them, and the next read corrects a transient
+// error. ListTaskFiles, the tool path, reports errors instead.
+func (s *Service) attachedFiles(id string) []string {
 	if s.fileStorage == nil {
-		return PhaseResearch
+		return nil
 	}
-	names, err := s.fileStorage.ListFiles(id)
+	files, err := s.fileStorage.ListFiles(id)
 	if err != nil {
-		return PhaseResearch
+		return nil
 	}
-	return phaseFromFiles(names)
+	return files
 }
 
 // Detail returns a task with its subtasks, blockers, relations and attached
@@ -134,11 +134,7 @@ func (s *Service) detail(id string) (*TaskDetail, error) {
 		d.Relations = s.index.GetRelationsForTask(id)
 	}
 
-	if s.fileStorage != nil {
-		if files, err := s.fileStorage.ListFiles(id); err == nil {
-			d.Files = files
-		}
-	}
+	d.Files = s.attachedFiles(id)
 	return d, nil
 }
 

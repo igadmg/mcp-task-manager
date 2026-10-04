@@ -1,7 +1,7 @@
 package web
 
 import (
-	"strings"
+	"slices"
 	"testing"
 	"time"
 
@@ -56,10 +56,9 @@ func column(v BoardView, status string) ColumnView {
 }
 
 func lane(v BoardView, phase task.Phase) PhaseLaneView {
-	for _, l := range column(v, "in_progress").Lanes {
-		if l.Phase == string(phase) {
-			return l
-		}
+	lanes := column(v, "in_progress").Lanes
+	if i := slices.IndexFunc(lanes, func(l PhaseLaneView) bool { return l.Phase == string(phase) }); i >= 0 {
+		return lanes[i]
 	}
 	return PhaseLaneView{}
 }
@@ -72,36 +71,18 @@ func cardIDs(cards []CardView) []string {
 	return ids
 }
 
-func TestPhaseLanesFollowPhaseOrder(t *testing.T) {
-	if len(phaseLanes) != 4 {
-		t.Fatalf("len(phaseLanes) = %d, want 4", len(phaseLanes))
-	}
-	titles := []string{"Research", "Design", "Planning", "Implementation"}
-	for i, l := range phaseLanes {
-		if l.Phase.Order() != i {
-			t.Errorf("phaseLanes[%d] = %q with Order %d, want %d", i, l.Phase, l.Phase.Order(), i)
-		}
-		if l.Title != titles[i] {
-			t.Errorf("phaseLanes[%d].Title = %q, want %q", i, l.Title, titles[i])
-		}
-	}
-}
-
 func TestInProgressHasFourPhaseLanes(t *testing.T) {
 	v := newBoardView(boardOf(), nil, fixedNow, 5)
 
-	lanes := column(v, "in_progress").Lanes
-	want := []string{"research", "design", "planning", "implementation"}
-	if len(lanes) != len(want) {
-		t.Fatalf("in_progress has %d lanes, want %d", len(lanes), len(want))
+	var phases []string
+	for _, l := range column(v, "in_progress").Lanes {
+		phases = append(phases, l.Phase)
+		if l.Count != 0 || len(l.Cards) != 0 {
+			t.Errorf("lane %s = %d count, %d cards on an empty board", l.Phase, l.Count, len(l.Cards))
+		}
 	}
-	for i, phase := range want {
-		if lanes[i].Phase != phase {
-			t.Errorf("lane %d = %q, want %q", i, lanes[i].Phase, phase)
-		}
-		if lanes[i].Count != 0 || len(lanes[i].Cards) != 0 {
-			t.Errorf("lane %s = %d count, %d cards on an empty board", phase, lanes[i].Count, len(lanes[i].Cards))
-		}
+	if want := []string{"research", "design", "planning", "implementation"}; !slices.Equal(phases, want) {
+		t.Errorf("in_progress lanes = %v, want %v", phases, want)
 	}
 	for _, status := range []string{"todo", "done"} {
 		if n := len(column(v, status).Lanes); n != 0 {
@@ -133,8 +114,7 @@ func TestInProgressCardsLandInTheirLane(t *testing.T) {
 		task.PhaseImplementation: {"i"},
 	}
 	for phase, ids := range want {
-		got := cardIDs(lane(v, phase).Cards)
-		if strings.Join(got, ",") != strings.Join(ids, ",") {
+		if got := cardIDs(lane(v, phase).Cards); !slices.Equal(got, ids) {
 			t.Errorf("lane %s = %v, want %v", phase, got, ids)
 		}
 	}
@@ -145,7 +125,7 @@ func TestNilPhasesMapReadsAsResearch(t *testing.T) {
 	snap.Phases = nil
 
 	v := newBoardView(snap, nil, fixedNow, 5)
-	if got := cardIDs(lane(v, task.PhaseResearch).Cards); len(got) != 1 || got[0] != "a" {
+	if got := cardIDs(lane(v, task.PhaseResearch).Cards); !slices.Equal(got, []string{"a"}) {
 		t.Errorf("research lane = %v, want [a]", got)
 	}
 }
@@ -159,21 +139,17 @@ func TestLaneGroupTakesFurthestPhase(t *testing.T) {
 
 	v := newBoardView(snap, nil, fixedNow, 5)
 	planning := lane(v, task.PhasePlanning)
-	if len(planning.Cards) != 1 || planning.Cards[0].ID != "P" {
-		t.Fatalf("planning lane = %v, want [P]", cardIDs(planning.Cards))
+	if got := cardIDs(planning.Cards); !slices.Equal(got, []string{"P"}) {
+		t.Fatalf("planning lane = %v, want [P]", got)
 	}
-	if got := cardIDs(planning.Cards[0].Subtasks); len(got) != 1 || got[0] != "S" {
+	if got := cardIDs(planning.Cards[0].Subtasks); !slices.Equal(got, []string{"S"}) {
 		t.Errorf("P nests %v, want [S]", got)
 	}
 	if planning.Count != 2 {
 		t.Errorf("planning Count = %d, want 2: nested subtasks count", planning.Count)
 	}
-	research := lane(v, task.PhaseResearch)
-	if research.Count != 0 || len(research.Cards) != 0 {
+	if research := lane(v, task.PhaseResearch); research.Count != 0 || len(research.Cards) != 0 {
 		t.Errorf("research lane = %d count, %v cards, want empty", research.Count, cardIDs(research.Cards))
-	}
-	if n := column(v, "in_progress").Count; n != 2 {
-		t.Errorf("in_progress Count = %d, want 2", n)
 	}
 }
 
@@ -195,9 +171,10 @@ func TestStandaloneSubtaskUsesOwnPhase(t *testing.T) {
 	}
 }
 
-// mixedLaneBoard has nesting, a standalone subtask, and tasks outside In
-// progress, so lane counts and cards can be checked against the column.
-func mixedLaneBoard() *task.BoardSnapshot {
+// TestLanesPartitionTheColumn uses a board with nesting, a standalone
+// subtask and tasks outside In progress: every In progress card sits in
+// exactly one lane, and the lane counts add up to the column count.
+func TestLanesPartitionTheColumn(t *testing.T) {
 	snap := boardOf(
 		tk("a", "", task.StatusInProgress, task.PriorityHigh, fixedNow),
 		tk("b", "", task.StatusInProgress, task.PriorityHigh, fixedNow),
@@ -212,50 +189,27 @@ func mixedLaneBoard() *task.BoardSnapshot {
 	snap.Phases["b1"] = task.PhaseImplementation
 	snap.Phases["c"] = task.PhasePlanning
 	snap.Phases["d1"] = task.PhaseDesign
-	return snap
-}
 
-func TestLaneCountsSumToColumnCount(t *testing.T) {
-	v := newBoardView(mixedLaneBoard(), nil, fixedNow, 5)
-
-	want := map[task.Phase]int{
-		task.PhaseResearch:       1,
-		task.PhaseDesign:         1,
-		task.PhasePlanning:       1,
-		task.PhaseImplementation: 2,
-	}
+	col := column(newBoardView(snap, nil, fixedNow, 5), "in_progress")
+	var counts []int
+	var ids []string
 	sum := 0
-	for phase, n := range want {
-		if got := lane(v, phase).Count; got != n {
-			t.Errorf("lane %s Count = %d, want %d", phase, got, n)
-		}
-	}
-	for _, l := range column(v, "in_progress").Lanes {
+	for _, l := range col.Lanes {
+		counts = append(counts, l.Count)
+		ids = append(ids, cardIDs(l.Cards)...)
 		sum += l.Count
 	}
-	if col := column(v, "in_progress"); sum != col.Count || col.Count != 5 {
+	if want := []int{1, 1, 1, 2}; !slices.Equal(counts, want) {
+		t.Errorf("lane counts = %v, want %v", counts, want)
+	}
+	if sum != col.Count || col.Count != 5 {
 		t.Errorf("lane counts sum to %d, column Count = %d, want both 5", sum, col.Count)
 	}
-}
-
-func TestLanesPartitionColumnCards(t *testing.T) {
-	v := newBoardView(mixedLaneBoard(), nil, fixedNow, 5)
-	col := column(v, "in_progress")
-
-	seen := map[string]int{}
-	for _, l := range col.Lanes {
-		for _, id := range cardIDs(l.Cards) {
-			seen[id]++
-		}
-	}
 	want := cardIDs(col.Cards)
-	if len(seen) != len(want) {
-		t.Errorf("lanes hold %v, column holds %v", seen, want)
-	}
-	for _, id := range want {
-		if seen[id] != 1 {
-			t.Errorf("card %s appears %d times across the lanes, want once", id, seen[id])
-		}
+	slices.Sort(ids)
+	slices.Sort(want)
+	if !slices.Equal(ids, want) {
+		t.Errorf("lanes hold %v, column holds %v: each card exactly once", ids, want)
 	}
 }
 
@@ -272,8 +226,8 @@ func TestLaneSortsByPriorityThenAge(t *testing.T) {
 	}
 
 	got := cardIDs(lane(newBoardView(snap, nil, fixedNow, 5), task.PhaseDesign).Cards)
-	if strings.Join(got, ",") != "z,y,x" {
-		t.Errorf("design lane = %v, want [z y x]", got)
+	if want := []string{"z", "y", "x"}; !slices.Equal(got, want) {
+		t.Errorf("design lane = %v, want %v", got, want)
 	}
 }
 

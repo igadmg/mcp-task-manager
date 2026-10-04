@@ -391,15 +391,15 @@ func TestCardIDTruncates(t *testing.T) {
 // hold only card articles, so that tag closes the lane itself.
 func laneSection(t *testing.T, body, phase string) string {
 	t.Helper()
-	i := strings.Index(body, `data-phase="`+phase+`"`)
-	if i < 0 {
+	_, rest, ok := strings.Cut(body, `data-phase="`+phase+`"`)
+	if !ok {
 		t.Fatalf("board has no %s lane", phase)
 	}
-	j := strings.Index(body[i:], "</section>")
-	if j < 0 {
+	section, _, ok := strings.Cut(rest, "</section>")
+	if !ok {
 		t.Fatalf("the %s lane is never closed", phase)
 	}
-	return body[i : i+j]
+	return section
 }
 
 func TestBoardRendersPhaseLanes(t *testing.T) {

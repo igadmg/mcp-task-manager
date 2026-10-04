@@ -3,10 +3,12 @@ package web
 import (
 	"strings"
 	"testing"
+
+	"github.com/gpayer/mcp-task-manager/internal/task"
 )
 
-// TestAppCSSDefinesLaneClasses ties the Go lane list to the compiled CSS:
-// a forgotten scripts/build-css.sh run, or a lane without its
+// TestAppCSSDefinesLaneClasses ties the phase list to the compiled CSS:
+// a forgotten scripts/build-css.sh run, or a phase without its
 // .lane-<phase> rule, fails here first. The strings are the minified forms
 // Tailwind v4.3.3 emits; it rewrites the 14rem collapse rule's
 // "width < 14rem" as "not (min-width:14rem)".
@@ -17,8 +19,8 @@ func TestAppCSSDefinesLaneClasses(t *testing.T) {
 	}
 	css := string(data)
 	want := []string{".lanes{", "container:lanes/inline-size", ".lane{", "lanes not (min-width:14rem)"}
-	for _, l := range phaseLanes {
-		want = append(want, ".lane-"+string(l.Phase)+"{")
+	for _, p := range task.Phases() {
+		want = append(want, ".lane-"+string(p)+"{")
 	}
 	for _, w := range want {
 		if !strings.Contains(css, w) {

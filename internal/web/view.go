@@ -44,12 +44,12 @@ type ColumnView struct {
 }
 
 // PhaseLaneView is one workflow-phase lane inside In progress. Phase is
-// the raw value ("planning"): it names the lane-<phase> CSS class and
-// the data-phase attribute. Count is the in-progress tasks on its cards,
-// nested subtasks included, so the lane counts add up to the column's.
+// the raw value ("planning"): it names the lane-<phase> CSS class and the
+// data-phase attribute, and is the heading (the template upper-cases it).
+// Count is the in-progress tasks on its cards, nested subtasks included,
+// so the lane counts add up to the column's.
 type PhaseLaneView struct {
 	Phase string
-	Title string
 	Count int
 	Cards []CardView
 }
@@ -140,18 +140,6 @@ var columns = []struct {
 	{task.StatusDone, "Done"},
 }
 
-// phaseLanes fixes the In progress lanes' order and headings. Lane i holds
-// phase Order() i (TestPhaseLanesFollowPhaseOrder).
-var phaseLanes = []struct {
-	Phase task.Phase
-	Title string
-}{
-	{task.PhaseResearch, "Research"},
-	{task.PhaseDesign, "Design"},
-	{task.PhasePlanning, "Planning"},
-	{task.PhaseImplementation, "Implementation"},
-}
-
 const timeFormat = "2006-01-02 15:04"
 
 // newBoardView maps a snapshot onto the board. Pure: everything it needs was
@@ -225,24 +213,19 @@ func newBoardView(snap *task.BoardSnapshot, cfg *config.Config, now time.Time, p
 }
 
 // newPhaseLanes buckets the In progress root cards, already sorted, into
-// the four phase lanes. A card goes to the furthest phase of its group:
-// itself plus its nested subtasks, which in this column are exactly its
-// in-progress subtasks. Bucketing is stable, so each lane keeps the
-// column's priority, age, id order.
+// one lane per task.Phases entry; lane i holds phase Order() i. A card goes
+// to the furthest phase of its group: itself plus its nested subtasks,
+// which in this column are exactly its in-progress subtasks. Bucketing is
+// stable, so each lane keeps the column's priority, age, id order.
 func newPhaseLanes(roots []*CardView, snap *task.BoardSnapshot) []PhaseLaneView {
-	lanes := make([]PhaseLaneView, len(phaseLanes))
-	for i, l := range phaseLanes {
-		lanes[i] = PhaseLaneView{Phase: string(l.Phase), Title: l.Title}
+	var lanes []PhaseLaneView
+	for _, p := range task.Phases() {
+		lanes = append(lanes, PhaseLaneView{Phase: string(p)})
 	}
 	for _, card := range roots {
 		rank := snap.Phases[card.ID].Order()
 		for _, kid := range card.Subtasks {
-			if r := snap.Phases[kid.ID].Order(); r > rank {
-				rank = r
-			}
-		}
-		if rank >= len(lanes) { // a phase newer than this list lands last instead of panicking
-			rank = len(lanes) - 1
+			rank = max(rank, snap.Phases[kid.ID].Order())
 		}
 		lanes[rank].Cards = append(lanes[rank].Cards, *card)
 		lanes[rank].Count += 1 + len(card.Subtasks)
