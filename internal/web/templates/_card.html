@@ -6,11 +6,11 @@
      hx-push-url="/tasks/{{ .ID }}"
      class="block">
     <div class="flex items-baseline gap-2">
-      <span class="meta">#{{ .ID }}</span>
-      {{ if .IsSubtask }}<span class="meta" title="subtask of {{ .ParentID }}">&#8627; {{ .ParentID }}</span>{{ end }}
+      <span class="meta truncate" title="{{ .ID }}">#{{ .ID }}</span>
+      {{ if .IsSubtask }}<span class="meta truncate" title="subtask of {{ .ParentID }}">&#8627; {{ .ParentID }}</span>{{ end }}
       <span class="chip chip-{{ .Priority }} ml-auto">{{ .Priority }}</span>
     </div>
-    <p class="mt-1.5 text-sm leading-snug text-neutral-100">{{ .Title }}</p>
+    <p class="mt-1.5 break-words text-sm leading-snug text-neutral-100">{{ .Title }}</p>
     <div class="mt-2 flex flex-wrap items-center gap-1.5">
       <span class="chip chip-muted">{{ .Type }}</span>
       {{ if .Resolution }}<span class="chip chip-muted">{{ .Resolution }}</span>{{ end }}
@@ -36,7 +36,7 @@
        hx-swap="innerHTML"
        hx-push-url="/tasks/{{ .ID }}"
        class="flex items-center gap-2 rounded px-1 py-1 hover:bg-white/5">
-      <span class="meta">#{{ .ID }}</span>
+      <span class="meta truncate" title="{{ .ID }}">#{{ .ID }}</span>
       <span class="truncate text-xs text-neutral-300">{{ .Title }}</span>
       {{ if .Blocked }}<span class="chip chip-blocked">blocked</span>{{ end }}
       <span class="chip chip-{{ .Priority }} ml-auto">{{ .Priority }}</span>

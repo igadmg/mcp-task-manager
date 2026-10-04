@@ -360,3 +360,28 @@ func snapshotDir(t *testing.T, dir string) string {
 	sort.Strings(lines)
 	return strings.Join(lines, "\n")
 }
+
+// TestCardIDTruncates guards narrow cards: an id that does not fit shrinks
+// with an ellipsis and keeps its full text as a tooltip, and a long title
+// word wraps instead of pushing the card wider.
+func TestCardIDTruncates(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	const long = "long-custom-id-for-the-overflow-check"
+	testsupport.Seed(t, svc,
+		testsupport.TaskSpec{ID: long, Title: "Parent with a long id"},
+		testsupport.TaskSpec{ID: long + "-nested", ParentID: long},
+		testsupport.TaskSpec{ID: long + "-live", ParentID: long, Status: "in_progress"},
+	)
+
+	body := get(t, h, "/board").Body.String()
+	for _, want := range []string{
+		`<span class="meta truncate" title="` + long + `">#` + long + `</span>`,
+		`<span class="meta truncate" title="` + long + `-nested">#` + long + `-nested</span>`,
+		`<span class="meta truncate" title="subtask of ` + long + `">`,
+		`break-words`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("board is missing %q", want)
+		}
+	}
+}
