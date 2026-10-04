@@ -6,7 +6,11 @@
 # and tests with zero network access.
 #
 # Run it after changing anything under internal/web/templates/ - Tailwind scans
-# those files (@source) and emits only the utility classes they actually use.
+# those files (@source) plus every non-gitignored file under the directory it
+# runs from (automatic source detection), so build from a clean checkout.
+#
+# Runs on macOS and Linux, and on Windows x64 from Git Bash (MSYS converts
+# the /d/... paths for the native .exe).
 #
 # Pinned versions:
 #   Tailwind CSS standalone CLI  v4.3.3
@@ -20,20 +24,23 @@ CACHE_DIR="${REPO_ROOT}/.cache"
 INPUT="${REPO_ROOT}/internal/web/assets/input.css"
 OUTPUT="${REPO_ROOT}/internal/web/static/app.css"
 
+EXE=""
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64)  ASSET="tailwindcss-macos-arm64"  ;;
   Darwin-x86_64) ASSET="tailwindcss-macos-x64"    ;;
   Linux-aarch64) ASSET="tailwindcss-linux-arm64"  ;;
   Linux-x86_64)  ASSET="tailwindcss-linux-x64"    ;;
+  MINGW*-x86_64|MSYS*-x86_64|CYGWIN*-x86_64)
+                 ASSET="tailwindcss-windows-x64"; EXE=".exe" ;;
   *) echo "unsupported platform: $(uname -s)-$(uname -m)" >&2; exit 1 ;;
 esac
 
-BIN="${CACHE_DIR}/${ASSET}-${TAILWIND_VERSION}"
+BIN="${CACHE_DIR}/${ASSET}-${TAILWIND_VERSION}${EXE}"
 if [ ! -x "${BIN}" ]; then
   echo "downloading Tailwind CLI ${TAILWIND_VERSION} (${ASSET})..."
   mkdir -p "${CACHE_DIR}"
   curl -sSL --fail -o "${BIN}" \
-    "https://github.com/tailwindlabs/tailwindcss/releases/download/${TAILWIND_VERSION}/${ASSET}"
+    "https://github.com/tailwindlabs/tailwindcss/releases/download/${TAILWIND_VERSION}/${ASSET}${EXE}"
   chmod +x "${BIN}"
 fi
 
