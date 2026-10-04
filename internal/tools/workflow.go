@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"math"
 
 	"github.com/gpayer/mcp-task-manager/internal/project"
 	"github.com/gpayer/mcp-task-manager/internal/task"
@@ -57,7 +58,106 @@ func workflowTools(rs *project.Resolver) []server.ServerTool {
 		mcp.WithDescription(currentText.Description),
 	)
 	tools = append(tools, server.ServerTool{Tool: currentTool, Handler: getCurrentTaskHandler(rs)})
+
+	// start_phase
+	startPhaseText := textFor("start_phase")
+	startPhaseTool := mcp.NewTool("start_phase",
+		mcp.WithDescription(startPhaseText.Description),
+		mcp.WithString("phase",
+			mcp.Required(),
+			mcp.Description(startPhaseText.param("phase")),
+			mcp.Enum(task.PhaseStrings()...),
+		),
+		mcp.WithString("id",
+			mcp.Description(startPhaseText.param("id")),
+		),
+	)
+	tools = append(tools, server.ServerTool{Tool: startPhaseTool, Handler: startPhaseHandler(rs)})
+
+	// finish_phase
+	finishPhaseText := textFor("finish_phase")
+	finishPhaseTool := mcp.NewTool("finish_phase",
+		mcp.WithDescription(finishPhaseText.Description),
+		mcp.WithString("phase",
+			mcp.Required(),
+			mcp.Description(finishPhaseText.param("phase")),
+			mcp.Enum(task.PhaseStrings()...),
+		),
+		mcp.WithString("id",
+			mcp.Description(finishPhaseText.param("id")),
+		),
+		mcp.WithNumber("tokens",
+			mcp.Description(finishPhaseText.param("tokens")),
+		),
+		mcp.WithString("note",
+			mcp.Description(finishPhaseText.param("note")),
+		),
+	)
+	tools = append(tools, server.ServerTool{Tool: finishPhaseTool, Handler: finishPhaseHandler(rs)})
 	return tools
+}
+
+func startPhaseHandler(rs *project.Resolver) server.ToolHandlerFunc {
+	return withService(rs, func(ctx context.Context, svc *task.Service, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		p, err := task.ParsePhase(req.GetString("phase", ""))
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
+		t, rec, err := svc.StartPhase(req.GetString("id", ""), p)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return phaseResult(t, rec)
+	})
+}
+
+func finishPhaseHandler(rs *project.Resolver) server.ToolHandlerFunc {
+	return withService(rs, func(ctx context.Context, svc *task.Service, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		p, err := task.ParsePhase(req.GetString("phase", ""))
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
+		f := task.PhaseFinish{Note: req.GetString("note", "")}
+		if raw, ok := req.GetArguments()["tokens"]; ok {
+			if f.Tokens, err = parseTokens(raw); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+		}
+
+		t, rec, err := svc.FinishPhase(req.GetString("id", ""), p, f)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return phaseResult(t, rec)
+	})
+}
+
+// parseTokens converts the tokens argument, a JSON number, to an integer.
+// JSON-RPC delivers every number as a float64; it must be integral and fit
+// an int64. The service checks the range.
+func parseTokens(raw any) (*int64, error) {
+	v, ok := raw.(float64)
+	if !ok || v != math.Trunc(v) || math.Abs(v) >= math.MaxInt64 {
+		return nil, task.ErrInvalidTokens
+	}
+	n := int64(v)
+	return &n, nil
+}
+
+// phaseResponse is the result of start_phase and finish_phase: the task,
+// and the phase record with the 1-based number of the run just started or
+// finished.
+type phaseResponse struct {
+	Task   *task.Task        `json:"task"`
+	Phase  task.Phase        `json:"phase"`
+	Run    int               `json:"run"`
+	Record *task.PhaseRecord `json:"record"`
+}
+
+func phaseResult(t *task.Task, rec *task.PhaseRecord) (*mcp.CallToolResult, error) {
+	return jsonResult(phaseResponse{Task: t, Phase: rec.Phase, Run: len(rec.Runs), Record: rec})
 }
 
 func getCurrentTaskHandler(rs *project.Resolver) server.ToolHandlerFunc {
@@ -73,7 +173,7 @@ func getCurrentTaskHandler(rs *project.Resolver) server.ToolHandlerFunc {
 		if !ok {
 			return mcp.NewToolResultText("No current task"), nil
 		}
-		return taskResult(t)
+		return jsonResult(t)
 	})
 }
 
@@ -88,7 +188,7 @@ func getNextTaskHandler(rs *project.Resolver) server.ToolHandlerFunc {
 		if t == nil {
 			return mcp.NewToolResultText("No tasks available"), nil
 		}
-		return taskResult(t)
+		return jsonResult(t)
 	})
 }
 
@@ -101,7 +201,7 @@ func startTaskHandler(rs *project.Resolver) server.ToolHandlerFunc {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 
-		return taskResult(t)
+		return jsonResult(t)
 	})
 }
 
@@ -129,6 +229,6 @@ func completeTaskHandler(rs *project.Resolver) server.ToolHandlerFunc {
 		// Trigger auto-archive check if enabled
 		_ = svc.RunAutoArchive()
 
-		return taskResult(t)
+		return jsonResult(t)
 	})
 }

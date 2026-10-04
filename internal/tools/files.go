@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/gpayer/mcp-task-manager/internal/project"
@@ -110,11 +109,6 @@ func listTaskFilesHandler(rs *project.Resolver) server.ToolHandlerFunc {
 			return mcp.NewToolResultText(fmt.Sprintf("No files attached to task %s", taskID)), nil
 		}
 
-		data, err := json.MarshalIndent(names, "", "  ")
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(names)
 	})
 }

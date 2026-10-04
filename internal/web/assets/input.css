@@ -68,6 +68,12 @@
   @container lanes (width < 14rem) {
     .lane { margin-left: 0; width: auto; }
   }
+  /* Detail view phase history: one row per run - phase and run number,
+   * start, finish, tokens - with a run's note on a row of its own. */
+  .phase-runs {
+    @apply grid grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)_auto] items-baseline gap-x-3 gap-y-1;
+  }
+  .phase-runs .phase-note { grid-column: 1 / -1; }
   .meta { @apply font-mono text-[11px] text-neutral-500; }
 
   .copy-btn {

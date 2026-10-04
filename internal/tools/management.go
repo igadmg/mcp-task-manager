@@ -165,7 +165,7 @@ func createTaskHandler(rs *project.Resolver) server.ToolHandlerFunc {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 
-		return taskResult(t)
+		return jsonResult(t)
 	})
 }
 
@@ -182,6 +182,7 @@ type taskWithSubtasksResponse struct {
 	Blocked     bool                `json:"blocked"`
 	BlockedBy   []task.BlockingInfo `json:"blocked_by,omitempty"`
 	CreatedAt   string              `json:"created_at"`
+	CreatedBy   string              `json:"created_by,omitempty"`
 	UpdatedAt   string              `json:"updated_at"`
 	// Resolution is the effective one: a task closed before the field
 	// existed reports "completed" rather than an empty string.
@@ -190,6 +191,8 @@ type taskWithSubtasksResponse struct {
 	ClosedAt       string          `json:"closed_at,omitempty"`
 	VerifiedAt     string          `json:"verified_at,omitempty"`
 	Subtasks       []*task.Task    `json:"subtasks,omitempty"`
+	// Phases is the task's phase-run history, in workflow order.
+	Phases []task.PhaseRecord `json:"phases,omitempty"`
 }
 
 // formatOptionalTime renders a nullable timestamp for a tool response.
@@ -209,12 +212,11 @@ func getTaskHandler(rs *project.Resolver) server.ToolHandlerFunc {
 
 		id := req.GetString("id", "")
 
-		t, subtasks, err := svc.GetWithSubtasks(id)
+		d, err := svc.Detail(id)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
-
-		blocked, blockers := svc.IsBlocked(id)
+		t := d.Task
 
 		response := taskWithSubtasksResponse{
 			ID:          t.ID,
@@ -225,28 +227,25 @@ func getTaskHandler(rs *project.Resolver) server.ToolHandlerFunc {
 			Priority:    t.Priority,
 			Type:        t.Type,
 			Relations:   t.Relations,
-			Blocked:     blocked,
-			BlockedBy:   blockers,
+			Blocked:     d.Blocked,
+			BlockedBy:   d.Blockers,
 			CreatedAt:   t.CreatedAt.Format("2006-01-02T15:04:05Z"),
+			CreatedBy:   t.CreatedBy,
 			UpdatedAt:   t.UpdatedAt.Format("2006-01-02T15:04:05Z"),
 
 			Resolution:     t.EffectiveResolution(),
 			ResolutionNote: t.ResolutionNote,
 			ClosedAt:       formatOptionalTime(t.ClosedAt),
 			VerifiedAt:     formatOptionalTime(t.VerifiedAt),
+			Phases:         d.Phases,
 		}
 
 		// Only include subtasks if task has them (top-level task with children)
-		if len(subtasks) > 0 {
-			response.Subtasks = subtasks
+		if len(d.Subtasks) > 0 {
+			response.Subtasks = d.Subtasks
 		}
 
-		data, err := json.MarshalIndent(response, "", "  ")
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(response)
 	})
 }
 
@@ -296,7 +295,7 @@ func updateTaskHandler(rs *project.Resolver) server.ToolHandlerFunc {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 
-		return taskResult(t)
+		return jsonResult(t)
 	})
 }
 
@@ -339,11 +338,7 @@ func listTasksHandler(rs *project.Resolver) server.ToolHandlerFunc {
 			if len(tasks) == 0 {
 				return mcp.NewToolResultText("No archived tasks found"), nil
 			}
-			data, err := json.MarshalIndent(tasks, "", "  ")
-			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			return mcp.NewToolResultText(string(data)), nil
+			return jsonResult(tasks)
 		}
 
 		var status *task.Status
@@ -401,17 +396,13 @@ func listTasksHandler(rs *project.Resolver) server.ToolHandlerFunc {
 			enriched[i] = taskWithBlocked{Task: t, Blocked: len(blocked[t.ID]) > 0}
 		}
 
-		data, err := json.MarshalIndent(enriched, "", "  ")
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(enriched)
 	})
 }
 
-func taskResult(t *task.Task) (*mcp.CallToolResult, error) {
-	data, err := json.MarshalIndent(t, "", "  ")
+// jsonResult renders v as an indented JSON tool result.
+func jsonResult(v any) (*mcp.CallToolResult, error) {
+	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}

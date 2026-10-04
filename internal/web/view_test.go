@@ -435,3 +435,141 @@ func TestHumanizeAgo(t *testing.T) {
 		}
 	}
 }
+
+func findCard(t *testing.T, v BoardView, id string) CardView {
+	t.Helper()
+	for _, col := range v.Columns {
+		for _, c := range col.Cards {
+			if c.ID == id {
+				return c
+			}
+		}
+	}
+	t.Fatalf("no card %s on the board", id)
+	return CardView{}
+}
+
+func TestCardCreatedBy(t *testing.T) {
+	owned := tk("a", "", task.StatusTodo, task.PriorityHigh, fixedNow.Add(-3*time.Hour))
+	owned.CreatedBy = "igor.cwer"
+	legacy := tk("b", "", task.StatusTodo, task.PriorityHigh, fixedNow.Add(-2*24*time.Hour))
+	v := newBoardView(boardOf(owned, legacy), nil, fixedNow, 5)
+
+	a := findCard(t, v, "a")
+	if a.CreatedBy != "igor.cwer" || a.CreatedAgo != "3h ago" || a.CreatedAt != fixedNow.Add(-3*time.Hour).Format(timeFormat) {
+		t.Errorf("card a = by %q, %q, %q", a.CreatedBy, a.CreatedAgo, a.CreatedAt)
+	}
+	if b := findCard(t, v, "b"); b.CreatedBy != "" || b.CreatedAgo != "2d ago" {
+		t.Errorf("legacy card = by %q, %q", b.CreatedBy, b.CreatedAgo)
+	}
+}
+
+func TestCardPhaseOpenVsFinished(t *testing.T) {
+	open := tk("open", "", task.StatusInProgress, task.PriorityHigh, fixedNow)
+	finished := tk("fin", "", task.StatusInProgress, task.PriorityHigh, fixedNow)
+	snap := boardOf(open, finished)
+	done := fixedNow.Add(-10 * time.Minute)
+	snap.Phases["open"], snap.Phases["fin"] = task.PhaseDesign, task.PhasePlanning
+	snap.PhaseInfo = map[string]task.PhaseSummary{
+		"open": {Current: task.PhaseDesign, Run: task.PhaseRun{StartedAt: fixedNow.Add(-2 * time.Hour), StartedBy: "dev"}},
+		"fin": {Current: task.PhasePlanning, Run: task.PhaseRun{StartedAt: fixedNow.Add(-5 * time.Hour), StartedBy: "ann",
+			FinishedAt: &done, FinishedBy: "bob"}},
+	}
+	v := newBoardView(snap, nil, fixedNow, 5)
+
+	if c := findCard(t, v, "open"); c.Phase != "design" || !c.PhaseOpen || c.PhaseAgo != "2h ago" || c.PhaseBy != "dev" {
+		t.Errorf("open card phase = %q open %v %q by %q", c.Phase, c.PhaseOpen, c.PhaseAgo, c.PhaseBy)
+	}
+	if c := findCard(t, v, "fin"); c.Phase != "planning" || c.PhaseOpen || c.PhaseAgo != "10m ago" || c.PhaseBy != "ann" {
+		t.Errorf("finished card phase = %q open %v %q by %q", c.Phase, c.PhaseOpen, c.PhaseAgo, c.PhaseBy)
+	}
+}
+
+func TestCardTokensHumanized(t *testing.T) {
+	tests := []struct {
+		n    int64
+		want string
+	}{
+		{0, "0"}, {950, "950"}, {999, "999"}, {1000, "1k"}, {81234, "81.2k"},
+		{999_949, "999.9k"}, {999_950, "1M"}, {1_400_000, "1.4M"}, {12_345_678, "12.3M"},
+	}
+	for _, tt := range tests {
+		if got := humanizeTokens(tt.n); got != tt.want {
+			t.Errorf("humanizeTokens(%d) = %q, want %q", tt.n, got, tt.want)
+		}
+	}
+
+	a := tk("a", "", task.StatusInProgress, task.PriorityHigh, fixedNow)
+	snap := boardOf(a)
+	snap.PhaseInfo = map[string]task.PhaseSummary{"a": {Current: task.PhaseResearch,
+		Run: task.PhaseRun{StartedAt: fixedNow}, Tokens: 81234, HasTokens: true}}
+	if c := findCard(t, newBoardView(snap, nil, fixedNow, 5), "a"); c.Tokens != "81.2k" || c.TokensExact != "81234" {
+		t.Errorf("card tokens = %q (%q)", c.Tokens, c.TokensExact)
+	}
+	snap.PhaseInfo["a"] = task.PhaseSummary{Current: task.PhaseResearch, Run: task.PhaseRun{StartedAt: fixedNow}}
+	if c := findCard(t, newBoardView(snap, nil, fixedNow, 5), "a"); c.Tokens != "" {
+		t.Errorf("card without reported tokens shows %q", c.Tokens)
+	}
+}
+
+func TestCardNoPhaseWithoutPhaseInfo(t *testing.T) {
+	a := tk("a", "", task.StatusInProgress, task.PriorityHigh, fixedNow)
+	snap := boardOf(a)
+	snap.Phases["a"] = task.PhaseDesign // from the file names
+	c := findCard(t, newBoardView(snap, nil, fixedNow, 5), "a")
+	if c.Phase != "" || c.PhaseBy != "" || c.PhaseAgo != "" || c.Tokens != "" {
+		t.Errorf("card without phase records shows phase data: %+v", c)
+	}
+}
+
+func TestLaneFromRecordsViaSnapshot(t *testing.T) {
+	a := tk("a", "", task.StatusInProgress, task.PriorityHigh, fixedNow)
+	snap := boardOf(a)
+	snap.Phases["a"] = task.PhasePlanning
+	snap.PhaseInfo = map[string]task.PhaseSummary{"a": {Current: task.PhasePlanning, Run: task.PhaseRun{StartedAt: fixedNow}}}
+	v := newBoardView(snap, nil, fixedNow, 5)
+	if ids := cardIDs(lane(v, task.PhasePlanning).Cards); !slices.Equal(ids, []string{"a"}) {
+		t.Errorf("planning lane = %v, want [a]", ids)
+	}
+}
+
+func TestDetailPhasesMapping(t *testing.T) {
+	started := fixedNow.Add(-3 * time.Hour)
+	finished := fixedNow.Add(-2 * time.Hour)
+	n1, n2 := int64(40210), int64(1000)
+	d := &task.TaskDetail{
+		Task: &task.Task{ID: "a", Title: "A", Status: task.StatusInProgress, CreatedBy: "igor.cwer", CreatedAt: started, UpdatedAt: started},
+		Phases: []task.PhaseRecord{
+			{Phase: task.PhaseResearch, Runs: []task.PhaseRun{
+				{StartedAt: started, StartedBy: "dev", FinishedAt: &finished, FinishedBy: "ann", Tokens: &n1, Note: "first"},
+			}},
+			{Phase: task.PhaseDesign, Runs: []task.PhaseRun{
+				{StartedAt: started, StartedBy: "dev", FinishedAt: &finished, FinishedBy: "dev", Tokens: &n2},
+				{StartedAt: finished, StartedBy: "dev"},
+			}},
+		},
+	}
+	v := newDetailView(d, nil, nil, fixedNow)
+	if v.Card.CreatedBy != "igor.cwer" {
+		t.Errorf("CreatedBy = %q", v.Card.CreatedBy)
+	}
+	if v.TotalTokens != "41.2k" {
+		t.Errorf("TotalTokens = %q, want 41.2k", v.TotalTokens)
+	}
+	if len(v.Phases) != 2 || v.Phases[0].Phase != "research" || len(v.Phases[1].Runs) != 2 {
+		t.Fatalf("Phases = %+v", v.Phases)
+	}
+	r := v.Phases[0].Runs[0]
+	if r.N != 1 || r.Started != started.Format(timeFormat) || r.StartedBy != "dev" || r.Finished != finished.Format(timeFormat) ||
+		r.FinishedBy != "ann" || r.Tokens != "40.2k" || r.TokensExact != "40210" || r.Note != "first" {
+		t.Errorf("research run = %+v", r)
+	}
+	if open := v.Phases[1].Runs[1]; open.N != 2 || open.Finished != "" || open.Tokens != "" {
+		t.Errorf("open design run = %+v", open)
+	}
+
+	d.Phases = nil
+	if v := newDetailView(d, nil, nil, fixedNow); v.Phases != nil || v.TotalTokens != "" {
+		t.Errorf("no records: Phases %v, TotalTokens %q", v.Phases, v.TotalTokens)
+	}
+}

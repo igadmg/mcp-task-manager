@@ -28,3 +28,18 @@ func TestAppCSSDefinesLaneClasses(t *testing.T) {
 		}
 	}
 }
+
+// TestAppCSSDefinesPhaseRuns ties the detail view's phase history grid to
+// the compiled CSS: a forgotten scripts/build-css.sh run after the phase
+// views landed fails here.
+func TestAppCSSDefinesPhaseRuns(t *testing.T) {
+	data, err := staticFS.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatalf("read embedded app.css: %v", err)
+	}
+	for _, w := range []string{".phase-runs{", ".phase-runs .phase-note{"} {
+		if !strings.Contains(string(data), w) {
+			t.Errorf("app.css lacks %q - rerun scripts/build-css.sh", w)
+		}
+	}
+}

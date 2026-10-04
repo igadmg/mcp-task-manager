@@ -203,6 +203,48 @@ func (s *Service) captureTask(txn *gitTxn, id string) error {
 	return nil
 }
 
+// capturePhase registers an undo for task id's record of phase p: rec as
+// loaded before the flow mutates it, nil when there was none. The undo
+// saves a copy of it back, or removes the file when there was none -
+// never leaving an empty record behind.
+func (s *Service) capturePhase(txn *gitTxn, id string, p Phase, rec *PhaseRecord) {
+	var saved *PhaseRecord
+	if rec != nil {
+		saved = rec.clone()
+	}
+	txn.add(PhaseFileName(p)+" of task "+id, func() error {
+		if saved == nil {
+			return s.phases.RemovePhase(id, p)
+		}
+		return s.phases.SavePhase(id, saved)
+	})
+}
+
+// flowStep is an extra journaled step a caller threads into a start flow.
+// It runs after the task's own records and pointer are written and before
+// the worktree changes, so a failure in it, or after it, rolls everything
+// back. A start flow given one is a phase-driven implementation start,
+// which may cut the wip branch of an in-progress parent that has none.
+type flowStep func(txn *gitTxn) error
+
+// pointAndRun is the tail every start flow shares: point the user at task
+// id, then run extra. Keeping both in one call means no flow can drop the
+// hook.
+func (s *Service) pointAndRun(txn *gitTxn, id string, extra flowStep) error {
+	if err := s.setPointer(txn, id); err != nil {
+		return err
+	}
+	return extra.run(txn)
+}
+
+// run applies step when it is set.
+func (f flowStep) run(txn *gitTxn) error {
+	if f == nil {
+		return nil
+	}
+	return f(txn)
+}
+
 // updateStatus moves task id to status, journaling its record first.
 func (s *Service) updateStatus(txn *gitTxn, id string, status Status, opts ...UpdateOption) (*Task, error) {
 	if err := s.captureTask(txn, id); err != nil {

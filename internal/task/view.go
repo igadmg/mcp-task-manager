@@ -31,9 +31,13 @@ type BoardSnapshot struct {
 	// Counts is the subtask tally per parent id.
 	Counts map[string]SubtaskCount
 	// Phases is the workflow phase per in-progress task id (subtasks
-	// included), from its attached file names. Only in_progress tasks have
-	// an entry; a missing entry reads as PhaseResearch (Order 0).
+	// included): the phase of its latest started run when it has phase
+	// records, else derived from its attached file names. Only in_progress
+	// tasks have an entry; a missing entry reads as PhaseResearch (Order 0).
 	Phases map[string]Phase
+	// PhaseInfo summarizes the phase records of the in-progress tasks that
+	// have readable ones. Todo and done tasks are never read.
+	PhaseInfo map[string]PhaseSummary
 	// TakenAt is when the snapshot was read.
 	TakenAt time.Time
 }
@@ -46,7 +50,18 @@ type TaskDetail struct {
 	Blocked   bool
 	Blockers  []BlockingInfo
 	Relations []RelationEdge
-	Files     []string
+	// Files are the attached file names, without the phase records that
+	// Phases holds.
+	Files []string
+	// Phases holds the task's phase records in workflow order; unreadable
+	// ones are left out.
+	Phases []PhaseRecord
+}
+
+// TotalTokens sums the tokens of the finished runs across d.Phases; ok is
+// false when none reported any.
+func (d *TaskDetail) TotalTokens() (total int64, ok bool) {
+	return TotalTokens(d.Phases)
 }
 
 // BoardSnapshot reads the whole active backlog at once.
@@ -60,18 +75,28 @@ func (s *Service) boardSnapshot() (*BoardSnapshot, error) {
 	all := s.index.All()
 
 	snap := &BoardSnapshot{
-		Tasks:    all,
-		Subtasks: make(map[string][]*Task),
-		Counts:   make(map[string]SubtaskCount),
-		Phases:   make(map[string]Phase),
-		TakenAt:  time.Now().UTC(),
+		Tasks:     all,
+		Subtasks:  make(map[string][]*Task),
+		Counts:    make(map[string]SubtaskCount),
+		Phases:    make(map[string]Phase),
+		PhaseInfo: make(map[string]PhaseSummary),
+		TakenAt:   time.Now().UTC(),
 	}
 
 	ids := make([]string, 0, len(all))
 	for _, t := range all {
 		ids = append(ids, t.ID)
 		if t.Status == StatusInProgress {
-			snap.Phases[t.ID] = phaseFromFiles(s.attachedFiles(t.ID))
+			// An unreadable record only leaves itself out; with no run
+			// left, the names decide.
+			names := s.attachedFiles(t.ID)
+			recs, _ := s.loadPhases(t.ID, names)
+			if sum := summarizePhases(recs); sum.Current != "" {
+				snap.PhaseInfo[t.ID] = sum
+				snap.Phases[t.ID] = sum.Current
+			} else {
+				snap.Phases[t.ID] = phaseFromFiles(names)
+			}
 		}
 		if t.ParentID == "" {
 			continue
@@ -94,18 +119,24 @@ func (s *Service) boardSnapshot() (*BoardSnapshot, error) {
 // a view never fails over them, and the next read corrects a transient
 // error. ListTaskFiles, the tool path, reports errors instead.
 func (s *Service) attachedFiles(id string) []string {
-	if s.fileStorage == nil {
-		return nil
-	}
-	files, err := s.fileStorage.ListFiles(id)
+	files, err := s.listFiles(id)
 	if err != nil {
 		return nil
 	}
 	return files
 }
 
-// Detail returns a task with its subtasks, blockers, relations and attached
-// file names. Falls back to the archive, like Get.
+// listFiles lists a task's attached file names, phase records included.
+// Caller holds s.mu. No file store lists none.
+func (s *Service) listFiles(id string) ([]string, error) {
+	if s.fileStorage == nil {
+		return nil, nil
+	}
+	return s.fileStorage.ListFiles(id)
+}
+
+// Detail returns a task with its subtasks, blockers, relations, attached
+// file names and phase records. Falls back to the archive, like Get.
 func (s *Service) Detail(id string) (*TaskDetail, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -134,7 +165,14 @@ func (s *Service) detail(id string) (*TaskDetail, error) {
 		d.Relations = s.index.GetRelationsForTask(id)
 	}
 
-	d.Files = s.attachedFiles(id)
+	names := s.attachedFiles(id)
+	for _, name := range names {
+		if !IsReservedFileName(name) {
+			d.Files = append(d.Files, name)
+		}
+	}
+	// An unreadable record only leaves itself out of the history.
+	d.Phases, _ = s.loadPhases(id, names)
 	return d, nil
 }
 

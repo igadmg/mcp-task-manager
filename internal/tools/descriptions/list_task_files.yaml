@@ -1,3 +1,5 @@
-description: List the names of all files attached to a task
+description: >-
+  List the names of all files attached to a task, including the
+  server-written <phase>.phase records.
 params:
   task_id: Task ID

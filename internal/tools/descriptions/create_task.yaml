@@ -1,4 +1,6 @@
-description: Create a new task
+description: >-
+  Create a new task in todo. The server stamps created_by with your user
+  (the git email's local part, else the OS user).
 params:
   title: Task title
   description: Task description (markdown supported)
@@ -8,6 +10,6 @@ params:
   id: >-
     Optional custom task id, used verbatim as the id and storage directory name
     instead of the next auto-increment id. Validated like attached filenames
-    (non-empty, no '/' or '\', not '..'); "0", "archive", and ".index.json" are
-    reserved, the last being a retired cache filename. Must not already exist
-    (active or archived).
+    (non-empty, no '/' or '\', not '..'); "0", "archive", ".index.json" and
+    ".users" are reserved (a retired cache filename and the per-user state
+    directory). Must not already exist (active or archived).

@@ -3,6 +3,8 @@ package web
 import (
 	"fmt"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gpayer/mcp-task-manager/internal/config"
@@ -71,6 +73,22 @@ type CardView struct {
 	Resolution   string
 	InProgress   bool
 	UpdatedAgo   string
+	// CreatedBy is the task's creator, empty for tasks that predate the
+	// field; CreatedAgo is relative, CreatedAt the full time for a tooltip.
+	CreatedBy  string
+	CreatedAgo string
+	CreatedAt  string
+	// Phase is the phase of the latest started run, set only for an
+	// in-progress task with phase records. PhaseBy started that run, and
+	// PhaseAgo is when it started (PhaseOpen) or finished.
+	Phase     string
+	PhaseBy   string
+	PhaseAgo  string
+	PhaseOpen bool
+	// Tokens is the humanized total over finished runs ("81.2k"), empty
+	// when none reported any; TokensExact is the plain count.
+	Tokens      string
+	TokensExact string
 	// Branch is the git branch to show on the card: the final branch once
 	// the task has been delivered, its wip branch before that.
 	Branch string
@@ -98,14 +116,17 @@ type DangerItem struct {
 
 // DetailView is one task's full page or side panel.
 type DetailView struct {
-	Project        ProjectView
-	Card           CardView
-	Description    string
-	Archived       bool
-	Missing        bool
-	Relations      []RelationView
+	Project     ProjectView
+	Card        CardView
+	Description string
+	Archived    bool
+	Missing     bool
+	Relations   []RelationView
+	// Files are the attached files, without the phase records that
+	// Phases shows.
 	Files          []string
-	CreatedAt      string
+	Phases         []PhaseView
+	TotalTokens    string
 	UpdatedAt      string
 	ClosedAt       string
 	VerifiedAt     string
@@ -120,6 +141,26 @@ type DetailView struct {
 	StartCommitShort  string
 	SquashCommit      string
 	SquashCommitShort string
+}
+
+// PhaseView is one phase's run history in the detail view.
+type PhaseView struct {
+	Phase string
+	Runs  []PhaseRunView
+}
+
+// PhaseRunView is one run: N is its 1-based number within the phase, and
+// Finished, FinishedBy and Tokens are empty while it is open - an empty
+// Finished is how the template tells an open run.
+type PhaseRunView struct {
+	N           int
+	Started     string
+	StartedBy   string
+	Finished    string
+	FinishedBy  string
+	Tokens      string
+	TokensExact string
+	Note        string
 }
 
 // RelationView is one edge, seen from the task being displayed.
@@ -265,8 +306,23 @@ func newCardView(t *task.Task, snap *task.BoardSnapshot, now time.Time) CardView
 		Resolution:   string(t.EffectiveResolution()),
 		InProgress:   t.Status == task.StatusInProgress,
 		UpdatedAgo:   humanizeAgo(now, t.UpdatedAt),
+		CreatedBy:    t.CreatedBy,
+		CreatedAgo:   humanizeAgo(now, t.CreatedAt),
+		CreatedAt:    t.CreatedAt.Format(timeFormat),
 		Branch:       cardBranch(t),
 		createdAt:    t.CreatedAt,
+	}
+	if info, ok := snap.PhaseInfo[t.ID]; ok {
+		c.Phase = string(info.Current)
+		c.PhaseBy = info.Run.StartedBy
+		c.PhaseOpen = info.Run.Open()
+		c.PhaseAgo = humanizeAgo(now, info.Run.StartedAt)
+		if !c.PhaseOpen {
+			c.PhaseAgo = humanizeAgo(now, *info.Run.FinishedAt)
+		}
+		if info.HasTokens {
+			c.Tokens, c.TokensExact = humanizeTokens(info.Tokens), strconv.FormatInt(info.Tokens, 10)
+		}
 	}
 	if blockers := snap.Blocked[t.ID]; len(blockers) > 0 {
 		c.Blocked = true
@@ -311,6 +367,9 @@ func newDetailView(d *task.TaskDetail, cfg *config.Config, titles map[string]str
 		Resolution:   string(t.EffectiveResolution()),
 		InProgress:   t.Status == task.StatusInProgress,
 		UpdatedAgo:   humanizeAgo(now, t.UpdatedAt),
+		CreatedBy:    t.CreatedBy,
+		CreatedAgo:   humanizeAgo(now, t.CreatedAt),
+		CreatedAt:    t.CreatedAt.Format(timeFormat),
 		Blocked:      d.Blocked,
 		Blockers:     newBlockerViews(d.Blockers),
 		Branch:       cardBranch(t),
@@ -341,7 +400,6 @@ func newDetailView(d *task.TaskDetail, cfg *config.Config, titles map[string]str
 		Description:    t.Description,
 		Archived:       d.Archived,
 		Files:          d.Files,
-		CreatedAt:      t.CreatedAt.Format(timeFormat),
 		UpdatedAt:      t.UpdatedAt.Format(timeFormat),
 		ResolutionNote: t.ResolutionNote,
 
@@ -358,6 +416,10 @@ func newDetailView(d *task.TaskDetail, cfg *config.Config, titles map[string]str
 	}
 	if t.VerifiedAt != nil {
 		v.VerifiedAt = t.VerifiedAt.Format(timeFormat)
+	}
+	v.Phases = newPhaseViews(d.Phases)
+	if total, ok := d.TotalTokens(); ok {
+		v.TotalTokens = humanizeTokens(total)
 	}
 
 	for _, e := range d.Relations {
@@ -376,6 +438,43 @@ func newDetailView(d *task.TaskDetail, cfg *config.Config, titles map[string]str
 	})
 
 	return v
+}
+
+// newPhaseViews maps the phase records.
+func newPhaseViews(recs []task.PhaseRecord) []PhaseView {
+	var views []PhaseView
+	for _, rec := range recs {
+		pv := PhaseView{Phase: string(rec.Phase)}
+		for i, run := range rec.Runs {
+			rv := PhaseRunView{
+				N:         i + 1,
+				Started:   run.StartedAt.Format(timeFormat),
+				StartedBy: run.StartedBy,
+				Note:      run.Note,
+			}
+			if !run.Open() {
+				rv.Finished, rv.FinishedBy = run.FinishedAt.Format(timeFormat), run.FinishedBy
+			}
+			if run.Tokens != nil {
+				rv.Tokens, rv.TokensExact = humanizeTokens(*run.Tokens), strconv.FormatInt(*run.Tokens, 10)
+			}
+			pv.Runs = append(pv.Runs, rv)
+		}
+		views = append(views, pv)
+	}
+	return views
+}
+
+// humanizeTokens shortens a token count: 950, 81.2k, 1.4M.
+func humanizeTokens(n int64) string {
+	switch {
+	case n < 1000:
+		return strconv.FormatInt(n, 10)
+	case n < 999_950:
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(n)/1e3), ".0") + "k"
+	default:
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(n)/1e6), ".0") + "M"
+	}
 }
 
 // sortCards puts a column in the order the CLI documents: priority first,

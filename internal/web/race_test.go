@@ -64,6 +64,10 @@ func TestHandlerRaceAgainstWrites(t *testing.T) {
 	// Task 3 is in progress, so /board lists its files while they change.
 	names := []string{"research", "design", "plan"}
 	run(func(i int) { _ = svc.WriteTaskFile("3", names[i%len(names)], "x") })
+	// Phase records are read for in-progress cards and the detail view.
+	run(func(int) { _, _, _ = svc.StartPhase("3", task.PhaseResearch) })
+	run(func(int) { _, _, _ = svc.FinishPhase("3", task.PhaseResearch, task.PhaseFinish{}) })
+	run(func(int) { fetch("/tasks/3") })
 
 	wg.Wait()
 }

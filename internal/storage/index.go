@@ -35,6 +35,8 @@ type IndexEntry struct {
 	Type      string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	// CreatedBy rides along because the board cards and list_tasks show it.
+	CreatedBy string
 	// Resolution and the two timestamps ride along because list_tasks and
 	// the auto-archive rules read them, and both work off index entries
 	// rather than loading every task file. ResolutionNote deliberately
@@ -62,6 +64,7 @@ func taskToEntry(t *task.Task) *IndexEntry {
 		Type:       t.Type,
 		CreatedAt:  t.CreatedAt,
 		UpdatedAt:  t.UpdatedAt,
+		CreatedBy:  t.CreatedBy,
 		Resolution: t.Resolution,
 		ClosedAt:   t.ClosedAt,
 		VerifiedAt: t.VerifiedAt,
@@ -83,6 +86,7 @@ func entryToTask(e *IndexEntry) *task.Task {
 		Type:       e.Type,
 		CreatedAt:  e.CreatedAt,
 		UpdatedAt:  e.UpdatedAt,
+		CreatedBy:  e.CreatedBy,
 		Resolution: e.Resolution,
 		ClosedAt:   e.ClosedAt,
 		VerifiedAt: e.VerifiedAt,

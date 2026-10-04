@@ -89,6 +89,7 @@ relations:            # optional, omitted when empty
   - type: relates_to
     task: 7
 created_at: 2025-01-15T10:30:00Z
+created_by: igor.cwer  # optional, stamped by create_task from the server identity (git email local part, else OS user)
 updated_at: 2025-01-15T10:30:00Z
 resolution: obsolete  # optional, done tasks only: completed | obsolete | superseded | duplicate | wontfix
 resolution_note: "one line on why"   # optional, done tasks only
@@ -122,9 +123,13 @@ Markdown description here.
   `completed`. See [_design.md](_design.md)
 - `verified_at` is orthogonal to the lifecycle: when the task's own text was
   last checked against reality. Inert — it gates nothing
-- With git branching enabled, `start_task` and `complete_task` also move git
-  branches (see Git branching), and `update_task` refuses the status moves
-  that would bypass them
+- With git branching enabled, `start_task`, `start_phase implementation` and
+  `complete_task` also move git branches (see Git branching), and
+  `update_task` refuses the status moves that would bypass them
+- Delivery phases (research, design, planning, implementation) are recorded
+  per task in `<phase>.phase` files by `start_phase` / `finish_phase` (see
+  Phase records); starting any phase of a `todo` task moves it to
+  `in_progress`
 
 ### Priority Ordering
 - Named levels: `critical` > `high` > `medium` > `low`
@@ -220,6 +225,7 @@ A task can have zero or more free-form named text files attached to it (e.g. res
 
 **Rules:**
 - Filenames must be non-empty, must not contain a path separator (`/` or `\`) or a `..` segment, and must not collide with the task's own `{id}.md` record file
+- Names ending in `.phase` (case and trailing dots/spaces ignored) are reserved for the server's phase records: `write_task_file` refuses them, `read_task_file` and `list_task_files` show them
 - `write_task_file` is rejected for archived tasks (archived tasks are read-only, consistent with the rest of this project's archived-task semantics)
 - `read_task_file` and `list_task_files` work for both active and archived tasks
 
@@ -234,17 +240,21 @@ A read-only kanban dashboard, served by `internal/web` (`net/http` +
 - **Handlers never resolve.** They read `Resolver.Current()`, never `Get()`: resolution runs `Service.Initialize()`, which migrates the layout and may auto-archive, and a plain GET must not move files. Before the first tool call the board renders a placeholder that polls itself back to life.
 - **Assets are embedded.** Tailwind output and htmx are vendored under `internal/web/static/` and compiled in with `go:embed`; the page renders offline. Regenerate the CSS with `scripts/build-css.sh` (on Windows x64, run it from Git Bash) after editing templates — a maintainer step, never part of `go build`. `/static/app.css` is served as immutable, so an already-open browser needs a hard reload after the CSS changes.
 - **Danger zone.** In-progress tasks are highlighted and named in a banner, so a human reading the board knows an agent may be editing those areas. Presentation only; the UI stays read-only.
-- **Phase lanes.** The In progress column groups its cards into four virtual, overlapping lanes: Research, Design, Planning and Implementation. Cards stay in one vertical stack, and each later lane is shifted right by half a card: `.lane-<phase>` sets `--lane` and `.lanes` sets the step in `assets/input.css`. Cards keep a minimum width of 11rem, so the step compresses in narrow columns, and the indent collapses below 14rem. The phase is derived on read from each in-progress task's attached workflow files (names from the `begin_task` skill): `research` → Design, `design` → Planning, `plan` (or `implementation`) → Implementation, only `task` or nothing → Research. The furthest artifact wins, case is ignored and an optional `.md` suffix counts. A card holding nested in-progress subtasks sits in the furthest phase of its group. `task.Service.BoardSnapshot` computes it (`Phases`, in-progress tasks only; a failed listing reads as Research) and nothing is stored. The column header counts every in-progress task; each lane counts the tasks on its cards, so the lane counts add up to the total. Empty lanes show a header-only stub. In progress takes half the board from `xl`.
+- **Phase lanes.** The In progress column groups its cards into four virtual, overlapping lanes: Research, Design, Planning and Implementation. Cards stay in one vertical stack, and each later lane is shifted right by half a card: `.lane-<phase>` sets `--lane` and `.lanes` sets the step in `assets/input.css`. Cards keep a minimum width of 11rem, so the step compresses in narrow columns, and the indent collapses below 14rem. A task's lane is the phase of its latest started run in its `<phase>.phase` records (ties go to the later phase; see Phase records). A task without readable records falls back to its attached workflow files (names from the `begin_task` skill): `research` → Design, `design` → Planning, `plan` (or `implementation`) → Implementation, only `task` or nothing → Research. The furthest artifact wins, case is ignored and an optional `.md` suffix counts. A card holding nested in-progress subtasks sits in the furthest phase of its group. `task.Service.BoardSnapshot` computes it (`Phases`, plus `PhaseInfo` for tasks with records; in-progress tasks only, at most four small file reads each per poll; a failed listing reads as Research). The column header counts every in-progress task; each lane counts the tasks on its cards, so the lane counts add up to the total. Empty lanes show a header-only stub. In progress takes half the board from `xl`.
+- **Card and detail content.** Every card shows its creator and creation time. An in-progress card with phase records also shows the current phase, who started its latest run and when (or when it finished), and the tokens of all finished runs (`81.2k tok`). Todo and done cards never read phase records. The detail view lists every run of every phase (`.phase-runs` grid) with the total tokens, and leaves `*.phase` files out of "Attached files".
 - **Archived tasks are not on the board** (the snapshot is the active index); the detail route still serves them, read-only.
 - **Logging goes to stderr.** Nothing in `internal/web` writes to stdout — in stdio mode stdout is the JSON-RPC channel.
 - **Branch chip.** A card shows the task's branch (final once delivered, wip before) with a copy button; the detail view has a Git block. Copying is `static/app.js`, one delegated click listener with no request and no htmx attribute.
 
 ### Git branching
 
-Opt-in (`git.branching`, or `MCP_GIT_BRANCHING`). `start_task` and
-`complete_task` then manage per-task branches in the git repository at the
-project root, running the system `git` (`internal/vcs`). The full rationale,
-sequences and rejected alternatives are in `tasks/git-branch-per-task/design`.
+Opt-in (`git.branching`, or `MCP_GIT_BRANCHING`). `start_task`,
+`start_phase implementation` and `complete_task` then manage per-task
+branches in the git repository at the project root, running the system `git`
+(`internal/vcs`). The research, design and planning phases never touch git, so
+under the phase workflow a branch appears only when implementation starts. The
+full rationale, sequences and rejected alternatives are in
+`tasks/git-branch-per-task/design`.
 
 - **The tasks directory is never committed by the server.** Server commits are
   built in a temporary index that excludes it (`:(top,exclude)`), wherever it
@@ -269,6 +279,15 @@ sequences and rejected alternatives are in `tasks/git-branch-per-task/design`.
   reopened to todo) replays the wip onto the current base or parent tip with
   `git replay` (print mode; the ref is moved with compare-and-swap, or with
   `reset --keep` when checked out) and rewrites `start_commit`.
+- **Implementation start** (`start_phase implementation`) runs the same
+  flows: a restart when a live wip exists; otherwise a fresh or subtask start,
+  also for a task already `in_progress` from its earlier phases. A subtask
+  whose parent is `in_progress` without a branch cuts the parent's wip first,
+  in the same journal (the parent gets no phase run). `start_task` keeps the
+  legacy rule instead: under such a parent the subtask starts record-only, and
+  on an `in_progress` task without a branch it refuses with a hint to use
+  `start_phase implementation`. A dead wip ref on an `in_progress` task is
+  refused by both.
 - **Complete, delivered.** Snapshot everything onto the wip, then
   `commit-tree` its tree on `start_commit`: the final branch is base + exactly
   one commit (re-completion moves a final branch the task recorded, with
@@ -282,8 +301,9 @@ sequences and rejected alternatives are in `tasks/git-branch-per-task/design`.
 - **Rollback.** Every flow is preflight, then journaled ref/index/record/
   pointer mutations (`gitTxn`), then one worktree-changing `switch` or
   `reset --keep`, then an explicit `index.Load()`. Any failure rolls the
-  journal back: refs, HEAD, index, worktree, records and pointer end up as
-  they were. Fault-injection tests fail every mutating step in turn.
+  journal back: refs, HEAD, index, worktree, records, pointer and phase
+  records end up as they were. Fault-injection tests fail every mutating step
+  in turn, and the phase-file write too.
 - **`update_task` guard.** Refuses `todo → in_progress`, closing an
   `in_progress` task that has a branch, and `done → in_progress` for one;
   reopening to `todo` is allowed and keeps the branch fields.
@@ -298,24 +318,55 @@ with any resolution moves it to the still-open parent of a subtask, or removes
 it — only when it names a task that call closed. `get_current_task` reads it
 (archived tasks included). It is written in both modes and journaled with the
 rest of a flow. `.users` is skipped by every scan and reserved as an id; this
-repository gitignores `tasks/.users/`.
+repository gitignores `tasks/.users/`. Every successful `start_phase` points
+the user at its task too; `finish_phase` leaves the pointer alone.
+
+### Phase records
+
+One server-owned YAML file per phase, `<tasks_dir>/<id>/<phase>.phase`
+(`research`, `design`, `planning`, `implementation`), holding every run of
+that phase: `started_at`, `started_by`, and once finished `finished_at`,
+`finished_by`, `tokens` (caller-reported, optional) and `note`. Written only
+through `task.PhaseStore` (`storage/phase.go`); `version: 1`, a newer version
+is refused, the file name wins over its `phase` key. Subtasks have their own.
+
+- **`start_phase(phase, id?)`** (id defaults to the current task) appends a
+  run, never overwrites. Refused, before anything changes: archived or done
+  tasks; any open run of the task (one at a time); a phase whose predecessor
+  has no finished run (migration escape: a task with no `.phase` file at all
+  may start any phase its artifact names prove); a done parent; a blocked
+  `todo` task. A re-run after later phases is allowed and moves the lane back.
+- **Status.** On a `todo` task any phase moves it (and a `todo` parent) to
+  `in_progress`, record-only and without git; implementation under git
+  branching runs the branch flows (see Git branching). The run is appended
+  inside the same journaled flow, before the worktree changes.
+- **`finish_phase(phase, id?, tokens?, note?)`** stamps the open run; tokens
+  must be an integer from 0 to 1e15. No status, pointer or git change; allowed
+  on done tasks.
+- **`complete_task`** finishes every open run of every task it closes
+  (cascaded subtasks and an auto-completed parent included), without tokens
+  and with the note `closed by complete_task (<resolution>)`, journaled.
+  `update_task` to done leaves runs open.
+- **Reading.** `get_task` returns `phases`; `get_current_task` does not. An
+  unreadable record is reported by the phase tools ("fix or delete it"),
+  skipped by the board and the detail view, and left open by `complete_task`.
 
 ## MCP Tools
 
 ### Task Management
 | Tool | Description |
 |------|-------------|
-| `create_task` | Create a new task with title, description, priority, type, optional `parent_id` for subtasks, and optional `id` for a caller-supplied custom task id |
+| `create_task` | Create a new task with title, description, priority, type, optional `parent_id` for subtasks, and optional `id` for a caller-supplied custom task id; stamps `created_by` |
 | `update_task` | Modify task fields, including `resolution` / `resolution_note` (closes the task) and `verified` (stamps `verified_at`). Under git branching, refuses status moves that belong to `start_task` / `complete_task` |
 | `list_tasks` | List tasks with optional filters (status, priority, type, parent_id, resolution, archived); top-level tasks by default |
-| `get_task` | Get full details of a task by ID (includes subtasks for parent tasks; falls back to archive) |
+| `get_task` | Get full details of a task by ID (includes subtasks for parent tasks, `created_by` and the `phases` run history; falls back to archive) |
 | `delete_task` | Remove a task; use `delete_subtasks: true` to cascade delete subtasks |
 | `archive_task` | Archive a completed task (moves its directory, including attached files, to `tasks/archive/`) |
 
 ### Attached Files
 | Tool | Description |
 |------|-------------|
-| `write_task_file` | Create or overwrite a named text file attached to a task (rejected for archived tasks) |
+| `write_task_file` | Create or overwrite a named text file attached to a task (rejected for archived tasks and for reserved `*.phase` names) |
 | `read_task_file` | Read the content of a named file attached to a task (works for active and archived tasks) |
 | `list_task_files` | List the names of all files attached to a task (works for active and archived tasks) |
 
@@ -334,9 +385,11 @@ repository gitignores `tasks/.users/`.
 | Tool | Description |
 |------|-------------|
 | `get_next_task` | Returns highest priority `todo` task (skips parents with incomplete subtasks and blocked tasks) |
-| `start_task` | Move task from `todo` to `in_progress` (auto-starts parent if subtask; refuses if blocked) and point the current-task pointer at it. Under git branching: create and check out its wip branch, or restart (rebase and check out) an existing one |
-| `complete_task` | Close a task: `in_progress` → `done` (auto-completes parent if last subtask; triggers auto-archive if enabled). With a `resolution` other than `completed` it also accepts a `todo` task and closes its open subtasks along with it. Under git branching: squash onto the final branch (or merge into the parent's wip) with optional `commit_message`, or save a safety commit and return to the base |
+| `start_task` | Move task from `todo` to `in_progress` (auto-starts parent if subtask; refuses if blocked) and point the current-task pointer at it; writes no phase records. Under git branching: create and check out its wip branch, or restart (rebase and check out) an existing one; an `in_progress` task without a branch is refused with a hint to use `start_phase implementation` |
+| `complete_task` | Close a task: `in_progress` → `done` (auto-completes parent if last subtask; triggers auto-archive if enabled). With a `resolution` other than `completed` it also accepts a `todo` task and closes its open subtasks along with it. Finishes every open phase run of each task it closes. Under git branching: squash onto the final branch (or merge into the parent's wip) with optional `commit_message`, or save a safety commit and return to the base |
 | `get_current_task` | Return the task the calling user's current-task pointer names; "No current task" when there is none |
+| `start_phase` | Start a run of a delivery phase (`research`, `design`, `planning`, `implementation`) on a task (`id`, default the current task) and record it in `<phase>.phase`; moves a `todo` task to `in_progress` and points the current-task pointer at it. `implementation` under git branching does the `start_task` branch work (cutting a branchless parent's wip for a subtask) |
+| `finish_phase` | Finish the open run of a phase with optional `tokens` and `note`; no status or git change |
 
 ## Configuration
 
@@ -420,7 +473,8 @@ mcp-task-manager/
 │   │   ├── storage.go           # Storage interface
 │   │   ├── markdown.go          # Markdown file operations (per-task directory layout)
 │   │   ├── migrate.go           # Legacy flat-layout migration
-│   │   ├── files.go             # Attached-file read/write/list
+│   │   ├── files.go             # Attached-file read/write/list, reserved names
+│   │   ├── phase.go             # <phase>.phase records (task.PhaseStore), YAML codec
 │   │   ├── current.go           # Per-user current-task pointer (.users/<user>/current_task)
 │   │   └── index.go             # In-memory index over the task directories
 │   ├── task/
@@ -432,7 +486,9 @@ mcp-task-manager/
 │   │   ├── branching_complete.go # Delivered / subtask / abandoned completion, parent gate
 │   │   ├── branching_restart.go # Restart: replay the wip onto its parent line
 │   │   ├── current.go           # CurrentTask and the pointer rules
-│   │   ├── phase.go             # Workflow phase of an in-progress task, from its attached file names
+│   │   ├── phase.go             # Phase names, order, reserved *.phase names; name-based fallback derivation
+│   │   ├── phaserecord.go       # PhaseRun, PhaseRecord, PhaseSummary
+│   │   ├── phaseflow.go         # StartPhase, FinishPhase, the one phase loader; open runs closed on completion
 │   │   └── view.go              # Board/detail composites for read-only consumers
 │   ├── testsupport/
 │   │   ├── testsupport.go       # Shared test backlog helpers (NewBacklog, Seed, IsolateEnv)
@@ -487,7 +543,7 @@ mcp-task-manager/
 - A single `sync.Mutex` on `task.Service` serializes every task operation. It is the only lock over the index and the markdown storage, both of which are reachable solely through that type.
 - **Twin discipline:** exported methods lock once on entry and delegate to an unexported, unlocked twin (`Get`/`get`, `Update`/`update`, …). Service methods never call each other's exported forms — Go mutexes are not reentrant. `TestServiceNoSelfDeadlock` fails if a new method breaks the shape.
 - `EnsureProjectExists`, `ProjectFound`, `Config` and `BranchingEnabled` are deliberately unlocked: they read only write-once fields.
-- Git runs inside `StartTask` / `CompleteTask` while the lock is held, so a flow's ref, record and pointer changes are atomic to every other call; web reads wait for it (each git command has a 60 s timeout).
+- Git runs inside `StartTask` / `StartPhase` / `CompleteTask` while the lock is held, so a flow's ref, record, pointer and phase-record changes are atomic to every other call; web reads wait for it (each git command has a 60 s timeout). `StartPhase` and `FinishPhase` follow the twin discipline and are in `TestServiceNoSelfDeadlock` and `TestServiceRace`.
 - The lock matters because mcp-go's stdio server dispatches tool calls across a worker pool, and because the web dashboard reads the same service concurrently. `go test -race` covers both (`internal/task/concurrency_test.go`, `internal/web/race_test.go`).
 - File writes are atomic (write to temp file, then rename)
 - Cross-process coordination (file locks, PID files) stays out of scope: whichever transport the process runs, the other comes up inside it.
@@ -499,6 +555,8 @@ mcp-task-manager/
 - Type: must be in configured list (default: `feature`, `bug`)
 - Relation type: must be in configured list (default: `blocked_by`, `relates_to`, `duplicate_of`, `superseded_by`)
 - Resolution: `completed` | `obsolete` | `superseded` | `duplicate` | `wontfix`; only valid on a `done` task
+- Phase: `research` | `design` | `planning` | `implementation`; tokens a non-negative integer (at most 1e15)
+- Attached filenames: `{id}.md` and anything ending in `.phase` are reserved for writes
 - Config: `applyDefaults` fills in what a partially written YAML section left out, so a half-specified `web:` or `auto_archive:` block cannot silently zero the rest
 
 ## Future Considerations (Post-MVP)

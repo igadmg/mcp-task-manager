@@ -223,3 +223,44 @@ func assertStringProperty(t *testing.T, properties map[string]any, name, wantDes
 		}
 	}
 }
+
+// TestCreatedByInTaskResponses checks that get_task and list_tasks report
+// the server-stamped creator.
+func TestCreatedByInTaskResponses(t *testing.T) {
+	rs, svc, _ := testsupport.NewBacklog(t) // identity "dev"
+	testsupport.Seed(t, svc, testsupport.TaskSpec{ID: "work", Title: "Work"})
+
+	get := mcp.CallToolRequest{}
+	get.Params.Arguments = map[string]any{"id": "work"}
+	result, err := getTaskHandler(rs)(context.Background(), get)
+	if err != nil {
+		t.Fatalf("getTaskHandler() error = %v", err)
+	}
+	if text := resultText(t, result); !strings.Contains(text, `"created_by": "dev"`) {
+		t.Errorf("get_task response lacks created_by:\n%s", text)
+	}
+
+	result, err = listTasksHandler(rs)(context.Background(), mcp.CallToolRequest{})
+	if err != nil {
+		t.Fatalf("listTasksHandler() error = %v", err)
+	}
+	if text := resultText(t, result); !strings.Contains(text, `"created_by": "dev"`) {
+		t.Errorf("list_tasks response lacks created_by:\n%s", text)
+	}
+}
+
+func TestWriteTaskFileRefusesPhaseFile(t *testing.T) {
+	rs, svc, _ := testsupport.NewBacklog(t)
+	testsupport.Seed(t, svc, testsupport.TaskSpec{ID: "work", Title: "Work"})
+
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"task_id": "work", "filename": "research.phase", "content": "x"}
+	result, err := writeTaskFileHandler(rs)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("writeTaskFileHandler() error = %v", err)
+	}
+	if !result.IsError || !strings.Contains(resultText(t, result), "is reserved") {
+		t.Errorf("write_task_file(research.phase) = %q (error %v), want a reserved-name tool error",
+			resultText(t, result), result.IsError)
+	}
+}

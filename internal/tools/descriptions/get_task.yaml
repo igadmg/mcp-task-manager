@@ -1,3 +1,6 @@
-description: Get a task by ID
+description: >-
+  Get a task by ID, with created_by (who created it), its subtasks and
+  blockers, and phases: the history of every phase run (start, finish, user,
+  tokens). Falls back to the archive.
 params:
   id: Task ID

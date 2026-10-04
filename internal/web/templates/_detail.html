@@ -99,6 +99,21 @@
   </section>
   {{ end }}
 
+  {{ if .Phases }}
+  <section class="mt-5">
+    <h2 class="text-xs font-semibold uppercase tracking-wider text-neutral-400">Phases{{ if .TotalTokens }} <span class="meta ml-1 normal-case tracking-normal">{{ .TotalTokens }} tokens</span>{{ end }}</h2>
+    <div class="phase-runs mt-2">
+      {{ range .Phases }}{{ $phase := .Phase }}{{ range .Runs }}
+      <span class="meta text-neutral-300">{{ $phase }} #{{ .N }}</span>
+      <span class="meta truncate">{{ .Started }}{{ if .StartedBy }} by {{ .StartedBy }}{{ end }}</span>
+      <span class="meta truncate">{{ if not .Finished }}<span class="chip chip-live">open</span>{{ else }}{{ .Finished }}{{ if .FinishedBy }} by {{ .FinishedBy }}{{ end }}{{ end }}</span>
+      <span class="meta text-right" title="{{ .TokensExact }}">{{ .Tokens }}</span>
+      {{ if .Note }}<span class="phase-note meta italic">{{ .Note }}</span>{{ end }}
+      {{ end }}{{ end }}
+    </div>
+  </section>
+  {{ end }}
+
   {{ if .Files }}
   <section class="mt-5">
     <h2 class="text-xs font-semibold uppercase tracking-wider text-neutral-400">Attached files</h2>
@@ -109,7 +124,8 @@
   {{ end }}
 
   <dl class="mt-5 grid grid-cols-2 gap-x-4 gap-y-1 border-t border-white/5 pt-4">
-    <dt class="meta">created</dt><dd class="meta text-neutral-400">{{ .CreatedAt }}</dd>
+    <dt class="meta">created</dt><dd class="meta text-neutral-400">{{ .Card.CreatedAt }}</dd>
+    {{ if .Card.CreatedBy }}<dt class="meta">created by</dt><dd class="meta text-neutral-400">{{ .Card.CreatedBy }}</dd>{{ end }}
     <dt class="meta">updated</dt><dd class="meta text-neutral-400">{{ .UpdatedAt }}</dd>
     {{ if .ClosedAt }}<dt class="meta">closed</dt><dd class="meta text-neutral-400">{{ .ClosedAt }}</dd>{{ end }}
     {{ if .VerifiedAt }}<dt class="meta">verified</dt><dd class="meta text-neutral-400">{{ .VerifiedAt }}</dd>{{ end }}

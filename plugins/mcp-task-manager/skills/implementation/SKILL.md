@@ -34,7 +34,7 @@ Use this skill to execute one approved change phase in this project.
 - Never hand-edit generated files; change the inputs that drive generation and regenerate.
 - Keep code-generation directives centralized, following this project's convention.
 - Use ASCII by default and keep documentation updates in English.
-- Do not commit, push, or tag unless the user explicitly asked for it. Under git branching, the commits `start_task` and `complete_task` make are part of the task lifecycle, not agent commits.
+- Do not commit, push, or tag unless the user explicitly asked for it. Under git branching, the commits `start_phase` (implementation), `start_task` and `complete_task` make are part of the task lifecycle, not agent commits.
 
 ## Mandatory Verification
 

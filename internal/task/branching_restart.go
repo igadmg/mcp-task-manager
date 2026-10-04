@@ -15,8 +15,9 @@ type restartTarget struct {
 // the branch is replayed onto the current tip of its parent line - the
 // base branch, or the parent's wip for a subtask - and checked out.
 // Nothing is lost: uncommitted work on t's own wip is checkpointed first,
-// and a conflicting replay changes nothing at all.
-func (s *Service) restartBranched(t *Task) (*Task, error) {
+// and a conflicting replay changes nothing at all. extra runs inside the
+// flow, after the pointer moves and before the worktree does.
+func (s *Service) restartBranched(t *Task, extra flowStep) (*Task, error) {
 	if t.Status == StatusTodo {
 		if err := s.blockedError(t.ID); err != nil {
 			return nil, err
@@ -37,7 +38,7 @@ func (s *Service) restartBranched(t *Task) (*Task, error) {
 	if t.ParentID == "" {
 		target.onto, target.ontoTip, err = s.baseFor(t)
 	} else {
-		line, err = s.parentLineFor(t, h)
+		line, err = s.parentLineFor(t, h, false)
 		target.onto = line.branch
 		if err == nil && line.step == nil {
 			target.ontoTip, err = s.lineTip(line.branch)
@@ -83,7 +84,7 @@ func (s *Service) restartBranched(t *Task) (*Task, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := s.setPointer(&txn, t.ID); err != nil {
+		if err := s.pointAndRun(&txn, t.ID, extra); err != nil {
 			return nil, err
 		}
 		if !onWip {
@@ -162,9 +163,10 @@ type parentLine struct {
 }
 
 // parentLineFor resolves subtask t's parent line. A parent in progress
-// must have a live wip branch; a todo parent is started fresh, or
-// restarted in place when its branch still exists.
-func (s *Service) parentLineFor(t *Task, h headState) (parentLine, error) {
+// must have a live wip branch - or, with cutParent, none at all, and then
+// its wip is cut in the journal like a todo parent's; a todo parent is
+// started fresh, or restarted in place when its branch still exists.
+func (s *Service) parentLineFor(t *Task, h headState, cutParent bool) (parentLine, error) {
 	p, err := s.get(t.ParentID)
 	if err != nil {
 		return parentLine{}, fmt.Errorf("parent task not found: %s", t.ParentID)
@@ -173,6 +175,9 @@ func (s *Service) parentLineFor(t *Task, h headState) (parentLine, error) {
 	case StatusDone:
 		return parentLine{}, fmt.Errorf("parent task %s is done; reopen it before starting subtask %s", p.ID, t.ID)
 	case StatusInProgress:
+		if p.Branch == "" && cutParent {
+			return s.freshParentLine(p)
+		}
 		if p.Branch == "" {
 			return parentLine{}, fmt.Errorf("parent %s has no branch; start it first", p.ID)
 		}
@@ -207,6 +212,13 @@ func (s *Service) parentLineFor(t *Task, h headState) (parentLine, error) {
 		}
 	}
 
+	return s.freshParentLine(p)
+}
+
+// freshParentLine cuts parent p's wip branch at the base tip inside the
+// journal and records it on p, which leaves - or moves - p in progress.
+// p gets no phase run.
+func (s *Service) freshParentLine(p *Task) (parentLine, error) {
 	plan, err := s.planFresh(p)
 	if err != nil {
 		return parentLine{}, fmt.Errorf("starting parent task %s: %w", p.ID, err)

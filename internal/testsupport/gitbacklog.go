@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -153,7 +154,10 @@ type State struct {
 	Status  string
 	Files   map[string]string // code-repo dirty path -> content hash, outside the tasks dir
 	Records map[string]task.Task
-	Pointer string // "<absent>" or the file's content
+	// Attached is every non-record file in the active and archived task
+	// directories ("<dir>/<name>" relative to the tasks dir -> content hash).
+	Attached map[string]string
+	Pointer  string // "<absent>" or the file's content
 	// TasksRepo is the tasks repository's HEAD, log and index tree.
 	TasksRepo string
 }
@@ -201,6 +205,8 @@ func CaptureState(t *testing.T, b *GitBacklog) State {
 		}
 	}
 
+	s.Attached = attachedFiles(t, b.TasksDir)
+
 	s.Pointer = "<absent>"
 	if data, err := os.ReadFile(b.PointerPath()); err == nil {
 		s.Pointer = string(data)
@@ -214,6 +220,46 @@ func CaptureState(t *testing.T, b *GitBacklog) State {
 		}, "\n")
 	}
 	return s
+}
+
+// attachedFiles hashes every regular file other than a task's own {id}.md
+// record, leftovers such as *.tmp included, in the task directories under
+// tasksDir and tasksDir/archive. The .users directory is not a task.
+func attachedFiles(t *testing.T, tasksDir string) map[string]string {
+	t.Helper()
+	files := map[string]string{}
+	for _, root := range []string{"", "archive"} {
+		entries, err := os.ReadDir(filepath.Join(tasksDir, root))
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			t.Fatalf("reading %s: %v", filepath.Join(tasksDir, root), err)
+		}
+		for _, dir := range entries {
+			name := dir.Name()
+			if !dir.IsDir() || (root == "" && (name == "archive" || name == storage.UsersDirName)) {
+				continue
+			}
+			rel := path.Join(root, name)
+			inner, err := os.ReadDir(filepath.Join(tasksDir, rel))
+			if err != nil {
+				t.Fatalf("reading %s: %v", rel, err)
+			}
+			for _, f := range inner {
+				if !f.Type().IsRegular() || f.Name() == name+".md" {
+					continue
+				}
+				data, err := os.ReadFile(filepath.Join(tasksDir, rel, f.Name()))
+				if err != nil {
+					t.Fatalf("reading %s/%s: %v", rel, f.Name(), err)
+				}
+				sum := sha256.Sum256(data)
+				files[rel+"/"+f.Name()] = hex.EncodeToString(sum[:])
+			}
+		}
+	}
+	return files
 }
 
 func headOf(t *testing.T, dir string) string {
@@ -256,6 +302,7 @@ func RequireStateEqual(t *testing.T, before, after State) {
 		{"worktree status", before.Status, after.Status},
 		{"worktree files", before.Files, after.Files},
 		{"task records", before.Records, after.Records},
+		{"attached files", before.Attached, after.Attached},
 		{"current-task pointer", before.Pointer, after.Pointer},
 		{"tasks repository", before.TasksRepo, after.TasksRepo},
 	} {

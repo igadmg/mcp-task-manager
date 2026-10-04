@@ -4,7 +4,8 @@ description: |
   "completed" to close a task whose work is not going to happen - that form
   also accepts a todo task and closes its open subtasks along with it.
   Closing your current task moves your current-task pointer to its open
-  parent, or clears it.
+  parent, or clears it. Every open phase run of each task it closes is
+  finished too, without tokens (finish_phase first to record them).
 
   When git branching is enabled and the task has a branch, the server
   commits and switches for you - do not commit code or switch yourself:

@@ -60,3 +60,17 @@ func TestCompleteCommandMessageFlag(t *testing.T) {
 		t.Errorf("HEAD = %q", got)
 	}
 }
+
+func TestStartPhaseCommandPrintsBranch(t *testing.T) {
+	gitProject(t)
+	run(t, "create", "Add login", "--id", "login")
+	for _, p := range []string{"research", "design", "planning"} {
+		if out := run(t, "start-phase", "login", p); strings.Contains(out, "branch") {
+			t.Errorf("start-phase %s cut a branch: %q", p, out)
+		}
+		run(t, "finish-phase", "login", p)
+	}
+	if out := run(t, "start-phase", "login", "implementation"); out != "Started phase implementation of task login (run 1) on branch dev/wip/login.\n" {
+		t.Errorf("start-phase implementation output = %q", out)
+	}
+}

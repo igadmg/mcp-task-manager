@@ -95,13 +95,17 @@ func commitMessageFor(t *Task, o updateOpts) string {
 	return commitMessage(t, override)
 }
 
-// completeRecords closes t's records and moves the pointer, journaled.
+// completeRecords closes t's records, moves the pointer and finishes the
+// open phase runs of every task it closed, journaled.
 func (s *Service) completeRecords(txn *gitTxn, t *Task, subtasks []*Task, resolution Resolution, opts []UpdateOption) (*Task, error) {
 	done, closed, openParent, err := s.completeTaskRecords(txn, t, subtasks, resolution, opts)
 	if err != nil {
 		return nil, err
 	}
-	return done, s.clearPointerIf(txn, openParent, closed...)
+	if err := s.clearPointerIf(txn, openParent, closed...); err != nil {
+		return nil, err
+	}
+	return done, s.closeOpenRuns(txn, closed, fmt.Sprintf("closed by complete_task (%s)", resolution))
 }
 
 // completeDelivered squashes t's wip branch into a single commit on top of

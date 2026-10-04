@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/gpayer/mcp-task-manager/internal/task"
 )
 
 // validatePathSegment holds the three checks common to both attached
@@ -26,7 +28,8 @@ func validatePathSegment(label, name string) error {
 
 // validateFilename rejects filenames that are empty, contain a path
 // separator or a ".." traversal segment, or (when checkReserved is true)
-// collide with the task's own reserved "{id}.md" record file. Attached
+// collide with the task's own reserved "{id}.md" record file or a
+// server-owned "*.phase" record (task.IsReservedFileName). Attached
 // filenames are caller-controlled and joined directly into a filesystem
 // path, so this is the one validation this feature needs.
 func validateFilename(id string, filename string, checkReserved bool) error {
@@ -35,6 +38,9 @@ func validateFilename(id string, filename string, checkReserved bool) error {
 	}
 	if checkReserved && filename == fmt.Sprintf("%s.md", id) {
 		return fmt.Errorf("filename %q is reserved for the task record itself", filename)
+	}
+	if checkReserved && task.IsReservedFileName(filename) {
+		return fmt.Errorf("filename %q is reserved: phase files are written only by start_phase/finish_phase", filename)
 	}
 	return nil
 }

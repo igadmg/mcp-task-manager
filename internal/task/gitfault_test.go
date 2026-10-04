@@ -133,6 +133,34 @@ func (f *failingStore) WriteCurrentTask(user, id string) error {
 	return f.CurrentTaskStore.WriteCurrentTask(user, id)
 }
 
+// failingPhaseStore wraps a PhaseStore whose next SavePhase fails once
+// armed; the rollback's own writes then pass through.
+type failingPhaseStore struct {
+	task.PhaseStore
+	armed bool
+}
+
+func (f *failingPhaseStore) SavePhase(id string, rec *task.PhaseRecord) error {
+	if f.armed {
+		f.armed = false
+		return fmt.Errorf("SavePhase: %w", errInjected)
+	}
+	return f.PhaseStore.SavePhase(id, rec)
+}
+
+// newPhaseFaultBacklog is newFaultBacklog with the phase store wrapped too,
+// all disarmed.
+func newPhaseFaultBacklog(t *testing.T, layout testsupport.Layout) (*testsupport.GitBacklog, *failingGit, *failingPhaseStore) {
+	t.Helper()
+	fg, fs, fp := &failingGit{}, &failingStore{}, &failingPhaseStore{}
+	b := testsupport.NewGitBacklog(t, layout, task.WithGit(fg), task.WithCurrentTaskStore(fs), task.WithPhaseStore(fp))
+	fg.GitRepo = vcs.New(b.CodeDir, b.TasksDir)
+	st := storage.NewMarkdownStorage(b.TasksDir)
+	fs.CurrentTaskStore = st
+	fp.PhaseStore = st
+	return b, fg, fp
+}
+
 // newFaultBacklog is a git backlog whose repository and pointer store are
 // wrapped for fault injection, both disarmed.
 func newFaultBacklog(t *testing.T, layout testsupport.Layout) (*testsupport.GitBacklog, *failingGit, *failingStore) {
@@ -238,5 +266,26 @@ func requireNoServerCommitInTasks(t *testing.T, b *testsupport.GitBacklog) {
 	}
 	if got != want {
 		t.Errorf("commits touching %s: %q, want %q", rel, got, want)
+	}
+}
+
+// TestCaptureStateSeesAttachedFiles proves the fault-injection oracle sees
+// a file a flow leaves behind in a task directory.
+func TestCaptureStateSeesAttachedFiles(t *testing.T) {
+	b := testsupport.NewGitBacklog(t, testsupport.TasksInRepoTracked)
+	mustCreate(t, b, "a", "")
+
+	before := testsupport.CaptureState(t, b)
+	testsupport.RequireStateEqual(t, before, testsupport.CaptureState(t, b))
+
+	if err := b.Svc.WriteTaskFile("a", "notes", "x"); err != nil {
+		t.Fatalf("WriteTaskFile() error = %v", err)
+	}
+	after := testsupport.CaptureState(t, b)
+	if _, ok := after.Attached["a/notes"]; !ok {
+		t.Fatalf("Attached = %v, want a/notes", after.Attached)
+	}
+	if len(before.Attached) != 0 {
+		t.Errorf("before.Attached = %v, want empty", before.Attached)
 	}
 }

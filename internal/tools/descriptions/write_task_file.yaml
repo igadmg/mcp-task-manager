@@ -1,5 +1,8 @@
-description: Create or overwrite a named text file attached to a task
+description: >-
+  Create or overwrite a named text file attached to a task. Names ending in
+  .phase are reserved for the server's phase records (start_phase /
+  finish_phase) and are refused.
 params:
   task_id: Task ID
-  filename: Name of the attached file
+  filename: Name of the attached file (not {id}.md, not *.phase)
   content: File content

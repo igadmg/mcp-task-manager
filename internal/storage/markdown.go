@@ -53,6 +53,7 @@ func (s *MarkdownStorage) Save(t *task.Task) error {
 		Type           string          `yaml:"type"`
 		Relations      []task.Relation `yaml:"relations,omitempty"`
 		CreatedAt      string          `yaml:"created_at"`
+		CreatedBy      string          `yaml:"created_by,omitempty"`
 		UpdatedAt      string          `yaml:"updated_at"`
 		Resolution     task.Resolution `yaml:"resolution,omitempty"`
 		ResolutionNote string          `yaml:"resolution_note,omitempty"`
@@ -71,8 +72,9 @@ func (s *MarkdownStorage) Save(t *task.Task) error {
 		Priority:       t.Priority,
 		Type:           t.Type,
 		Relations:      t.Relations,
-		CreatedAt:      t.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		UpdatedAt:      t.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		CreatedAt:      t.CreatedAt.Format(timeLayout),
+		CreatedBy:      t.CreatedBy,
+		UpdatedAt:      t.UpdatedAt.Format(timeLayout),
 		Resolution:     t.Resolution,
 		ResolutionNote: t.ResolutionNote,
 		ClosedAt:       formatTime(t.ClosedAt),
@@ -187,6 +189,7 @@ func (s *MarkdownStorage) parse(data []byte) (*task.Task, error) {
 		Type           string          `yaml:"type"`
 		Relations      []task.Relation `yaml:"relations"`
 		CreatedAt      string          `yaml:"created_at"`
+		CreatedBy      string          `yaml:"created_by"`
 		UpdatedAt      string          `yaml:"updated_at"`
 		Resolution     string          `yaml:"resolution"`
 		ResolutionNote string          `yaml:"resolution_note"`
@@ -225,6 +228,7 @@ func (s *MarkdownStorage) parse(data []byte) (*task.Task, error) {
 		Type:           fm.Type,
 		Relations:      fm.Relations,
 		CreatedAt:      createdAt,
+		CreatedBy:      fm.CreatedBy,
 		UpdatedAt:      updatedAt,
 		Resolution:     task.Resolution(fm.Resolution),
 		ResolutionNote: fm.ResolutionNote,
@@ -238,13 +242,17 @@ func (s *MarkdownStorage) parse(data []byte) (*task.Task, error) {
 	}, nil
 }
 
+// timeLayout is how every timestamp the storage writes is rendered: the
+// task frontmatter and the phase records alike.
+const timeLayout = "2006-01-02T15:04:05Z07:00"
+
 // formatTime renders an optional timestamp for the frontmatter, yielding ""
 // for a missing one so the yaml omitempty tag drops the key entirely.
 func formatTime(t *time.Time) string {
 	if t == nil {
 		return ""
 	}
-	return t.Format("2006-01-02T15:04:05Z07:00")
+	return t.Format(timeLayout)
 }
 
 // parseOptionalTime is parseTime for a key that may be absent: an empty or
@@ -264,7 +272,7 @@ func parseOptionalTime(s string) *time.Time {
 // parseTime tries multiple time formats
 func parseTime(s string) (t time.Time, err error) {
 	formats := []string{
-		"2006-01-02T15:04:05Z07:00",
+		timeLayout,
 		"2006-01-02T15:04:05Z",
 		"2006-01-02",
 	}

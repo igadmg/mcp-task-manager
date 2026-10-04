@@ -481,3 +481,62 @@ func TestBoardEmptyInProgressShowsFourStubs(t *testing.T) {
 		t.Errorf("board shows %d empty placeholders, want 1 (Done only)", n)
 	}
 }
+
+func TestBoardShowsPhaseFromRecords(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedBoard(t, svc)
+	// Task 3 is in progress with a design artifact, so the names alone
+	// would put it in Planning; its records put it in Design.
+	if err := svc.WriteTaskFile("3", "design", "x"); err != nil {
+		t.Fatalf("WriteTaskFile() error = %v", err)
+	}
+	if _, _, err := svc.StartPhase("3", task.PhaseResearch); err != nil {
+		t.Fatalf("StartPhase(research) error = %v", err)
+	}
+	tokens := int64(81234)
+	if _, _, err := svc.FinishPhase("3", task.PhaseResearch, task.PhaseFinish{Tokens: &tokens}); err != nil {
+		t.Fatalf("FinishPhase(research) error = %v", err)
+	}
+	if _, _, err := svc.StartPhase("3", task.PhaseDesign); err != nil {
+		t.Fatalf("StartPhase(design) error = %v", err)
+	}
+
+	body := get(t, h, "/board").Body.String()
+	design := laneSection(t, body, "design")
+	for _, want := range []string{"Fix the index", "design &middot; started ", " by dev</span>", ">81.2k tok</span>", `title="81234 tokens"`, "created "} {
+		if !strings.Contains(design, want) {
+			t.Errorf("design lane is missing %q:\n%s", want, design)
+		}
+	}
+	if strings.Contains(laneSection(t, body, "planning"), "Fix the index") {
+		t.Error("the file names still decide the lane")
+	}
+
+	detail := get(t, h, "/tasks/3").Body.String()
+	for _, want := range []string{`class="phase-runs`, "research #1", "design #1", "81.2k tokens", `<span class="chip chip-live">open</span>`, "created by"} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("detail is missing %q", want)
+		}
+	}
+	if strings.Contains(detail, `<li class="chip chip-muted">research.phase</li>`) {
+		t.Error("detail lists a phase record as an attached file")
+	}
+}
+
+func TestPhaseNoteEscaped(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedBoard(t, svc)
+	if _, _, err := svc.StartPhase("3", task.PhaseResearch); err != nil {
+		t.Fatalf("StartPhase() error = %v", err)
+	}
+	if _, _, err := svc.FinishPhase("3", task.PhaseResearch, task.PhaseFinish{Note: "<script>alert(1)</script>"}); err != nil {
+		t.Fatalf("FinishPhase() error = %v", err)
+	}
+	body := get(t, h, "/tasks/3").Body.String()
+	if strings.Contains(body, "<script>alert(1)</script>") {
+		t.Error("a phase note is rendered unescaped")
+	}
+	if !strings.Contains(body, "&lt;script&gt;alert(1)&lt;/script&gt;") {
+		t.Error("the escaped note is missing")
+	}
+}

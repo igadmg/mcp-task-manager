@@ -1,6 +1,7 @@
 description: |
   Move a task from todo to in_progress, and make it your current task (see
-  get_current_task).
+  get_current_task). Workflows that track delivery phases use start_phase
+  instead; start_task writes no phase records.
 
   When git branching is enabled (git.branching in mcp-tasks.yaml), the server
   also does the branch work - do not create or switch branches yourself:
@@ -16,6 +17,8 @@ description: |
     commit first; uncommitted code on the base branch is carried to the new
     branch; uncommitted code on any other branch refuses the start. Changes
     under the tasks directory never count.
+  - A task that is in progress without a branch (it went through phases that
+    do not branch) is refused: start_phase with phase implementation cuts it.
   The result's branch field names the branch you are now on.
 params:
   id: Task ID to start

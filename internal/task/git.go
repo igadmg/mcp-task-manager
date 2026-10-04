@@ -49,6 +49,18 @@ type CurrentTaskStore interface {
 	RemoveCurrentTask(user string) error
 }
 
+// PhaseStore keeps a task's server-owned phase records, one <phase>.phase
+// file per phase in the task's directory.
+type PhaseStore interface {
+	// LoadPhase returns nil, nil when the task has no record for p. It
+	// reads the active directory first, then the archive.
+	LoadPhase(taskID string, p Phase) (*PhaseRecord, error)
+	// SavePhase writes rec into the active task's directory, atomically.
+	SavePhase(taskID string, rec *PhaseRecord) error
+	// RemovePhase deletes the record; a missing one is not an error.
+	RemovePhase(taskID string, p Phase) error
+}
+
 // ServiceOption configures optional Service collaborators.
 type ServiceOption func(*Service)
 
@@ -67,4 +79,10 @@ func WithIdentity(id Identity) ServiceOption {
 // one, no pointer is kept.
 func WithCurrentTaskStore(c CurrentTaskStore) ServiceOption {
 	return func(s *Service) { s.current = c }
+}
+
+// WithPhaseStore sets where phase records are kept. Without one, the phase
+// tools are unavailable and completion and the views skip phases.
+func WithPhaseStore(ps PhaseStore) ServiceOption {
+	return func(s *Service) { s.phases = ps }
 }

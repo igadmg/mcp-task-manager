@@ -1,7 +1,9 @@
 package task
 
 import (
+	"errors"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -2115,5 +2117,104 @@ func TestUpdateGuardMatrix(t *testing.T) {
 				t.Errorf("a refused update changed the task: status %s, title %q", got.Status, got.Title)
 			}
 		})
+	}
+}
+
+func TestCreateStampsCreatedBy(t *testing.T) {
+	svc, _ := newPointerService() // identity "dev"
+	parent := mustCreate(t, svc, "Parent", "")
+	if parent.CreatedBy != "dev" {
+		t.Errorf("Create().CreatedBy = %q, want dev", parent.CreatedBy)
+	}
+	sub, err := svc.CreateSubtask("Sub", "", PriorityLow, "feature", parent.ID)
+	if err != nil {
+		t.Fatalf("CreateSubtask() error = %v", err)
+	}
+	if sub.CreatedBy != "dev" {
+		t.Errorf("CreateSubtask().CreatedBy = %q, want dev", sub.CreatedBy)
+	}
+	title := "Renamed"
+	updated, err := svc.Update(parent.ID, &title, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if updated.CreatedBy != "dev" {
+		t.Errorf("Update() changed CreatedBy to %q", updated.CreatedBy)
+	}
+}
+
+func TestCreateWithoutIdentityLeavesCreatedByEmpty(t *testing.T) {
+	svc := NewService(newMockStorage(), nil, nil, newMockIndex(), []string{"feature"}, nil)
+	svc.Initialize()
+	created := mustCreate(t, svc, "Anonymous", "")
+	if created.CreatedBy != "" {
+		t.Errorf("CreatedBy = %q, want empty without an identity", created.CreatedBy)
+	}
+}
+
+// mockPhaseStore is an in-memory PhaseStore. It is lock-free on purpose,
+// like the other mocks: the service mutex must cover every access. Records
+// are copied in and out, as the file store does.
+type mockPhaseStore struct {
+	recs     map[string]*PhaseRecord
+	failSave bool
+}
+
+func newMockPhaseStore() *mockPhaseStore {
+	return &mockPhaseStore{recs: make(map[string]*PhaseRecord)}
+}
+
+func phaseKey(id string, p Phase) string { return id + "/" + string(p) }
+
+func (m *mockPhaseStore) LoadPhase(id string, p Phase) (*PhaseRecord, error) {
+	rec, ok := m.recs[phaseKey(id, p)]
+	if !ok {
+		return nil, nil
+	}
+	return rec.clone(), nil
+}
+
+func (m *mockPhaseStore) SavePhase(id string, rec *PhaseRecord) error {
+	if m.failSave {
+		return errors.New("disk full")
+	}
+	m.recs[phaseKey(id, rec.Phase)] = rec.clone()
+	return nil
+}
+
+func (m *mockPhaseStore) RemovePhase(id string, p Phase) error {
+	delete(m.recs, phaseKey(id, p))
+	return nil
+}
+
+func TestCapturePhaseUndo(t *testing.T) {
+	store := newMockPhaseStore()
+	svc := NewService(newMockStorage(), nil, nil, newMockIndex(), []string{"feature"}, nil, WithPhaseStore(store))
+	started := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+	tokens := int64(7)
+	present := &PhaseRecord{Phase: PhaseDesign, Runs: []PhaseRun{{StartedAt: started, StartedBy: "dev", Tokens: &tokens}}}
+	if err := store.SavePhase("a", present); err != nil {
+		t.Fatalf("SavePhase() error = %v", err)
+	}
+
+	var txn gitTxn
+	changed, _ := store.LoadPhase("a", PhaseDesign)
+	svc.capturePhase(&txn, "a", PhaseDesign, changed)
+	svc.capturePhase(&txn, "a", PhaseResearch, nil)
+	// Mutate both: a new run on the present record, a new absent one.
+	changed.Runs = append(changed.Runs, PhaseRun{StartedAt: started.Add(time.Hour)})
+	*changed.Runs[0].Tokens = 99
+	_ = store.SavePhase("a", changed)
+	_ = store.SavePhase("a", &PhaseRecord{Phase: PhaseResearch, Runs: []PhaseRun{{StartedAt: started}}})
+
+	if err := txn.rollback(); err != nil {
+		t.Fatalf("rollback() error = %v", err)
+	}
+	got, _ := store.LoadPhase("a", PhaseDesign)
+	if !reflect.DeepEqual(got, present) {
+		t.Errorf("design record after rollback = %+v, want %+v", got, present)
+	}
+	if got, _ := store.LoadPhase("a", PhaseResearch); got != nil {
+		t.Errorf("research record after rollback = %+v, want it removed", got)
 	}
 }

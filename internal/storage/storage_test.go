@@ -2609,3 +2609,91 @@ func TestMarkdownStorage_ResolutionRoundTrip(t *testing.T) {
 			reloaded.Resolution, reloaded.ClosedAt, reloaded.VerifiedAt)
 	}
 }
+
+func TestMarkdownStorage_CreatedByRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	s := NewMarkdownStorage(dir)
+	if err := s.EnsureDir(); err != nil {
+		t.Fatalf("EnsureDir() error = %v", err)
+	}
+
+	now := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+	stamped := &task.Task{
+		ID: "stamped", Title: "Has a creator", Status: task.StatusTodo,
+		Priority: task.PriorityLow, Type: "feature",
+		CreatedAt: now, CreatedBy: "igor.cwer", UpdatedAt: now,
+	}
+	if err := s.Save(stamped); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "stamped", "stamped.md"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !strings.Contains(string(raw), "created_at: \"2026-10-04T12:00:00Z\"\ncreated_by: igor.cwer\nupdated_at:") &&
+		!strings.Contains(string(raw), "created_at: 2026-10-04T12:00:00Z\ncreated_by: igor.cwer\nupdated_at:") {
+		t.Errorf("created_by is not written right after created_at:\n%s", raw)
+	}
+	loaded, err := s.Load("stamped")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded.CreatedBy != "igor.cwer" {
+		t.Errorf("CreatedBy = %q, want igor.cwer", loaded.CreatedBy)
+	}
+
+	// A record written before the field existed loads with an empty
+	// creator and re-saves byte-identically.
+	legacy := "---\nid: old\ntitle: Old task\nstatus: todo\npriority: low\ntype: feature\n" +
+		"created_at: \"2026-10-04T12:00:00Z\"\nupdated_at: \"2026-10-04T12:00:00Z\"\n---\n\nBody."
+	legacyPath := filepath.Join(dir, "old", "old.md")
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(legacyPath, []byte(legacy), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	old, err := s.Load("old")
+	if err != nil {
+		t.Fatalf("Load(old) error = %v", err)
+	}
+	if old.CreatedBy != "" {
+		t.Errorf("legacy CreatedBy = %q, want empty", old.CreatedBy)
+	}
+	before, _ := os.ReadFile(legacyPath)
+	if err := s.Save(old); err != nil {
+		t.Fatalf("Save(old) error = %v", err)
+	}
+	after, _ := os.ReadFile(legacyPath)
+	if string(after) != string(before) {
+		t.Errorf("legacy record changed on re-save:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+	if strings.Contains(string(after), "created_by") {
+		t.Errorf("an empty creator was written:\n%s", after)
+	}
+}
+
+func TestIndex_CarriesCreatedBy(t *testing.T) {
+	dir := t.TempDir()
+	st := NewMarkdownStorage(dir)
+	if err := st.EnsureDir(); err != nil {
+		t.Fatalf("EnsureDir() error = %v", err)
+	}
+	now := time.Now().UTC()
+	tk := &task.Task{ID: "1", Title: "One", Status: task.StatusTodo, Priority: task.PriorityHigh,
+		Type: "feature", CreatedAt: now, CreatedBy: "dev", UpdatedAt: now}
+	if err := st.Save(tk); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	idx := NewIndex(dir, st)
+	idx.Set(tk)
+
+	// All and Filter return index-only tasks: the creator must ride along.
+	if all := idx.All(); len(all) != 1 || all[0].CreatedBy != "dev" {
+		t.Fatalf("All() = %+v, want one task created by dev", all)
+	}
+	filtered := idx.Filter(nil, nil, nil, nil, nil)
+	if len(filtered) != 1 || filtered[0].CreatedBy != "dev" {
+		t.Errorf("Filter() = %+v, want one task created by dev", filtered)
+	}
+}

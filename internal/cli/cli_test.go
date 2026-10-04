@@ -2,12 +2,14 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"github.com/gpayer/mcp-task-manager/internal/config"
 	"io"
 	"os"
 	"strings"
 	"testing"
 
+	"github.com/gpayer/mcp-task-manager/internal/testsupport"
 	"github.com/integrii/flaggy"
 )
 
@@ -728,5 +730,71 @@ func isolateProjectEnv(t *testing.T) {
 	for _, name := range []string{config.EnvTasksDir, config.EnvProjectDir, config.EnvClaudeProjectDir, config.EnvRootSource} {
 		t.Setenv(name, "")
 		os.Unsetenv(name)
+	}
+}
+
+func TestStartPhaseCommand(t *testing.T) {
+	testsupport.IsolateEnv(t)
+	t.Setenv("MCP_TASKS_DIR", t.TempDir())
+	run(t, "create", "Add login", "--id", "login")
+
+	if out := run(t, "start-phase", "login", "research"); out != "Started phase research of task login (run 1).\n" {
+		t.Errorf("start-phase output = %q", out)
+	}
+	if out := run(t, "get", "login"); !strings.Contains(out, "Status:      in_progress") || !strings.Contains(out, "\nPhases:\n  research #1  started ") {
+		t.Errorf("get output lacks the started phase:\n%s", out)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := RunWithArgs([]string{"mcp-task-manager", "start-phase", "login", "testing"}, &stdout, &stderr); code != 1 ||
+		!strings.Contains(stderr.String(), `unknown phase "testing"`) {
+		t.Errorf("start-phase testing = exit %d, stderr %q", code, stderr.String())
+	}
+}
+
+func TestStartPhaseCommandJSON(t *testing.T) {
+	testsupport.IsolateEnv(t)
+	t.Setenv("MCP_TASKS_DIR", t.TempDir())
+	run(t, "create", "Add login", "--id", "login")
+
+	var got struct {
+		Message string `json:"message"`
+		ID      string `json:"id"`
+		Phase   string `json:"phase"`
+		Run     int    `json:"run"`
+	}
+	out := run(t, "start-phase", "login", "research", "--json")
+	if err := json.Unmarshal([]byte(out), &got); err != nil || got.ID != "login" || got.Phase != "research" || got.Run != 1 {
+		t.Errorf("start-phase --json = %q (%v)", out, err)
+	}
+	out = run(t, "finish-phase", "login", "research", "--tokens", "5", "--json")
+	if err := json.Unmarshal([]byte(out), &got); err != nil || got.Run != 1 || !strings.Contains(got.Message, "5 tokens") {
+		t.Errorf("finish-phase --json = %q (%v)", out, err)
+	}
+}
+
+func TestFinishPhaseCommand(t *testing.T) {
+	testsupport.IsolateEnv(t)
+	t.Setenv("MCP_TASKS_DIR", t.TempDir())
+	run(t, "create", "Add login", "--id", "login")
+	run(t, "start-phase", "login", "research")
+
+	var stdout, stderr bytes.Buffer
+	if code := RunWithArgs([]string{"mcp-task-manager", "finish-phase", "login", "research", "--tokens", "-4"}, &stdout, &stderr); code != 1 ||
+		!strings.Contains(stderr.String(), "tokens must be a non-negative integer") {
+		t.Errorf("finish-phase --tokens -4 = exit %d, stderr %q", code, stderr.String())
+	}
+
+	out := run(t, "finish-phase", "login", "research", "--tokens", "81234", "--note", "first pass")
+	if out != "Finished phase research of task login (run 1, 81234 tokens).\n" {
+		t.Errorf("finish-phase output = %q", out)
+	}
+	if out := run(t, "get", "login"); !strings.Contains(out, "  81234 tokens  (first pass)\n") {
+		t.Errorf("get output lacks the finished run:\n%s", out)
+	}
+
+	run(t, "start-phase", "login", "design")
+	if out := run(t, "finish-phase", "login", "design"); out != "Finished phase design of task login (run 1).\n" {
+		t.Errorf("finish-phase without tokens = %q", out)
 	}
 }

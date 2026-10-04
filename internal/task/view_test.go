@@ -2,7 +2,9 @@ package task
 
 import (
 	"errors"
+	"slices"
 	"testing"
+	"time"
 )
 
 // newViewService builds a service with a real (mock-backed) archive and file
@@ -302,5 +304,213 @@ func TestConfigIsTheServiceConfig(t *testing.T) {
 	}
 	if len(cfg.TaskTypes) == 0 {
 		t.Error("Config().TaskTypes is empty")
+	}
+}
+
+// phaseListingFiles lists a task's phase records next to its other files,
+// as the real file store does: the service only reads the records it sees.
+// It asks svc's current phase store, so a swapped-in broken one lists too.
+type phaseListingFiles struct {
+	*mockFileStorage
+	svc *Service
+}
+
+func (f phaseListingFiles) ListFiles(id string) ([]string, error) {
+	names, _ := f.mockFileStorage.ListFiles(id)
+	for _, p := range Phases() {
+		if rec, err := f.svc.phases.LoadPhase(id, p); err != nil || rec != nil {
+			names = append(names, PhaseFileName(p))
+		}
+	}
+	return names, nil
+}
+
+// newBoardFixture is the phase fixture, whose file listing shows the records.
+func newBoardFixture(t *testing.T) *phaseFixture {
+	t.Helper()
+	return newPhaseFixture(t)
+}
+
+// at is 2026-10-04 at hour h, UTC.
+func at(h int) time.Time { return time.Date(2026, 10, 4, h, 0, 0, 0, time.UTC) }
+
+// putRuns writes p's record directly; each run starts at the given hour,
+// and all but an open last one (open=true) are finished an hour later.
+func (f *phaseFixture) putRuns(t *testing.T, id string, p Phase, open bool, tokens *int64, hours ...int) {
+	t.Helper()
+	rec := &PhaseRecord{Phase: p}
+	for i, h := range hours {
+		run := PhaseRun{StartedAt: at(h), StartedBy: "dev"}
+		if !open || i < len(hours)-1 {
+			done := at(h + 1)
+			run.FinishedAt, run.FinishedBy, run.Tokens = &done, "dev", tokens
+		}
+		rec.Runs = append(rec.Runs, run)
+	}
+	if err := f.phases.SavePhase(id, rec); err != nil {
+		t.Fatalf("SavePhase() error = %v", err)
+	}
+}
+
+func (f *phaseFixture) snapshot(t *testing.T) *BoardSnapshot {
+	t.Helper()
+	snap, err := f.svc.BoardSnapshot()
+	if err != nil {
+		t.Fatalf("BoardSnapshot() error = %v", err)
+	}
+	return snap
+}
+
+func TestBoardLaneFromLatestRun(t *testing.T) {
+	f := newBoardFixture(t)
+	f.create(t, "a", "")
+	f.start(t, "a", PhaseResearch)
+	f.putRuns(t, "a", PhaseResearch, false, nil, 10)
+	f.putRuns(t, "a", PhaseDesign, true, nil, 11)
+
+	snap := f.snapshot(t)
+	if got := snap.Phases["a"]; got != PhaseDesign {
+		t.Errorf("Phases[a] = %q, want design", got)
+	}
+	info, ok := snap.PhaseInfo["a"]
+	if !ok || info.Current != PhaseDesign || !info.Run.Open() || !info.Run.StartedAt.Equal(at(11)) || info.Run.StartedBy != "dev" {
+		t.Errorf("PhaseInfo[a] = %+v, %v", info, ok)
+	}
+
+	// Same start second: the later phase wins.
+	f.putRuns(t, "a", PhasePlanning, true, nil, 11)
+	if got := f.snapshot(t).Phases["a"]; got != PhasePlanning {
+		t.Errorf("tie: Phases[a] = %q, want planning", got)
+	}
+}
+
+func TestBoardReRunMovesLaneBack(t *testing.T) {
+	f := newBoardFixture(t)
+	f.create(t, "a", "")
+	f.start(t, "a", PhaseResearch)
+	f.putRuns(t, "a", PhaseResearch, false, nil, 10)
+	f.putRuns(t, "a", PhaseDesign, true, nil, 11, 13)
+	f.putRuns(t, "a", PhasePlanning, false, nil, 12)
+	if got := f.snapshot(t).Phases["a"]; got != PhaseDesign {
+		t.Errorf("Phases[a] = %q, want design after its re-run", got)
+	}
+}
+
+func TestBoardFallbackWithoutRecords(t *testing.T) {
+	f := newBoardFixture(t)
+	f.create(t, "a", "")
+	inProgress := StatusInProgress
+	if _, err := f.svc.Update("a", nil, nil, &inProgress, nil, nil); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	_ = f.files.WriteFile("a", "research", "x")
+	snap := f.snapshot(t)
+	if got := snap.Phases["a"]; got != PhaseDesign {
+		t.Errorf("Phases[a] = %q, want design from the artifact name", got)
+	}
+	if _, ok := snap.PhaseInfo["a"]; ok {
+		t.Errorf("PhaseInfo[a] set without records")
+	}
+}
+
+func TestBoardUnparsableRecordFallsBack(t *testing.T) {
+	f := newBoardFixture(t)
+	f.create(t, "a", "")
+	f.start(t, "a", PhaseResearch)
+	f.finish(t, "a", PhaseResearch)
+	f.start(t, "a", PhaseDesign)
+	_ = f.files.WriteFile("a", "design", "x") // the names prove planning
+	broken := &brokenPhaseStore{mockPhaseStore: f.phases, broken: PhaseDesign}
+	f.svc.phases = broken
+
+	// Research still parses: it is the lane, not the broken design.
+	snap := f.snapshot(t)
+	if got := snap.Phases["a"]; got != PhaseResearch {
+		t.Errorf("Phases[a] = %q, want research from the readable record", got)
+	}
+
+	// With no readable record left, the names decide.
+	_ = f.phases.RemovePhase("a", PhaseResearch)
+	snap = f.snapshot(t)
+	if got := snap.Phases["a"]; got != PhasePlanning {
+		t.Errorf("Phases[a] = %q, want planning from the names", got)
+	}
+	if _, ok := snap.PhaseInfo["a"]; ok {
+		t.Errorf("PhaseInfo[a] set from an unreadable record")
+	}
+}
+
+func TestBoardTokensSum(t *testing.T) {
+	f := newBoardFixture(t)
+	f.create(t, "a", "")
+	f.start(t, "a", PhaseResearch)
+	hundred, fifty := int64(100), int64(50)
+	f.putRuns(t, "a", PhaseResearch, false, &hundred, 10)
+	f.putRuns(t, "a", PhaseDesign, true, &fifty, 11, 12, 14) // two finished, one open
+	info := f.snapshot(t).PhaseInfo["a"]
+	if info.Tokens != 200 || !info.HasTokens {
+		t.Errorf("tokens = %d (%v), want 200", info.Tokens, info.HasTokens)
+	}
+
+	f.create(t, "b", "")
+	f.start(t, "b", PhaseResearch)
+	if info := f.snapshot(t).PhaseInfo["b"]; info.HasTokens {
+		t.Errorf("b reports tokens without any: %+v", info)
+	}
+}
+
+func TestBoardPhaseInfoInProgressOnly(t *testing.T) {
+	f := newBoardFixture(t)
+	f.create(t, "todo", "")
+	f.putRuns(t, "todo", PhaseResearch, true, nil, 10)
+	f.create(t, "done", "")
+	f.start(t, "done", PhaseResearch)
+	if _, err := f.svc.CompleteTask("done"); err != nil {
+		t.Fatalf("CompleteTask() error = %v", err)
+	}
+	snap := f.snapshot(t)
+	if len(snap.PhaseInfo) != 0 || len(snap.Phases) != 0 {
+		t.Errorf("PhaseInfo = %v, Phases = %v; want neither for todo and done tasks", snap.PhaseInfo, snap.Phases)
+	}
+}
+
+func TestDetailPhasesIncludingArchived(t *testing.T) {
+	f := newBoardFixture(t)
+	f.create(t, "a", "")
+	f.start(t, "a", PhaseResearch)
+	f.finish(t, "a", PhaseResearch)
+	f.start(t, "a", PhaseDesign)
+
+	d, err := f.svc.Detail("a")
+	if err != nil {
+		t.Fatalf("Detail() error = %v", err)
+	}
+	if len(d.Phases) != 2 || d.Phases[0].Phase != PhaseResearch || d.Phases[1].Phase != PhaseDesign {
+		t.Fatalf("Detail().Phases = %+v, want research, design", d.Phases)
+	}
+
+	if _, err := f.svc.CompleteTask("a"); err != nil {
+		t.Fatalf("CompleteTask() error = %v", err)
+	}
+	if err := f.svc.ArchiveTask("a"); err != nil {
+		t.Fatalf("ArchiveTask() error = %v", err)
+	}
+	d, err = f.svc.Detail("a")
+	if err != nil || !d.Archived || len(d.Phases) != 2 {
+		t.Errorf("archived Detail() = %+v, %v; want both records", d, err)
+	}
+}
+
+func TestDetailFilesHidePhaseFiles(t *testing.T) {
+	f := newBoardFixture(t)
+	f.create(t, "a", "")
+	_ = f.files.WriteFile("a", "notes.md", "x")
+	f.start(t, "a", PhaseResearch)
+	d, err := f.svc.Detail("a")
+	if err != nil {
+		t.Fatalf("Detail() error = %v", err)
+	}
+	if !slices.Equal(d.Files, []string{"notes.md"}) || len(d.Phases) != 1 {
+		t.Errorf("Files = %v, Phases = %d; want the phase record only in Phases", d.Files, len(d.Phases))
 	}
 }

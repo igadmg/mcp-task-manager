@@ -1,0 +1,17 @@
+description: |
+  Start a delivery phase (research, design, planning, implementation) of a task
+  and record it in <phase>.phase: start time and your user, as a new run (earlier
+  runs are kept). Makes the task your current task.
+  - Starting any phase of a todo task moves it to in_progress (a todo parent of a
+    subtask too). Research, design and planning never touch git.
+  - A phase starts only after the previous one has a finished run; only one phase
+    run of a task may be open at a time (finish_phase it first). Re-running a phase
+    appends a new run. Done and archived tasks are refused; a blocked todo task too.
+  - implementation: with git branching it does what start_task does - creates and
+    checks out the task's wip branch (a subtask's off its parent's, cutting the
+    parent's first if it has none), or restarts an existing one. Same dirty-tree
+    rules as start_task. Without branching it is record-only.
+  The result holds the task, the phase, the run number and the whole record.
+params:
+  id: Task ID; defaults to your current task (pass it to start research of a new task)
+  phase: research | design | planning | implementation

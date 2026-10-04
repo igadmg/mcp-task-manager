@@ -4,9 +4,10 @@ This server manages a project's task backlog and workflow files assosiated with 
 Workflows should use tools `write_task_file`, `read_task_file`, `list_task_files`
 to access and write data assosiated with workflow step (ex. task, research, design etc.)
 Tasks are identified by an id — a numeric auto-increment string by default, or a
-custom text id passed explicitly via `create_task`'s `id` parameter. `start_task`
-makes a task your current task; `get_current_task` returns it, so a workflow
-never has to keep the id itself.
+custom text id passed explicitly via `create_task`'s `id` parameter, which also
+records you as the task's `created_by`. `start_task` or `start_phase` makes a
+task your current task; `get_current_task` returns it, so a workflow never has
+to keep the id itself.
 
 ## Planning
 - `create_task` — add work items as they're identified (title, description,
@@ -29,14 +30,38 @@ never has to keep the id itself.
    subtask auto-completes its parent (unless the parent works on a git
    branch, see below).
 
-## Git branching (when enabled)
-When the project enables `git.branching`, `start_task` and `complete_task` do
-all the git work. Do not commit code, create branches or switch branches
-around them — the server does, and refuses to move away from uncommitted
-changes it does not own.
+## Delivery phases
+A workflow that runs a task through research, design, planning and
+implementation records each phase on the task:
 
-- After `start_task`, you are on the task's wip branch (`branch` in the
-  result): `<user>/wip/<name>`, or `<parent wip>--<name>` for a subtask.
+1. `create_task` leaves the task in `todo`.
+2. `start_phase(phase=research, id=<id>)` moves it to `in_progress` and makes
+   it your current task; later phases default to the current task.
+3. `finish_phase(phase=<p>, tokens=<n>)` closes the run with the tokens it
+   cost (e.g. the phase sub-agent's total) and an optional `note`.
+4. Each phase starts only after the previous one has a finished run, and only
+   one phase run of a task may be open at a time. Redoing a phase appends a
+   new run; earlier runs are kept.
+5. `start_phase(phase=implementation)` is where the work moves to git: under
+   git branching it creates and checks out the task's wip branch (see below).
+   Research, design and planning never touch git.
+6. `complete_task` finishes any run still open, without tokens: finish the
+   implementation phase first to record its cost.
+
+The records live in `<phase>.phase` files next to the task's other files.
+Read them with `read_task_file` or `get_task` (`phases`); never write them
+yourself — `write_task_file` refuses `*.phase` names.
+
+## Git branching (when enabled)
+When the project enables `git.branching`, `start_task` (or
+`start_phase implementation`) and `complete_task` do all the git work. Do not
+commit code, create branches or switch branches around them — the server
+does, and refuses to move away from uncommitted changes it does not own.
+
+- After `start_task` or `start_phase implementation`, you are on the task's
+  wip branch (`branch` in the result): `<user>/wip/<name>`, or
+  `<parent wip>--<name>` for a subtask. A subtask whose parent has no branch
+  yet (it is still in its own earlier phases) cuts the parent's wip first.
   Calling `start_task` again on a task whose branch exists restarts it: the
   branch is rebased onto the current base and checked out.
 - After `complete_task` of a top-level task, you are on its final branch
@@ -80,7 +105,8 @@ when the user names one directly, rather than `get_next_task`.
 ## Notes and research
 Attach free-form files to a task instead of losing context between turns:
 `write_task_file`, `read_task_file`, `list_task_files`. These live alongside
-the task and move with it on archive/delete.
+the task and move with it on archive/delete. Names ending in `.phase` are the
+server's phase records and cannot be written.
 
 ## Cleanup
 `archive_task` moves a closed task (and its files) out of the active list,

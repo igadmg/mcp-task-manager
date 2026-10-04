@@ -150,6 +150,7 @@ func Build(cfg *config.Config, extra ...task.ServiceOption) (*Resolved, error) {
 	id := vcs.ResolveIdentity(root)
 	opts := []task.ServiceOption{
 		task.WithCurrentTaskStore(mdStorage),
+		task.WithPhaseStore(mdStorage),
 		task.WithIdentity(task.Identity{Name: id.Name, FromGitEmail: id.FromGitEmail}),
 	}
 	if cfg.Git.Branching {

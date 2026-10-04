@@ -12,7 +12,8 @@ MCP Task Manager provides a simple but powerful task management system that inte
 - **Attached files** - `write_task_file`, `read_task_file`, `list_task_files` let an agent attach free-form notes, research, or design docs to a task; they move and are removed together with the task on archive/delete
 - **Priority-based workflow** - Critical > High > Medium > Low, with oldest-first tiebreaker
 - **Agent-friendly tools** - `get_next_task`, `start_task`, `complete_task`, `get_current_task` for automated workflows
-- **Git branch per task (opt-in)** - `start_task` creates and checks out a wip branch, `complete_task` squashes it into one commit on a final branch; see [Git Branch-per-Task](#git-branch-per-task)
+- **Delivery phase records** - `start_phase` / `finish_phase` record every run of research, design, planning and implementation (who, when, tokens) in server-owned `<phase>.phase` files; tasks record who created them (`created_by`)
+- **Git branch per task (opt-in)** - `start_task` (or `start_phase implementation`) creates and checks out a wip branch, `complete_task` squashes it into one commit on a final branch; see [Git Branch-per-Task](#git-branch-per-task)
 - **Self-healing index** - in-memory index rebuilds automatically from the task files
 - **Configurable task types** - Default: `feature`, `bug`; extensible via config
 
@@ -94,7 +95,8 @@ call shows up on the board on the next refresh (every 5 seconds).
 - `serve web` resolves the project eagerly, so the board has data from the very first request. Started from inside the MCP server it comes up before the client has named a project and shows a placeholder until the first tool call.
 - `serve web --mcp` additionally serves MCP over stdio in the same process. It is off by default: a terminal has a TTY on stdin, and a JSON-RPC reader there would eat your keystrokes.
 - Tailwind CSS and htmx are compiled into the binary, so the page renders with no network access.
-- In progress groups its cards into Research / Design / Planning / Implementation lanes, each shifted right by half a card, derived from the workflow files (`research`, `design`, `plan`) attached to each task.
+- In progress groups its cards into Research / Design / Planning / Implementation lanes, each shifted right by half a card. A task's lane is the phase of its latest started run in its `<phase>.phase` records; a task without records falls back to the workflow files (`research`, `design`, `plan`) attached to it.
+- Every card shows who created the task and when; in-progress cards with phase records also show the current phase, who started it and when, and the tokens spent so far. The detail view lists every phase run.
 
 **The HTTP surface is read-only and unauthenticated.** No route mutates a task,
 but anyone who can reach the port can read the whole backlog. The default
@@ -146,6 +148,8 @@ mcp-task-manager delete 1
 # Workflow commands
 mcp-task-manager next              # Get highest priority todo task
 mcp-task-manager start 1           # Start a task (todo -> in_progress)
+mcp-task-manager start-phase 1 research              # Start a delivery phase (todo -> in_progress)
+mcp-task-manager finish-phase 1 research --tokens 81234 --note "first pass"
 mcp-task-manager complete 1        # Complete a task (in_progress -> done)
 mcp-task-manager complete 1 -m "feat: login form"   # ...with the squash commit message (git branching)
 mcp-task-manager archive 1         # Archive a completed task
@@ -168,12 +172,14 @@ mcp-task-manager --help
 | Command | Description |
 |---------|-------------|
 | `list` | List tasks with optional filters (`-s status`, `-p priority`, `-t type`, where allowed task types depend on config and default to `feature`, `bug`) |
-| `get <id>` | Get task details by ID |
+| `get <id>` | Get task details by ID, including `Created by:` and the phase-run history |
 | `create <title>` | Create task (defaults: priority=`medium`, type=first configured task type; with default config that is `feature`; allowed task types depend on config and default to `feature`, `bug`); use `--parent` for subtasks, `--id` for a caller-supplied custom task id |
 | `update <id>` | Update task fields, including `type` (allowed task types depend on config and default to `feature`, `bug`) |
 | `delete <id>` | Delete a task |
 | `next` | Get highest priority todo task |
 | `start <id>` | Move task to in_progress (under git branching: create or restore its wip branch and check it out) |
+| `start-phase <id> <phase>` | Start a run of a delivery phase (`research`, `design`, `planning`, `implementation`); a todo task moves to in_progress, and `implementation` under git branching cuts or restores the wip branch |
+| `finish-phase <id> <phase>` | Finish the open run of a phase; `--tokens N` records what it cost, `--note` a one-line note |
 | `complete <id>` | Move task to done; `--resolution`/`--note` close it without delivering, `-m`/`--message` sets the squash commit message under git branching |
 | `archive <id>` | Archive a completed task (moves its directory, including attached files, to `tasks/archive/`) |
 | `write-task-file <task-id> <filename> <content>` | Create or overwrite a file attached to a task (rejected for archived tasks) |
@@ -284,29 +290,54 @@ a new session.
 **`begin-task`: one ticket, phase by phase**
 
 1. **Intake.** The agent asks only the questions it needs, picks a kebab-case
-   id (e.g. `add-tooltip-control`), creates the task and starts it right
-   away. The task becomes your current task (`get_current_task`), so later
-   steps never need its id. The agent writes the `task` file: the original
-   input, clarifications, a one-sentence problem statement and the acceptance
+   id (e.g. `add-tooltip-control`) and creates the task, which stays in
+   `todo`. The agent writes the `task` file: the original input,
+   clarifications, a one-sentence problem statement and the acceptance
    criteria.
-2. **Research.** A subagent with the `research` skill maps the current code,
-   with file and line references, and the result is saved as `research`.
-   It gathers facts only and proposes no changes.
+2. **Research.** `start_phase research` moves the task to `in_progress` and
+   makes it your current task (`get_current_task`), so later steps never need
+   its id. A subagent with the `research` skill maps the current code, with
+   file and line references, and the result is saved as `research`. It
+   gathers facts only and proposes no changes.
 3. **Design.** A subagent with the `design` skill turns the research into an
    architecture proposal, saved as `design`.
 4. **Planning.** A subagent with the `planning` skill splits the design into
    commit-sized phases, each one testable on its own. The result is saved as
    `plan`.
-5. **Implementation.** A subagent with the `implementation` skill carries out
-   the approved phases one at a time, running the repository's quality gates
-   (format, build, tests) after each. A summary is saved as `implementation`.
+5. **Implementation.** `start_phase implementation` creates the task's wip
+   branch under git branching. A subagent with the `implementation` skill
+   carries out the approved phases one at a time, running the repository's
+   quality gates (format, build, tests) after each. A summary is saved as
+   `implementation`, and on your "yes" the agent calls `complete_task`.
 
-After each phase you see a short summary and must answer "yes" before the
-next one starts. If you reject an output, the agent revises it first. Each
-subagent receives the full files from the earlier phases, not summaries.
+Every phase is opened with `start_phase` and closed with `finish_phase`,
+which records the subagent's token total. After each phase you see a short
+summary and must answer "yes" before the next one starts. If you reject an
+output, the agent runs the phase again as a new run and revises it; every run
+stays in the task's history. Each subagent receives the full files from the
+earlier phases, not summaries.
 `research`, `design`, `planning` and `implementation` also work on their own,
 and the `workflow` skill enforces the same phase order when you ask for "the
-whole process" without a ticket.
+whole process" without a ticket. Only `begin_task` records phases; when you
+run a phase skill by hand, call `start_phase` / `finish_phase` yourself.
+
+Start it with `/begin-task <ticket text>` from the plugin, or `/begin_task`
+inside this repository, where the skills also live under `.claude/skills/`.
+
+**Phase records.** The server keeps every run of a phase in
+`<tasks_dir>/<id>/<phase>.phase`: who started it and when, when it finished,
+its tokens and an optional note. The dashboard places an in-progress card in
+the lane of its latest phase and shows that phase, who started it and the
+tokens spent so far; the detail view lists every run. A few rules:
+
+- Only one run per task may be open at a time. If a session dies mid-phase,
+  close the run with `finish_phase` (no tokens) before starting again.
+- A phase cannot start before its predecessor has a finished run. A task with
+  no `.phase` file at all may start any phase its attached files prove (for
+  example `implementation` when a `plan` exists), so older tasks can join.
+- `*.phase` files belong to the server; `write_task_file` refuses them.
+- `complete_task` closes every open run of the tasks it closes, with the note
+  `closed by complete_task (<resolution>)`. `update_task` to `done` does not.
 
 **`execute-all`: work through the backlog**
 
@@ -391,7 +422,7 @@ To make the server available across every workspace instead of configuring it pe
 | `create_task` | Create a new task with title, description, priority, `type`, optional `parent_id` for subtasks, and optional `id` for a caller-supplied custom task id (used verbatim as the id and storage directory name instead of the next auto-increment id). Allowed task `type` values come from config and default to `feature`, `bug`. |
 | `update_task` | Modify task fields (title, description, status, priority, `type`). Allowed task `type` values come from config and default to `feature`, `bug`. Under git branching, starting a task and closing a branched one are refused here: use `start_task` / `complete_task`. |
 | `list_tasks` | List tasks with optional filters (status, priority, `type`); use `parent_id` filter for subtasks. Allowed task `type` values come from config and default to `feature`, `bug`. |
-| `get_task` | Get full details of a task by ID (includes subtasks for parent tasks) |
+| `get_task` | Get full details of a task by ID (includes subtasks for parent tasks, `created_by`, and `phases`: the run history of every delivery phase) |
 | `delete_task` | Remove a task; use `delete_subtasks` to cascade |
 | `archive_task` | Archive a completed task (moves its directory, including attached files, to `tasks/archive/`) |
 
@@ -399,7 +430,7 @@ To make the server available across every workspace instead of configuring it pe
 
 | Tool | Description |
 |------|-------------|
-| `write_task_file` | Create or overwrite a named text file attached to a task (rejected for archived tasks) |
+| `write_task_file` | Create or overwrite a named text file attached to a task (rejected for archived tasks, and for names ending in `.phase`, which are the server's phase records) |
 | `read_task_file` | Read the content of a named file attached to a task (active or archived) |
 | `list_task_files` | List the names of all files attached to a task (active or archived) |
 
@@ -409,8 +440,10 @@ To make the server available across every workspace instead of configuring it pe
 |------|-------------|
 | `get_next_task` | Returns highest priority `todo` task |
 | `start_task` | Move task from `todo` to `in_progress` and make it your current task; under git branching, create (or restore and rebase) its wip branch and check it out |
-| `complete_task` | Move task from `in_progress` to `done`; under git branching, squash its wip branch into one commit (optional `commit_message`) and check out the result |
+| `complete_task` | Move task from `in_progress` to `done` and finish its open phase runs; under git branching, squash its wip branch into one commit (optional `commit_message`) and check out the result |
 | `get_current_task` | Return the task your per-user current-task pointer names (`<tasks_dir>/.users/<user>/current_task`), archived tasks included |
+| `start_phase` | Start a run of a delivery phase (`research`, `design`, `planning`, `implementation`) on a task (`id`, default your current task): a `todo` task moves to `in_progress` and becomes your current task. Phases run in order, one open run at a time. `implementation` under git branching creates or restores the wip branch, like `start_task`; the other phases never touch git |
+| `finish_phase` | Finish the open run of a phase, recording optional `tokens` and `note`; changes no status and no git |
 
 ### Web Dashboard
 
@@ -472,16 +505,20 @@ The `relation_types` list defines the allowed values for every relation `type` f
 
 ### Git Branch-per-Task
 
-With `git.branching: true` (or `MCP_GIT_BRANCHING=true`), `start_task` and
-`complete_task` manage branches in the git repository at the project root. The
-server runs the system `git` itself; agents and skills never commit or switch
-around these calls.
+With `git.branching: true` (or `MCP_GIT_BRANCHING=true`), `start_task` (or
+`start_phase implementation`) and `complete_task` manage branches in the git
+repository at the project root. The server runs the system `git` itself;
+agents and skills never commit or switch around these calls. Under the phase
+workflow a branch is cut only when implementation starts: research, design and
+planning are record-only.
 
 - **Start.** A top-level task gets `<user>/wip/<name>`, cut from the tip of the
   first existing entry of `git.base_branches`, and HEAD moves to it. A subtask
   gets `<parent wip>--<name>`, cut from its parent's wip branch. `<user>` is
   the local part of `git config user.email`; `<name>` is the task id if it is
-  readable, otherwise the id plus the slugified title.
+  readable, otherwise the id plus the slugified title. A subtask's
+  `start_phase implementation` under a parent that has no branch yet (it is in
+  its own earlier phases) cuts the parent's wip first.
 - **Uncommitted changes.** On a task's own wip branch they are saved there in a
   checkpoint commit; on the base branch they are carried to the new branch; on
   any other branch the start is refused. Changes under the tasks directory
@@ -526,6 +563,7 @@ status: todo
 priority: high
 type: feature
 created_at: 2025-01-15T10:30:00Z
+created_by: jane        # stamped by create_task; omitted on older tasks
 updated_at: 2025-01-15T10:30:00Z
 ---
 
@@ -539,6 +577,21 @@ Detailed description in Markdown format.
 Ids are strings on the wire (JSON responses and `--json` CLI output render `"id": "1"`, not a bare number); a bare YAML scalar like `id: 1` above still parses fine into that string field. By default `create_task` allocates the next auto-incrementing numeric-looking id, unpadded (`"8"`, not `"008"`). Optionally, pass `id` (MCP) or `--id` (CLI `create`) to use a caller-supplied custom text id instead — it's validated like an attached filename (non-empty, no `/` or `\`, not `..`; `"0"`, `"archive"`, `".index.json"` and `".users"` are reserved - a retired cache filename and the per-user state directory) and rejected if it collides with an existing active or archived task.
 
 The `type` field must be one of the configured `task_types` values. With the default configuration, allowed values are `feature` and `bug`.
+
+Phase records sit next to the task as `tasks/{id}/<phase>.phase` (`research.phase`, `design.phase`, `planning.phase`, `implementation.phase`), written only by `start_phase`, `finish_phase` and `complete_task`. Each keeps every run of its phase:
+
+```yaml
+version: 1
+phase: design
+runs:
+  - started_at: "2026-10-04T12:59:10Z"
+    started_by: jane
+    finished_at: "2026-10-04T13:20:41Z"
+    finished_by: jane
+    tokens: 81234
+  - started_at: "2026-10-04T14:02:00Z"   # a redo after review: still open
+    started_by: jane
+```
 
 ### Status Values
 

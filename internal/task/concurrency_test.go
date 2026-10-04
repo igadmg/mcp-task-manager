@@ -22,7 +22,8 @@ func newConcurrentService() *Service {
 		ProjectFound:  true,
 		AutoArchive:   config.AutoArchiveConfig{AfterDays: 30},
 	}
-	return NewService(st, newMockArchiveStorage(st), newMockFileStorage(), newMockIndex(), cfg.TaskTypes, cfg)
+	return NewService(st, newMockArchiveStorage(st), newMockFileStorage(), newMockIndex(), cfg.TaskTypes, cfg,
+		WithPhaseStore(newMockPhaseStore()))
 }
 
 // seedBacklog fills the service with parents, subtasks and blocked_by edges.
@@ -97,6 +98,8 @@ func TestServiceRace(t *testing.T) {
 	run(func(i int) {
 		svc.WriteTaskFile(ids[i%len(ids)], []string{"notes.md", "research", "plan"}[i%3], "content")
 	})
+	run(func(i int) { svc.StartPhase(ids[i%len(ids)], PhaseResearch) })
+	run(func(i int) { svc.FinishPhase(ids[i%len(ids)], PhaseResearch, PhaseFinish{}) })
 
 	wg.Wait()
 }
@@ -140,6 +143,8 @@ func TestServiceNoSelfDeadlock(t *testing.T) {
 	svc.BoardSnapshot()
 	svc.Detail("fresh")
 	svc.RemoveRelation("fresh", "relates_to", "p0")
+	svc.StartPhase("p2", PhaseResearch)
+	svc.FinishPhase("p2", PhaseResearch, PhaseFinish{})
 	svc.StartTask("p0")
 	svc.BoardSnapshot()
 	svc.Update("p0", nil, nil, &status, nil, nil)

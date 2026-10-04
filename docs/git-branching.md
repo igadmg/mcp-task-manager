@@ -2,8 +2,9 @@
 
 When git branching is on, every task you start gets its own branch, and
 completing the task turns all of its work into one clean commit. The MCP server
-does the git work itself inside `start_task` and `complete_task`. You and your
-agents never need to create, switch, squash or commit branches by hand.
+does the git work itself inside `start_task` (or `start_phase` with phase
+`implementation`) and `complete_task`. You and your agents never need to
+create, switch, squash or commit branches by hand.
 
 This guide covers how to turn branching on, what a normal task looks like, and
 what to do when a call is refused. For a short reference, see
@@ -66,6 +67,26 @@ on, and `complete_task` takes the commit message as `commit_message`.
 If you leave out the commit message, the server uses the task's title and
 description, followed by a `Task: <id>` trailer.
 
+### Starting through phases
+
+A workflow that records delivery phases (the `begin_task` skill does) never
+calls `start_task`. It calls `start_phase` for research, design and planning,
+which move the task to `in_progress` without touching git, and then
+`start_phase` with phase `implementation`, which is where the branch is cut:
+
+```bash
+mcp-task-manager start-phase 42 research        # in_progress, no branch
+# ...finish-phase, then design and planning the same way...
+mcp-task-manager start-phase 42 implementation
+# Started phase implementation of task 42 (run 1) on branch jane/wip/42-login-form.
+```
+
+The implementation start does everything `start_task` does - the same branch
+names, base, uncommitted-change rules and restart - also for a task that is
+already `in_progress` from its earlier phases. `start_task` on such a task
+(in progress, no branch) refuses and points you to
+`start_phase implementation`.
+
 ### Branch names
 
 | Task | Wip branch | Final branch |
@@ -99,6 +120,12 @@ Changes inside the tasks directory never count as uncommitted changes.
 - **Starting a subtask** creates `<parent wip>--<name>` from the tip of the
   parent's wip branch. If the parent is still `todo`, the server starts the
   parent in the same call.
+- **A parent still in its own earlier phases** (`in_progress`, no branch yet)
+  gets its wip branch cut, at the base tip, by the subtask's
+  `start_phase implementation`, in the same call; the sub-wip then comes off
+  it. A later implementation start of the parent restarts on that branch.
+  `start_task` keeps the older rule: under such a parent the subtask starts
+  without a branch.
 - **Completing a subtask** squash-merges its work into the parent's wip branch
   as one commit and checks out the parent's branch. Subtasks have no final
   branch of their own. If the merge conflicts, nothing changes and the error
@@ -159,7 +186,8 @@ add `.users/` inside your tasks directory to `.gitignore`.
 - **Don't use `update_task` to start or close a task.** It refuses to move a
   task to `in_progress`, to close an `in_progress` task that has a branch, and
   to reopen a `done` branched task directly to `in_progress`. Use
-  `start_task` and `complete_task` instead. Reopening to `todo` is allowed.
+  `start_task` (or `start_phase`) and `complete_task` instead. Reopening to
+  `todo` is allowed.
 - **Don't switch branches before `complete_task`.** Completing a task
   requires its own wip branch to be checked out.
 - **Older tasks keep working without branches.** A task started while

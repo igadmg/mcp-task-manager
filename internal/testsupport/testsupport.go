@@ -33,7 +33,7 @@ func NewBacklog(t *testing.T) (*project.Resolver, *task.Service, string) {
 		Web:           config.DefaultConfig().Web,
 	}
 	svc := task.NewService(st, st, st, idx, cfg.TaskTypes, cfg,
-		task.WithCurrentTaskStore(st), task.WithIdentity(task.Identity{Name: "dev"}))
+		task.WithCurrentTaskStore(st), task.WithPhaseStore(st), task.WithIdentity(task.Identity{Name: "dev"}))
 	if err := svc.Initialize(); err != nil {
 		t.Fatalf("Initialize() error = %v", err)
 	}

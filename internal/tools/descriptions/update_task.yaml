@@ -3,7 +3,8 @@ description: |
   would bypass the branch work are refused: use start_task to start or
   resume a task, and complete_task to close one that works on a branch.
   Reopening to todo is allowed; the branch is kept, and the next start_task
-  resumes on it.
+  resumes on it. It never touches phase records: a run left open by closing
+  a task here can still be finished with finish_phase.
 params:
   id: Task ID
   title: New title

@@ -19,6 +19,13 @@
       {{ if .Blocked }}<span class="chip chip-blocked" title="{{ range .Blockers }}{{ .ID }} ({{ .Status }}) {{ end }}">blocked</span>{{ end }}
       <span class="meta ml-auto">{{ .UpdatedAgo }}</span>
     </div>
+    <p class="meta mt-1.5 truncate" title="created {{ .CreatedAt }}">created {{ .CreatedAgo }}{{ if .CreatedBy }} by {{ .CreatedBy }}{{ end }}</p>
+    {{ if .Phase }}
+    <div class="mt-1 flex min-w-0 items-center gap-1.5">
+      <span class="meta truncate text-neutral-400">{{ .Phase }} &middot; {{ if .PhaseOpen }}started{{ else }}finished{{ end }} {{ .PhaseAgo }}{{ if .PhaseBy }} by {{ .PhaseBy }}{{ end }}</span>
+      {{ if .Tokens }}<span class="chip chip-muted ml-auto shrink-0" title="{{ .TokensExact }} tokens">{{ .Tokens }} tok</span>{{ end }}
+    </div>
+    {{ end }}
   </a>
 
   {{ if .Branch }}

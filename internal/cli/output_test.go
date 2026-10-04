@@ -176,3 +176,41 @@ func TestFormatTaskDetailBranchLines(t *testing.T) {
 		t.Errorf("a task without branch data prints branch lines:\n%s", plain)
 	}
 }
+
+func TestFormatTaskDetailCreatedBy(t *testing.T) {
+	tk := &task.Task{ID: "7", Title: "Owned", Status: task.StatusTodo, CreatedBy: "igor.cwer"}
+	if output := FormatTaskDetail(tk, nil); !strings.Contains(output, "Created by:  igor.cwer\n") {
+		t.Errorf("output lacks the creator line:\n%s", output)
+	}
+	if plain := FormatTaskDetail(&task.Task{ID: "8", Title: "Legacy", Status: task.StatusTodo}, nil); strings.Contains(plain, "Created by") {
+		t.Errorf("a task without a creator prints a creator line:\n%s", plain)
+	}
+}
+
+func TestFormatTaskDetailPhases(t *testing.T) {
+	start := time.Date(2026, 10, 4, 14, 2, 0, 0, time.UTC)
+	end := time.Date(2026, 10, 4, 14, 30, 0, 0, time.UTC)
+	nextDay := time.Date(2026, 10, 5, 9, 0, 0, 0, time.UTC)
+	tokens := int64(40210)
+	tk := &task.Task{ID: "7", Title: "Phased", Status: task.StatusInProgress}
+	output := FormatTaskDetail(tk, &TaskDetailOptions{Phases: []task.PhaseRecord{
+		{Phase: task.PhaseDesign, Runs: []task.PhaseRun{
+			{StartedAt: start, StartedBy: "igor.cwer", FinishedAt: &end, FinishedBy: "igor.cwer", Tokens: &tokens},
+			{StartedAt: start, StartedBy: "igor.cwer", FinishedAt: &nextDay, FinishedBy: "igor.cwer"},
+			{StartedAt: end, StartedBy: "igor.cwer"},
+		}},
+	}})
+	for _, want := range []string{
+		"\nPhases:\n",
+		"  design #1  started 2026-10-04 14:02 by igor.cwer  finished 14:30 by igor.cwer  40210 tokens\n",
+		"  design #2  started 2026-10-04 14:02 by igor.cwer  finished 2026-10-05 09:00 by igor.cwer\n",
+		"  design #3  started 2026-10-04 14:30 by igor.cwer  open\n",
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("output lacks %q:\n%s", want, output)
+		}
+	}
+	if plain := FormatTaskDetail(tk, nil); strings.Contains(plain, "Phases:") {
+		t.Errorf("a task without phase records prints a Phases block:\n%s", plain)
+	}
+}

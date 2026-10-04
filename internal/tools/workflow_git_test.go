@@ -74,3 +74,25 @@ func TestCompleteTaskCommitMessageParamDocumented(t *testing.T) {
 		t.Errorf("commit_message description = %q", desc)
 	}
 }
+
+func TestStartPhaseImplementationHandlerWithGit(t *testing.T) {
+	b := testsupport.NewGitBacklog(t, testsupport.TasksInRepoIgnored)
+	if _, err := b.Svc.Create("Add login", "", "high", "feature", "", "login"); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	for _, p := range []string{"research", "design", "planning"} {
+		callTool(t, startPhaseHandler(b.Resolver), map[string]any{"id": "login", "phase": p})
+		if got := b.Head(t); got != "main_patched" {
+			t.Fatalf("%s moved HEAD to %s", p, got)
+		}
+		callTool(t, finishPhaseHandler(b.Resolver), map[string]any{"phase": p, "tokens": 10.0})
+	}
+
+	got := decodePhaseResult(t, callTool(t, startPhaseHandler(b.Resolver), map[string]any{"phase": "implementation"}))
+	if got.Task.Branch != "dev/wip/login" || got.Phase != "implementation" || got.Run != 1 {
+		t.Errorf("start_phase implementation = %+v", got)
+	}
+	if head := b.Head(t); head != "dev/wip/login" {
+		t.Errorf("HEAD = %q, want the wip branch", head)
+	}
+}

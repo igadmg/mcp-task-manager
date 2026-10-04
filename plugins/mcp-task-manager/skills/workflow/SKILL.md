@@ -30,6 +30,7 @@ Use this skill as the top-level workflow for this project's tasks.
 - `design` turns evidence into an implementable architecture.
 - `planning` turns approved design into commit-sized phases.
 - `implementation` executes one approved phase at a time behind hard quality gates.
+- When the task manager tracks phases, each phase is opened with `start_phase` and closed with `finish_phase` (with the tokens it cost); `start_phase` with phase `implementation` is what cuts the wip branch under git branching.
 
 ## How To Apply
 
@@ -48,5 +49,5 @@ When delegation is used, preserve these project-level invariants regardless of w
 1. Do not start a later phase until the required artifact from the previous phase exists and is approved or explicitly accepted for the current task.
 2. Do not hand off unreviewed or evidence-free artifacts to the next phase.
 3. Run the repository quality gates listed above before reporting implementation complete.
-4. Do not commit, push, tag, or publish unless the user explicitly requested that action. Under git branching, the commits `start_task` and `complete_task` make are part of the task lifecycle, not agent commits.
+4. Do not commit, push, tag, or publish unless the user explicitly requested that action. Under git branching, the commits `start_phase` (implementation), `start_task` and `complete_task` make are part of the task lifecycle, not agent commits.
 5. Report stage transitions, blockers, quality-gate results, and final status without secrets or raw command dumps.

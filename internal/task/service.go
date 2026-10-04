@@ -106,11 +106,13 @@ type Service struct {
 
 	// git drives the branch-per-task workflow; nil means branching is off.
 	// identity names the user branches and the current-task pointer
-	// belong to, and current keeps that pointer (nil: none is kept). All
-	// three are write-once, set by ServiceOptions in NewService.
+	// belong to, and current keeps that pointer (nil: none is kept).
+	// phases keeps the <phase>.phase records (nil: phases are not tracked).
+	// All four are write-once, set by ServiceOptions in NewService.
 	git      GitRepo
 	identity Identity
 	current  CurrentTaskStore
+	phases   PhaseStore
 
 	// mu serializes every task operation. It is the only lock over the
 	// index and the markdown storage, both of which are reachable solely
@@ -258,6 +260,7 @@ func (s *Service) create(title, description string, priority Priority, taskType 
 		Priority:    priority,
 		Type:        taskType,
 		CreatedAt:   now,
+		CreatedBy:   s.identity.Name,
 		UpdatedAt:   now,
 	}
 
@@ -321,13 +324,23 @@ func (s *Service) WriteTaskFile(taskID string, filename, content string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, ok := s.index.Get(taskID); !ok {
-		if s.archiveStorage != nil && s.archiveStorage.IsArchived(taskID) {
-			return fmt.Errorf("task %s is archived; files are read-only", taskID)
-		}
-		return fmt.Errorf("task not found: %s", taskID)
+	if _, err := s.activeTask(taskID, "files"); err != nil {
+		return err
 	}
 	return s.fileStorage.WriteFile(taskID, filename, content)
+}
+
+// activeTask returns task id from the active index, refusing an archived
+// one: what names the part of it that is read-only ("files", "phases").
+// Caller holds s.mu.
+func (s *Service) activeTask(id, what string) (*Task, error) {
+	if t, ok := s.index.Get(id); ok {
+		return t, nil
+	}
+	if s.archiveStorage != nil && s.archiveStorage.IsArchived(id) {
+		return nil, fmt.Errorf("task %s is archived; %s are read-only", id, what)
+	}
+	return nil, fmt.Errorf("task not found: %s", id)
 }
 
 // ReadTaskFile returns the content of a named file attached to the given
@@ -625,39 +638,64 @@ func (s *Service) startTask(id string) (*Task, error) {
 	if err != nil {
 		return nil, err
 	}
+	return s.startWith(t, nil)
+}
 
-	// A task whose wip branch still exists is restarted on it.
+// startWith is the start dispatch start_task and an implementation
+// start_phase share; extra is the phase run to append, nil for start_task.
+// A task whose wip branch still exists is restarted on it; otherwise a
+// todo task is started fresh. An implementation start also accepts an
+// in-progress task that went through the earlier phases without a branch:
+// it cuts one under git branching - a subtask cutting its parent's first -
+// and is record-only without. An in-progress task whose branch is gone is
+// a dead end either way.
+func (s *Service) startWith(t *Task, extra flowStep) (*Task, error) {
+	phase := extra != nil
 	if s.git != nil && t.Branch != "" && (t.Status == StatusTodo || t.Status == StatusInProgress) {
-		if _, ok, err := s.git.BranchSHA(t.Branch); err != nil {
+		_, live, err := s.git.BranchSHA(t.Branch)
+		if err != nil {
 			return nil, err
-		} else if ok {
-			return s.restartBranched(t)
+		}
+		switch {
+		case live:
+			return s.restartBranched(t, extra)
+		case phase && t.Status == StatusInProgress:
+			return nil, fmt.Errorf("task %s's branch %s no longer exists; reopen it to todo and start_phase implementation to cut a new one", t.ID, t.Branch)
 		}
 	}
 
-	if t.Status != StatusTodo {
-		return nil, fmt.Errorf("task %s is not in todo status (current: %s)", id, t.Status)
-	}
-
-	if err := s.blockedError(id); err != nil {
-		return nil, err
+	switch {
+	case phase && t.Status == StatusInProgress:
+		if s.git == nil {
+			return s.startPhaseRecords(t, extra)
+		}
+	case t.Status != StatusTodo:
+		if s.git != nil && t.Status == StatusInProgress && t.Branch == "" {
+			return nil, fmt.Errorf("task %s is in progress without a branch; use start_phase with phase implementation to cut it", t.ID)
+		}
+		return nil, fmt.Errorf("task %s is not in todo status (current: %s)", t.ID, t.Status)
+	default:
+		if err := s.blockedError(t.ID); err != nil {
+			return nil, err
+		}
 	}
 
 	if s.git != nil {
-		return s.startBranched(t)
+		return s.startBranched(t, extra)
 	}
-	return s.startPlain(t)
+	return s.startPlain(t, extra)
 }
 
-// startPlain starts t without git: the records and the pointer.
-func (s *Service) startPlain(t *Task) (*Task, error) {
+// startPlain starts t without git: the records, then the pointer and
+// extra.
+func (s *Service) startPlain(t *Task, extra flowStep) (*Task, error) {
 	var txn gitTxn
 	return runFlow(&txn, func() (*Task, error) {
 		started, err := s.startTaskRecords(&txn, t)
 		if err != nil {
 			return nil, err
 		}
-		return started, s.setPointer(&txn, t.ID)
+		return started, s.pointAndRun(&txn, t.ID, extra)
 	})
 }
 

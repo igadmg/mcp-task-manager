@@ -1,0 +1,10 @@
+description: |
+  Finish the open run of a phase: stamps the finish time and your user, and records
+  the tokens the phase cost and an optional note. Changes no status and no git.
+  complete_task closes still-open runs itself, without tokens - finish the
+  implementation phase first to record its tokens.
+params:
+  id: Task ID; defaults to your current task
+  phase: research | design | planning | implementation
+  tokens: Total tokens the phase used (non-negative integer), e.g. the sub-agent's reported total
+  note: Optional one-line note (e.g. what the run changed)

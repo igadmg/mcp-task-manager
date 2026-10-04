@@ -249,17 +249,18 @@ func runFlow(txn *gitTxn, mutate func() (*Task, error)) (*Task, error) {
 }
 
 // startBranched starts t with git branching on: a subtask off its parent's
-// wip branch, a top-level task off the first existing base branch.
-func (s *Service) startBranched(t *Task) (*Task, error) {
+// wip branch, a top-level task off the first existing base branch. extra
+// runs inside the flow (see flowStep).
+func (s *Service) startBranched(t *Task, extra flowStep) (*Task, error) {
 	if t.ParentID != "" {
-		return s.startSub(t)
+		return s.startSub(t, extra)
 	}
-	return s.startFresh(t)
+	return s.startFresh(t, extra)
 }
 
 // startFresh creates t's wip branch at the tip of the base branch and
 // switches to it (design 5.2).
-func (s *Service) startFresh(t *Task) (*Task, error) {
+func (s *Service) startFresh(t *Task, extra flowStep) (*Task, error) {
 	h, err := s.preflightGit()
 	if err != nil {
 		return nil, err
@@ -283,6 +284,9 @@ func (s *Service) startFresh(t *Task) (*Task, error) {
 		if err != nil {
 			return nil, err
 		}
+		if err := s.pointAndRun(&txn, t.ID, extra); err != nil {
+			return nil, err
+		}
 		return started, s.switchTo(plan.wip)
 	})
 	if err != nil {
@@ -291,9 +295,9 @@ func (s *Service) startFresh(t *Task) (*Task, error) {
 	return s.afterSwitch(started), nil
 }
 
-// startOnNewBranch creates t's wip branch at tip (the tip of base), starts
-// t on it and points the user at t, without switching: the caller switches,
-// and a subtask start reuses it to start a todo parent.
+// startOnNewBranch creates t's wip branch at tip (the tip of base) and
+// starts t on it, without switching or moving the pointer: the caller does
+// both, and a subtask start reuses it to start a todo parent.
 func (s *Service) startOnNewBranch(txn *gitTxn, t *Task, wip, base, tip string) (*Task, error) {
 	if err := s.createBranch(txn, wip, tip); err != nil {
 		return nil, err
@@ -306,30 +310,30 @@ func (s *Service) startOnNewBranch(txn *gitTxn, t *Task, wip, base, tip string) 
 	if err != nil {
 		return nil, err
 	}
-	if err := s.setPointer(txn, t.ID); err != nil {
-		return nil, err
-	}
 	return started, nil
 }
 
 // startSub creates subtask t's wip branch at the tip of its parent's and
 // switches to it (design 5.3). A parent that is still todo is started - or
-// restarted, when its branch still exists - in the same journal; a parent
-// started without branching keeps the subtask out of git too.
-func (s *Service) startSub(t *Task) (*Task, error) {
+// restarted, when its branch still exists - in the same journal. A parent
+// in progress without a branch keeps the subtask out of git too, unless
+// extra is set: then it is an implementation start under a parent still in
+// its own earlier phases, and the parent's wip is cut first.
+func (s *Service) startSub(t *Task, extra flowStep) (*Task, error) {
 	p, err := s.get(t.ParentID)
 	if err != nil {
 		return nil, fmt.Errorf("parent task not found: %s", t.ParentID)
 	}
-	if p.Status == StatusInProgress && p.Branch == "" {
-		return s.startPlain(t)
+	cutParent := extra != nil
+	if p.Status == StatusInProgress && p.Branch == "" && !cutParent {
+		return s.startPlain(t, extra)
 	}
 
 	h, err := s.preflightGit()
 	if err != nil {
 		return nil, err
 	}
-	line, err := s.parentLineFor(t, h)
+	line, err := s.parentLineFor(t, h, cutParent)
 	if err != nil {
 		return nil, err
 	}
@@ -363,6 +367,9 @@ func (s *Service) startSub(t *Task) (*Task, error) {
 		}
 		started, err := s.startOnNewBranch(&txn, t, subWip, parentBranch, ptip)
 		if err != nil {
+			return nil, err
+		}
+		if err := s.pointAndRun(&txn, t.ID, extra); err != nil {
 			return nil, err
 		}
 		return started, s.switchTo(subWip)

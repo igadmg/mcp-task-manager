@@ -1,13 +1,15 @@
 package task
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 )
 
-// Phase is the delivery-workflow phase an in-progress task is in. It is
-// derived on read from the names of the task's attached workflow files and
-// never stored.
+// Phase is a delivery-workflow phase. Each run of a phase is recorded in
+// the task's server-owned <phase>.phase file (see PhaseRecord); a task
+// without such files has its phase derived from the names of its attached
+// workflow artifacts (phaseFromFiles).
 type Phase string
 
 const (
@@ -25,6 +27,58 @@ func Phases() []Phase {
 		PhasePlanning,
 		PhaseImplementation,
 	}
+}
+
+// PhaseStrings lists every phase name in workflow order, for tool enums.
+func PhaseStrings() []string {
+	names := make([]string, 0, len(Phases()))
+	for _, p := range Phases() {
+		names = append(names, string(p))
+	}
+	return names
+}
+
+// ParsePhase returns the phase named s, or an error naming the valid ones.
+func ParsePhase(s string) (Phase, error) {
+	p := Phase(s)
+	if err := p.check(); err != nil {
+		return "", err
+	}
+	return p, nil
+}
+
+// check refuses anything that is not one of Phases, in ParsePhase's words.
+func (p Phase) check() error {
+	if slices.Contains(Phases(), p) {
+		return nil
+	}
+	return fmt.Errorf("unknown phase %q (want %s)", string(p), strings.Join(PhaseStrings(), ", "))
+}
+
+// Prev returns the phase before p in workflow order; false for the first
+// phase and for anything unknown.
+func (p Phase) Prev() (Phase, bool) {
+	i := slices.Index(Phases(), p)
+	if i <= 0 {
+		return "", false
+	}
+	return Phases()[i-1], true
+}
+
+// phaseFileSuffix ends the name of every server-owned phase record file.
+const phaseFileSuffix = ".phase"
+
+// PhaseFileName is the attached-file name of p's record: "<phase>.phase".
+func PhaseFileName(p Phase) string {
+	return string(p) + phaseFileSuffix
+}
+
+// IsReservedFileName reports whether name is reserved for a server-owned
+// phase record, i.e. ends in ".phase". The name is normalized the way
+// Windows resolves it first - trailing dots and spaces dropped, case
+// ignored - so "Research.PHASE" or "research.phase." cannot slip past.
+func IsReservedFileName(name string) bool {
+	return strings.HasSuffix(strings.ToLower(strings.TrimRight(name, ". ")), phaseFileSuffix)
 }
 
 // Order is the phase's index in Phases. Anything unknown, the empty Phase

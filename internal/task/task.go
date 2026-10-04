@@ -54,7 +54,11 @@ type Task struct {
 	Type        string     `yaml:"type" json:"type"`
 	Relations   []Relation `yaml:"relations,omitempty" json:"relations,omitempty"`
 	CreatedAt   time.Time  `yaml:"created_at" json:"created_at"`
-	UpdatedAt   time.Time  `yaml:"updated_at" json:"updated_at"`
+	// CreatedBy is the user who created the task, stamped by the server
+	// from its identity (the sanitized git email local part, else the OS
+	// user). Empty on tasks created before the field existed.
+	CreatedBy string    `yaml:"created_by,omitempty" json:"created_by,omitempty"`
+	UpdatedAt time.Time `yaml:"updated_at" json:"updated_at"`
 
 	// Resolution is how the task left the active flow, set when it becomes
 	// done and cleared if it is reopened. Empty on any task that is still

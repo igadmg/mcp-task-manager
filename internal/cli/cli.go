@@ -158,6 +158,28 @@ func RunWithContext(ctx context.Context, args []string, stdout, stderr io.Writer
 	completeCmd.Bool(&completeJSON, "j", "json", "Output as JSON")
 	flaggy.AttachSubcommand(completeCmd, 1)
 
+	// StartPhase subcommand
+	startPhaseCmd := flaggy.NewSubcommand("start-phase")
+	startPhaseCmd.Description = fmt.Sprintf("Start a delivery phase of a task (%s)", strings.Join(task.PhaseStrings(), "|"))
+	var startPhaseIDStr, startPhaseName string
+	var startPhaseJSON bool
+	startPhaseCmd.AddPositionalValue(&startPhaseIDStr, "id", 1, true, "Task ID")
+	startPhaseCmd.AddPositionalValue(&startPhaseName, "phase", 2, true, "Phase")
+	startPhaseCmd.Bool(&startPhaseJSON, "j", "json", "Output as JSON")
+	flaggy.AttachSubcommand(startPhaseCmd, 1)
+
+	// FinishPhase subcommand
+	finishPhaseCmd := flaggy.NewSubcommand("finish-phase")
+	finishPhaseCmd.Description = "Finish the open run of a task's phase"
+	var finishPhaseIDStr, finishPhaseName, finishPhaseTokens, finishPhaseNote string
+	var finishPhaseJSON bool
+	finishPhaseCmd.AddPositionalValue(&finishPhaseIDStr, "id", 1, true, "Task ID")
+	finishPhaseCmd.AddPositionalValue(&finishPhaseName, "phase", 2, true, "Phase")
+	finishPhaseCmd.String(&finishPhaseTokens, "", "tokens", "Tokens the phase used (non-negative integer)")
+	finishPhaseCmd.String(&finishPhaseNote, "", "note", "One-line note on the run")
+	finishPhaseCmd.Bool(&finishPhaseJSON, "j", "json", "Output as JSON")
+	flaggy.AttachSubcommand(finishPhaseCmd, 1)
+
 	// Archive subcommand
 	archiveCmd := flaggy.NewSubcommand("archive")
 	archiveCmd.Description = "Archive a completed task"
@@ -249,6 +271,14 @@ func RunWithContext(ctx context.Context, args []string, stdout, stderr io.Writer
 
 	if startCmd.Used {
 		return cmdStart(stdout, stderr, startJSON, startIDStr)
+	}
+
+	if startPhaseCmd.Used {
+		return cmdStartPhase(stdout, stderr, startPhaseJSON, startPhaseIDStr, startPhaseName)
+	}
+
+	if finishPhaseCmd.Used {
+		return cmdFinishPhase(stdout, stderr, finishPhaseJSON, finishPhaseIDStr, finishPhaseName, finishPhaseTokens, finishPhaseNote)
 	}
 
 	if completeCmd.Used {

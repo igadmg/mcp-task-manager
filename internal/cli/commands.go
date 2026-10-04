@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strconv"
 
 	"github.com/gpayer/mcp-task-manager/internal/app"
 	"github.com/gpayer/mcp-task-manager/internal/config"
@@ -170,23 +171,22 @@ func cmdGet(stdout, stderr io.Writer, jsonOutput bool, id string) int {
 		return 1
 	}
 
-	t, subtasks, err := svc.GetWithSubtasks(id)
+	d, err := svc.Detail(id)
 	if err != nil {
 		fmt.Fprintf(stderr, "Error: %v\n", err)
 		return 1
 	}
 
-	blocked, blockers := svc.IsBlocked(id)
-
 	if jsonOutput {
-		// Include subtasks in JSON output
+		// Include subtasks and the phase history in JSON output
 		type taskWithSubtasks struct {
 			*task.Task
-			Subtasks []*task.Task `json:"subtasks,omitempty"`
+			Subtasks []*task.Task       `json:"subtasks,omitempty"`
+			Phases   []task.PhaseRecord `json:"phases,omitempty"`
 		}
-		output := taskWithSubtasks{Task: t}
-		if len(subtasks) > 0 {
-			output.Subtasks = subtasks
+		output := taskWithSubtasks{Task: d.Task, Phases: d.Phases}
+		if len(d.Subtasks) > 0 {
+			output.Subtasks = d.Subtasks
 		}
 		if err := FormatJSON(stdout, output); err != nil {
 			fmt.Fprintf(stderr, "Error: %v\n", err)
@@ -194,11 +194,12 @@ func cmdGet(stdout, stderr io.Writer, jsonOutput bool, id string) int {
 		}
 	} else {
 		opts := &TaskDetailOptions{
-			Subtasks: subtasks,
-			Blocked:  blocked,
-			Blockers: blockers,
+			Subtasks: d.Subtasks,
+			Blocked:  d.Blocked,
+			Blockers: d.Blockers,
+			Phases:   d.Phases,
 		}
-		fmt.Fprint(stdout, FormatTaskDetail(t, opts))
+		fmt.Fprint(stdout, FormatTaskDetail(d.Task, opts))
 	}
 
 	return 0
@@ -383,6 +384,84 @@ func cmdStart(stdout, stderr io.Writer, jsonOutput bool, id string) int {
 		fmt.Fprintln(stdout, msg)
 	}
 
+	return 0
+}
+
+// cmdStartPhase handles the start-phase command
+func cmdStartPhase(stdout, stderr io.Writer, jsonOutput bool, id, phase string) int {
+	p, err := task.ParsePhase(phase)
+	if err != nil {
+		fmt.Fprintf(stderr, "Error: %v\n", err)
+		return 1
+	}
+	svc, _, err := initService()
+	if err != nil {
+		fmt.Fprintf(stderr, "Error: %v\n", err)
+		return 1
+	}
+
+	started, rec, err := svc.StartPhase(id, p)
+	if err != nil {
+		fmt.Fprintf(stderr, "Error: %v\n", err)
+		return 1
+	}
+
+	run := len(rec.Runs)
+	msg := fmt.Sprintf("Started phase %s of task %s (run %d)", p, id, run)
+	if started.Branch != "" {
+		msg += " on branch " + started.Branch
+	}
+	return printPhaseMessage(stdout, stderr, jsonOutput, msg+".", id, p, run)
+}
+
+// cmdFinishPhase handles the finish-phase command
+func cmdFinishPhase(stdout, stderr io.Writer, jsonOutput bool, id, phase, tokens, note string) int {
+	p, err := task.ParsePhase(phase)
+	if err != nil {
+		fmt.Fprintf(stderr, "Error: %v\n", err)
+		return 1
+	}
+	f := task.PhaseFinish{Note: note}
+	if tokens != "" {
+		// The service checks the range.
+		n, err := strconv.ParseInt(tokens, 10, 64)
+		if err != nil {
+			fmt.Fprintf(stderr, "Error: %v\n", task.ErrInvalidTokens)
+			return 1
+		}
+		f.Tokens = &n
+	}
+	svc, _, err := initService()
+	if err != nil {
+		fmt.Fprintf(stderr, "Error: %v\n", err)
+		return 1
+	}
+
+	_, rec, err := svc.FinishPhase(id, p, f)
+	if err != nil {
+		fmt.Fprintf(stderr, "Error: %v\n", err)
+		return 1
+	}
+
+	run := len(rec.Runs)
+	msg := fmt.Sprintf("Finished phase %s of task %s (run %d", p, id, run)
+	if f.Tokens != nil {
+		msg += fmt.Sprintf(", %d tokens", *f.Tokens)
+	}
+	return printPhaseMessage(stdout, stderr, jsonOutput, msg+").", id, p, run)
+}
+
+// printPhaseMessage prints a phase command's result: the message, or with
+// --json {message, id, phase, run}.
+func printPhaseMessage(stdout, stderr io.Writer, jsonOutput bool, msg, id string, p task.Phase, run int) int {
+	if !jsonOutput {
+		fmt.Fprintln(stdout, msg)
+		return 0
+	}
+	if err := FormatJSON(stdout, map[string]any{"message": msg, "id": id, "phase": p, "run": run}); err != nil {
+		fmt.Fprintf(stderr, "Error: %v\n", err)
+		return 1
+	}
 	return 0
 }
 

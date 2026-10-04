@@ -15,6 +15,8 @@ type TaskDetailOptions struct {
 	Subtasks []*task.Task
 	Blocked  bool
 	Blockers []task.BlockingInfo
+	// Phases is the task's phase-run history, in workflow order.
+	Phases []task.PhaseRecord
 }
 
 // FormatTaskDetail formats a single task for human-readable output
@@ -36,6 +38,9 @@ func FormatTaskDetail(t *task.Task, opts *TaskDetailOptions) string {
 		sb.WriteString(fmt.Sprintf("Parent:      #%s\n", t.ParentID))
 	}
 	sb.WriteString(fmt.Sprintf("Created:     %s\n", t.CreatedAt.Format("2006-01-02 15:04:05")))
+	if t.CreatedBy != "" {
+		sb.WriteString(fmt.Sprintf("Created by:  %s\n", t.CreatedBy))
+	}
 	sb.WriteString(fmt.Sprintf("Updated:     %s\n", t.UpdatedAt.Format("2006-01-02 15:04:05")))
 	if t.ClosedAt != nil {
 		sb.WriteString(fmt.Sprintf("Closed:      %s\n", t.ClosedAt.Format("2006-01-02 15:04:05")))
@@ -54,6 +59,14 @@ func FormatTaskDetail(t *task.Task, opts *TaskDetailOptions) string {
 	} {
 		if line.value != "" {
 			sb.WriteString(fmt.Sprintf("%s %s\n", line.label, line.value))
+		}
+	}
+	if opts != nil && len(opts.Phases) > 0 {
+		sb.WriteString("\nPhases:\n")
+		for _, rec := range opts.Phases {
+			for i, run := range rec.Runs {
+				sb.WriteString(formatPhaseRun(rec.Phase, i+1, run))
+			}
 		}
 	}
 	if len(t.Relations) > 0 {
@@ -77,6 +90,32 @@ func FormatTaskDetail(t *task.Task, opts *TaskDetailOptions) string {
 			sb.WriteString(fmt.Sprintf("  #%s [%s] %s\n", sub.ID, sub.Status, sub.Title))
 		}
 	}
+	return sb.String()
+}
+
+// formatPhaseRun renders one phase run as a detail line:
+// "  design #2  started 2026-10-04 14:02 by igor.cwer  finished 14:30 by igor.cwer  40210 tokens".
+// The finish shows only the clock when it is on the start's day.
+func formatPhaseRun(p task.Phase, n int, run task.PhaseRun) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("  %s #%d  started %s", p, n, task.RunStamp(run.StartedAt, run.StartedBy)))
+	if run.Open() {
+		sb.WriteString("  open")
+	} else {
+		// On the start's day the finish keeps only its clock.
+		finished := task.RunStamp(*run.FinishedAt, run.FinishedBy)
+		if day := "2006-01-02 "; run.FinishedAt.Format(day) == run.StartedAt.Format(day) {
+			finished = strings.TrimPrefix(finished, run.FinishedAt.Format(day))
+		}
+		sb.WriteString("  finished " + finished)
+	}
+	if run.Tokens != nil {
+		sb.WriteString(fmt.Sprintf("  %d tokens", *run.Tokens))
+	}
+	if run.Note != "" {
+		sb.WriteString("  (" + run.Note + ")")
+	}
+	sb.WriteString("\n")
 	return sb.String()
 }
 

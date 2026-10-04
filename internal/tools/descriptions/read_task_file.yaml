@@ -1,4 +1,7 @@
-description: Read the content of a named text file attached to a task
+description: >-
+  Read the content of a named text file attached to a task. <phase>.phase
+  files are the server-written phase records (YAML: every run's start,
+  finish, user, tokens).
 params:
   task_id: Task ID
   filename: Name of the attached file

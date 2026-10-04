@@ -10,8 +10,9 @@ import (
 
 // RequireGit skips the test when git is not installed, and otherwise pins
 // git's environment so the developer's own configuration cannot leak in:
-// no global or system config, fixed commit dates, and no identity or
-// repository location from the environment.
+// an empty global config, no system config, fixed commit dates, and no
+// identity or repository location from the environment. The global config
+// is an empty temp file rather than os.DevNull: git for Windows rejects NUL.
 //
 // It uses t.Setenv, so callers must not use t.Parallel.
 func RequireGit(t *testing.T) {
@@ -19,7 +20,11 @@ func RequireGit(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
-	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	cfg := filepath.Join(t.TempDir(), "gitconfig")
+	if err := os.WriteFile(cfg, nil, 0o644); err != nil {
+		t.Fatalf("WriteFile(%s) error = %v", cfg, err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", cfg)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	t.Setenv("GIT_AUTHOR_DATE", "2026-01-01T00:00:00Z")
 	t.Setenv("GIT_COMMITTER_DATE", "2026-01-01T00:00:00Z")

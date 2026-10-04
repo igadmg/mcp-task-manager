@@ -9,10 +9,10 @@ Expected setup:
 - Make sure the packaged `.mcp.json` can launch the `task-manager` server
 
 The workflow will:
-1. Turn the input into a task on the task manager MCP server and start it, making it your current task (see `get_current_task`)
+1. Turn the input into a task on the task manager MCP server; it stays in todo until research starts, which makes it your current task (see `get_current_task`)
 2. Dispatch a sub-agent with the `research` skill and save its output to the task
 3. Wait for approval, then dispatch a sub-agent with the `design` skill and save its output to the task
 4. Wait for approval, then dispatch a sub-agent with the `planning` skill and save its output to the task
 5. Wait for approval, then dispatch a sub-agent with the `implementation` skill and report the final status
 
-Each phase requires an explicit "yes" before the next one starts. This is a separate, simpler entry point than `/execute-all`: it drives one ticket through the full pipeline end-to-end, rather than looping over the existing task-manager backlog with planner/coder/reviewer subagents.
+Each phase is recorded on the task with `start_phase` / `finish_phase` (who ran it, when, and the tokens it cost), and implementation starts on the task's wip branch when git branching is enabled. Each phase requires an explicit "yes" before the next one starts. This is a separate, simpler entry point than `/execute-all`: it drives one ticket through the full pipeline end-to-end, rather than looping over the existing task-manager backlog with planner/coder/reviewer subagents.
