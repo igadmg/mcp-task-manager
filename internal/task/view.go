@@ -30,6 +30,10 @@ type BoardSnapshot struct {
 	Blocked map[string][]BlockingInfo
 	// Counts is the subtask tally per parent id.
 	Counts map[string]SubtaskCount
+	// Phases is the workflow phase per in-progress task id (subtasks
+	// included), from its attached file names. Only in_progress tasks have
+	// an entry; a missing entry reads as PhaseResearch (Order 0).
+	Phases map[string]Phase
 	// TakenAt is when the snapshot was read.
 	TakenAt time.Time
 }
@@ -59,12 +63,16 @@ func (s *Service) boardSnapshot() (*BoardSnapshot, error) {
 		Tasks:    all,
 		Subtasks: make(map[string][]*Task),
 		Counts:   make(map[string]SubtaskCount),
+		Phases:   make(map[string]Phase),
 		TakenAt:  time.Now().UTC(),
 	}
 
 	ids := make([]string, 0, len(all))
 	for _, t := range all {
 		ids = append(ids, t.ID)
+		if t.Status == StatusInProgress {
+			snap.Phases[t.ID] = s.taskPhase(t.ID)
+		}
 		if t.ParentID == "" {
 			continue
 		}
@@ -79,6 +87,21 @@ func (s *Service) boardSnapshot() (*BoardSnapshot, error) {
 
 	snap.Blocked = s.blockedMap(ids)
 	return snap, nil
+}
+
+// taskPhase reads one task's workflow phase from its attached file
+// names. Caller holds s.mu. No file store, or a failed listing, reads as
+// PhaseResearch: the board never fails over it, and the next poll
+// corrects a transient error (the same tolerance as detail()).
+func (s *Service) taskPhase(id string) Phase {
+	if s.fileStorage == nil {
+		return PhaseResearch
+	}
+	names, err := s.fileStorage.ListFiles(id)
+	if err != nil {
+		return PhaseResearch
+	}
+	return phaseFromFiles(names)
 }
 
 // Detail returns a task with its subtasks, blockers, relations and attached

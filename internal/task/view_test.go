@@ -1,6 +1,7 @@
 package task
 
 import (
+	"errors"
 	"testing"
 )
 
@@ -63,6 +64,111 @@ func TestBoardSnapshotSubtaskGrouping(t *testing.T) {
 	}
 	if _, ok := snap.Counts["p0-s0"]; ok {
 		t.Error("a subtask must not appear in Counts; only parents do")
+	}
+}
+
+func TestBoardSnapshotPhases(t *testing.T) {
+	svc := newViewService(t)
+	seedBacklog(t, svc)
+
+	if _, err := svc.StartTask("p0"); err != nil {
+		t.Fatalf("StartTask(p0) error = %v", err)
+	}
+	if err := svc.WriteTaskFile("p0", "research", "x"); err != nil {
+		t.Fatalf("WriteTaskFile() error = %v", err)
+	}
+	// Starting the subtask auto-starts p2, which has no files of its own.
+	if _, err := svc.StartTask("p2-s0"); err != nil {
+		t.Fatalf("StartTask(p2-s0) error = %v", err)
+	}
+	if err := svc.WriteTaskFile("p2-s0", "PLAN.md", "x"); err != nil {
+		t.Fatalf("WriteTaskFile() error = %v", err)
+	}
+	// A todo task with a plan still gets no entry.
+	if err := svc.WriteTaskFile("p3", "plan", "x"); err != nil {
+		t.Fatalf("WriteTaskFile() error = %v", err)
+	}
+
+	snap, err := svc.BoardSnapshot()
+	if err != nil {
+		t.Fatalf("BoardSnapshot() error = %v", err)
+	}
+
+	want := map[string]Phase{
+		"p0":    PhaseDesign,
+		"p2":    PhaseResearch,
+		"p2-s0": PhaseImplementation,
+	}
+	for id, p := range want {
+		if got, ok := snap.Phases[id]; !ok || got != p {
+			t.Errorf("Phases[%s] = %q (present %v), want %q", id, got, ok, p)
+		}
+	}
+	if _, ok := snap.Phases["p3"]; ok {
+		t.Error("Phases has an entry for todo task p3")
+	}
+	if len(snap.Phases) != len(want) {
+		t.Errorf("len(Phases) = %d, want %d: %v", len(snap.Phases), len(want), snap.Phases)
+	}
+}
+
+func TestBoardSnapshotPhasesEmptyWhenNothingInProgress(t *testing.T) {
+	svc := newViewService(t)
+	seedBacklog(t, svc)
+
+	snap, err := svc.BoardSnapshot()
+	if err != nil {
+		t.Fatalf("BoardSnapshot() error = %v", err)
+	}
+	if snap.Phases == nil {
+		t.Fatal("Phases is nil, want an empty map")
+	}
+	if len(snap.Phases) != 0 {
+		t.Errorf("Phases = %v, want empty", snap.Phases)
+	}
+}
+
+func TestBoardSnapshotPhasesWithoutFileStorage(t *testing.T) {
+	svc := newViewService(t)
+	seedBacklog(t, svc)
+	svc.fileStorage = nil // the untyped nil: a typed nil pointer would pass the guard
+
+	if _, err := svc.StartTask("p0"); err != nil {
+		t.Fatalf("StartTask(p0) error = %v", err)
+	}
+	snap, err := svc.BoardSnapshot()
+	if err != nil {
+		t.Fatalf("BoardSnapshot() error = %v", err)
+	}
+	if got := snap.Phases["p0"]; got != PhaseResearch {
+		t.Errorf("Phases[p0] = %q, want %q", got, PhaseResearch)
+	}
+}
+
+// failingListFiles is a file store whose listing always fails.
+type failingListFiles struct{ *mockFileStorage }
+
+func (failingListFiles) ListFiles(string) ([]string, error) {
+	return nil, errors.New("listing failed")
+}
+
+func TestBoardSnapshotPhaseListingErrorDegrades(t *testing.T) {
+	svc := newViewService(t)
+	seedBacklog(t, svc)
+	if err := svc.WriteTaskFile("p0", "plan", "x"); err != nil {
+		t.Fatalf("WriteTaskFile() error = %v", err)
+	}
+	svc.fileStorage = failingListFiles{svc.fileStorage.(*mockFileStorage)}
+
+	if _, err := svc.StartTask("p0"); err != nil {
+		t.Fatalf("StartTask(p0) error = %v", err)
+	}
+	snap, err := svc.BoardSnapshot()
+	if err != nil {
+		t.Fatalf("BoardSnapshot() error = %v", err)
+	}
+	if got := snap.Phases["p0"]; got != PhaseResearch {
+		t.Errorf("Phases[p0] = %q, want %q despite the plan file", got, PhaseResearch)
 	}
 }
 

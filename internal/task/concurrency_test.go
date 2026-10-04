@@ -94,7 +94,9 @@ func TestServiceRace(t *testing.T) {
 	})
 	run(func(i int) { svc.StartTask(fmt.Sprintf("p%d-s%d", i%10, i%2)) })
 	run(func(i int) { svc.CompleteTask(fmt.Sprintf("p%d-s%d", i%10, i%2)) })
-	run(func(i int) { svc.WriteTaskFile(ids[i%len(ids)], "notes.md", "content") })
+	run(func(i int) {
+		svc.WriteTaskFile(ids[i%len(ids)], []string{"notes.md", "research", "plan"}[i%3], "content")
+	})
 
 	wg.Wait()
 }
@@ -139,6 +141,7 @@ func TestServiceNoSelfDeadlock(t *testing.T) {
 	svc.Detail("fresh")
 	svc.RemoveRelation("fresh", "relates_to", "p0")
 	svc.StartTask("p0")
+	svc.BoardSnapshot()
 	svc.Update("p0", nil, nil, &status, nil, nil)
 	svc.CompleteTask("p0-s0")
 	svc.GetAutoArchiveCandidates()
