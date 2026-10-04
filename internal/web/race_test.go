@@ -61,6 +61,9 @@ func TestHandlerRaceAgainstWrites(t *testing.T) {
 		title := fmt.Sprintf("renamed %d", i)
 		svc.Update("1", &title, nil, nil, nil, nil)
 	})
+	// Task 3 is in progress, so /board lists its files while they change.
+	names := []string{"research", "design", "plan"}
+	run(func(i int) { _ = svc.WriteTaskFile("3", names[i%len(names)], "x") })
 
 	wg.Wait()
 }

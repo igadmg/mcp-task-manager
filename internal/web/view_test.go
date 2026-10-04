@@ -1,6 +1,7 @@
 package web
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -27,6 +28,7 @@ func boardOf(tasks ...*task.Task) *task.BoardSnapshot {
 		Subtasks: map[string][]*task.Task{},
 		Blocked:  map[string][]task.BlockingInfo{},
 		Counts:   map[string]task.SubtaskCount{},
+		Phases:   map[string]task.Phase{},
 		TakenAt:  fixedNow,
 	}
 	for _, t := range tasks {
@@ -51,6 +53,228 @@ func column(v BoardView, status string) ColumnView {
 		}
 	}
 	return ColumnView{}
+}
+
+func lane(v BoardView, phase task.Phase) PhaseLaneView {
+	for _, l := range column(v, "in_progress").Lanes {
+		if l.Phase == string(phase) {
+			return l
+		}
+	}
+	return PhaseLaneView{}
+}
+
+func cardIDs(cards []CardView) []string {
+	ids := make([]string, 0, len(cards))
+	for _, c := range cards {
+		ids = append(ids, c.ID)
+	}
+	return ids
+}
+
+func TestPhaseLanesFollowPhaseOrder(t *testing.T) {
+	if len(phaseLanes) != 4 {
+		t.Fatalf("len(phaseLanes) = %d, want 4", len(phaseLanes))
+	}
+	titles := []string{"Research", "Design", "Planning", "Implementation"}
+	for i, l := range phaseLanes {
+		if l.Phase.Order() != i {
+			t.Errorf("phaseLanes[%d] = %q with Order %d, want %d", i, l.Phase, l.Phase.Order(), i)
+		}
+		if l.Title != titles[i] {
+			t.Errorf("phaseLanes[%d].Title = %q, want %q", i, l.Title, titles[i])
+		}
+	}
+}
+
+func TestInProgressHasFourPhaseLanes(t *testing.T) {
+	v := newBoardView(boardOf(), nil, fixedNow, 5)
+
+	lanes := column(v, "in_progress").Lanes
+	want := []string{"research", "design", "planning", "implementation"}
+	if len(lanes) != len(want) {
+		t.Fatalf("in_progress has %d lanes, want %d", len(lanes), len(want))
+	}
+	for i, phase := range want {
+		if lanes[i].Phase != phase {
+			t.Errorf("lane %d = %q, want %q", i, lanes[i].Phase, phase)
+		}
+		if lanes[i].Count != 0 || len(lanes[i].Cards) != 0 {
+			t.Errorf("lane %s = %d count, %d cards on an empty board", phase, lanes[i].Count, len(lanes[i].Cards))
+		}
+	}
+	for _, status := range []string{"todo", "done"} {
+		if n := len(column(v, status).Lanes); n != 0 {
+			t.Errorf("%s has %d lanes, want none", status, n)
+		}
+	}
+}
+
+func TestInProgressCardsLandInTheirLane(t *testing.T) {
+	snap := boardOf(
+		tk("r", "", task.StatusInProgress, task.PriorityHigh, fixedNow),
+		tk("x", "", task.StatusInProgress, task.PriorityHigh, fixedNow),
+		tk("q", "", task.StatusInProgress, task.PriorityHigh, fixedNow),
+		tk("d", "", task.StatusInProgress, task.PriorityHigh, fixedNow),
+		tk("p", "", task.StatusInProgress, task.PriorityHigh, fixedNow),
+		tk("i", "", task.StatusInProgress, task.PriorityHigh, fixedNow),
+	)
+	snap.Phases["x"] = task.PhaseResearch
+	snap.Phases["q"] = task.Phase("bogus")
+	snap.Phases["d"] = task.PhaseDesign
+	snap.Phases["p"] = task.PhasePlanning
+	snap.Phases["i"] = task.PhaseImplementation
+
+	v := newBoardView(snap, nil, fixedNow, 5)
+	want := map[task.Phase][]string{
+		task.PhaseResearch:       {"q", "r", "x"},
+		task.PhaseDesign:         {"d"},
+		task.PhasePlanning:       {"p"},
+		task.PhaseImplementation: {"i"},
+	}
+	for phase, ids := range want {
+		got := cardIDs(lane(v, phase).Cards)
+		if strings.Join(got, ",") != strings.Join(ids, ",") {
+			t.Errorf("lane %s = %v, want %v", phase, got, ids)
+		}
+	}
+}
+
+func TestNilPhasesMapReadsAsResearch(t *testing.T) {
+	snap := boardOf(tk("a", "", task.StatusInProgress, task.PriorityHigh, fixedNow))
+	snap.Phases = nil
+
+	v := newBoardView(snap, nil, fixedNow, 5)
+	if got := cardIDs(lane(v, task.PhaseResearch).Cards); len(got) != 1 || got[0] != "a" {
+		t.Errorf("research lane = %v, want [a]", got)
+	}
+}
+
+func TestLaneGroupTakesFurthestPhase(t *testing.T) {
+	snap := boardOf(
+		tk("P", "", task.StatusInProgress, task.PriorityHigh, fixedNow),
+		tk("S", "P", task.StatusInProgress, task.PriorityHigh, fixedNow),
+	)
+	snap.Phases["S"] = task.PhasePlanning
+
+	v := newBoardView(snap, nil, fixedNow, 5)
+	planning := lane(v, task.PhasePlanning)
+	if len(planning.Cards) != 1 || planning.Cards[0].ID != "P" {
+		t.Fatalf("planning lane = %v, want [P]", cardIDs(planning.Cards))
+	}
+	if got := cardIDs(planning.Cards[0].Subtasks); len(got) != 1 || got[0] != "S" {
+		t.Errorf("P nests %v, want [S]", got)
+	}
+	if planning.Count != 2 {
+		t.Errorf("planning Count = %d, want 2: nested subtasks count", planning.Count)
+	}
+	research := lane(v, task.PhaseResearch)
+	if research.Count != 0 || len(research.Cards) != 0 {
+		t.Errorf("research lane = %d count, %v cards, want empty", research.Count, cardIDs(research.Cards))
+	}
+	if n := column(v, "in_progress").Count; n != 2 {
+		t.Errorf("in_progress Count = %d, want 2", n)
+	}
+}
+
+func TestStandaloneSubtaskUsesOwnPhase(t *testing.T) {
+	snap := boardOf(
+		tk("P", "", task.StatusTodo, task.PriorityHigh, fixedNow),
+		tk("S", "P", task.StatusInProgress, task.PriorityHigh, fixedNow),
+	)
+	snap.Phases["S"] = task.PhaseDesign
+
+	v := newBoardView(snap, nil, fixedNow, 5)
+	design := lane(v, task.PhaseDesign)
+	if len(design.Cards) != 1 || design.Cards[0].ID != "S" || !design.Cards[0].IsSubtask {
+		t.Errorf("design lane = %+v, want the standalone subtask S", design.Cards)
+	}
+	todo := column(v, "todo").Cards
+	if len(todo) != 1 || todo[0].ID != "P" || len(todo[0].Subtasks) != 0 {
+		t.Errorf("todo = %+v, want P with no nested subtasks", todo)
+	}
+}
+
+// mixedLaneBoard has nesting, a standalone subtask, and tasks outside In
+// progress, so lane counts and cards can be checked against the column.
+func mixedLaneBoard() *task.BoardSnapshot {
+	snap := boardOf(
+		tk("a", "", task.StatusInProgress, task.PriorityHigh, fixedNow),
+		tk("b", "", task.StatusInProgress, task.PriorityHigh, fixedNow),
+		tk("b1", "b", task.StatusInProgress, task.PriorityHigh, fixedNow),
+		tk("c", "", task.StatusInProgress, task.PriorityHigh, fixedNow),
+		tk("c1", "c", task.StatusTodo, task.PriorityHigh, fixedNow),
+		tk("d", "", task.StatusTodo, task.PriorityHigh, fixedNow),
+		tk("d1", "d", task.StatusInProgress, task.PriorityHigh, fixedNow),
+		tk("e", "", task.StatusDone, task.PriorityHigh, fixedNow),
+	)
+	snap.Phases["b"] = task.PhaseDesign
+	snap.Phases["b1"] = task.PhaseImplementation
+	snap.Phases["c"] = task.PhasePlanning
+	snap.Phases["d1"] = task.PhaseDesign
+	return snap
+}
+
+func TestLaneCountsSumToColumnCount(t *testing.T) {
+	v := newBoardView(mixedLaneBoard(), nil, fixedNow, 5)
+
+	want := map[task.Phase]int{
+		task.PhaseResearch:       1,
+		task.PhaseDesign:         1,
+		task.PhasePlanning:       1,
+		task.PhaseImplementation: 2,
+	}
+	sum := 0
+	for phase, n := range want {
+		if got := lane(v, phase).Count; got != n {
+			t.Errorf("lane %s Count = %d, want %d", phase, got, n)
+		}
+	}
+	for _, l := range column(v, "in_progress").Lanes {
+		sum += l.Count
+	}
+	if col := column(v, "in_progress"); sum != col.Count || col.Count != 5 {
+		t.Errorf("lane counts sum to %d, column Count = %d, want both 5", sum, col.Count)
+	}
+}
+
+func TestLanesPartitionColumnCards(t *testing.T) {
+	v := newBoardView(mixedLaneBoard(), nil, fixedNow, 5)
+	col := column(v, "in_progress")
+
+	seen := map[string]int{}
+	for _, l := range col.Lanes {
+		for _, id := range cardIDs(l.Cards) {
+			seen[id]++
+		}
+	}
+	want := cardIDs(col.Cards)
+	if len(seen) != len(want) {
+		t.Errorf("lanes hold %v, column holds %v", seen, want)
+	}
+	for _, id := range want {
+		if seen[id] != 1 {
+			t.Errorf("card %s appears %d times across the lanes, want once", id, seen[id])
+		}
+	}
+}
+
+func TestLaneSortsByPriorityThenAge(t *testing.T) {
+	old := fixedNow.Add(-48 * time.Hour)
+	recent := fixedNow.Add(-time.Hour)
+	snap := boardOf(
+		tk("x", "", task.StatusInProgress, task.PriorityLow, old),
+		tk("y", "", task.StatusInProgress, task.PriorityHigh, recent),
+		tk("z", "", task.StatusInProgress, task.PriorityHigh, old),
+	)
+	for _, id := range []string{"x", "y", "z"} {
+		snap.Phases[id] = task.PhaseDesign
+	}
+
+	got := cardIDs(lane(newBoardView(snap, nil, fixedNow, 5), task.PhaseDesign).Cards)
+	if strings.Join(got, ",") != "z,y,x" {
+		t.Errorf("design lane = %v, want [z y x]", got)
+	}
 }
 
 func TestColumnsAreInFixedOrder(t *testing.T) {

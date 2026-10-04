@@ -38,6 +38,20 @@ type ColumnView struct {
 	Title  string
 	Count  int
 	Cards  []CardView
+	// Lanes are the In progress column's phase lanes (virtual sub-columns),
+	// in workflow order; nil for every other column. They partition Cards.
+	Lanes []PhaseLaneView
+}
+
+// PhaseLaneView is one workflow-phase lane inside In progress. Phase is
+// the raw value ("planning"): it names the lane-<phase> CSS class and
+// the data-phase attribute. Count is the in-progress tasks on its cards,
+// nested subtasks included, so the lane counts add up to the column's.
+type PhaseLaneView struct {
+	Phase string
+	Title string
+	Count int
+	Cards []CardView
 }
 
 // CardView is one task on the board.
@@ -126,6 +140,18 @@ var columns = []struct {
 	{task.StatusDone, "Done"},
 }
 
+// phaseLanes fixes the In progress lanes' order and headings. Lane i holds
+// phase Order() i (TestPhaseLanesFollowPhaseOrder).
+var phaseLanes = []struct {
+	Phase task.Phase
+	Title string
+}{
+	{task.PhaseResearch, "Research"},
+	{task.PhaseDesign, "Design"},
+	{task.PhasePlanning, "Planning"},
+	{task.PhaseImplementation, "Implementation"},
+}
+
 const timeFormat = "2006-01-02 15:04"
 
 // newBoardView maps a snapshot onto the board. Pure: everything it needs was
@@ -170,12 +196,16 @@ func newBoardView(snap *task.BoardSnapshot, cfg *config.Config, now time.Time, p
 				count++
 			}
 		}
-		v.Columns = append(v.Columns, ColumnView{
+		cv := ColumnView{
 			Status: string(col.Status),
 			Title:  col.Title,
 			Count:  count,
 			Cards:  deref(cards),
-		})
+		}
+		if col.Status == task.StatusInProgress {
+			cv.Lanes = newPhaseLanes(cards, snap)
+		}
+		v.Columns = append(v.Columns, cv)
 	}
 
 	for _, t := range snap.Tasks {
@@ -192,6 +222,32 @@ func newBoardView(snap *task.BoardSnapshot, cfg *config.Config, now time.Time, p
 	sort.SliceStable(v.DangerZone, func(i, j int) bool { return v.DangerZone[i].ID < v.DangerZone[j].ID })
 
 	return v
+}
+
+// newPhaseLanes buckets the In progress root cards, already sorted, into
+// the four phase lanes. A card goes to the furthest phase of its group:
+// itself plus its nested subtasks, which in this column are exactly its
+// in-progress subtasks. Bucketing is stable, so each lane keeps the
+// column's priority, age, id order.
+func newPhaseLanes(roots []*CardView, snap *task.BoardSnapshot) []PhaseLaneView {
+	lanes := make([]PhaseLaneView, len(phaseLanes))
+	for i, l := range phaseLanes {
+		lanes[i] = PhaseLaneView{Phase: string(l.Phase), Title: l.Title}
+	}
+	for _, card := range roots {
+		rank := snap.Phases[card.ID].Order()
+		for _, kid := range card.Subtasks {
+			if r := snap.Phases[kid.ID].Order(); r > rank {
+				rank = r
+			}
+		}
+		if rank >= len(lanes) { // a phase newer than this list lands last instead of panicking
+			rank = len(lanes) - 1
+		}
+		lanes[rank].Cards = append(lanes[rank].Cards, *card)
+		lanes[rank].Count += 1 + len(card.Subtasks)
+	}
+	return lanes
 }
 
 // unresolvedBoardView is what the board shows while no project is resolved
