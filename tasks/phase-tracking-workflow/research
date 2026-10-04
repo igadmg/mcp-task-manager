@@ -1,0 +1,526 @@
+# Research: phase-tracking-workflow
+
+### Task Slice
+
+- **Classification.** This is a cross-cutting feature. It touches:
+  - the task record (a new frontmatter field) and its persistence;
+  - the `task.Service` lifecycle, including the git branch-per-task flows and their rollback journal;
+  - the MCP tool surface (new tools, descriptions, reserved file names);
+  - the read-only web board (snapshot, view models, templates, CSS);
+  - CLI output;
+  - the packaged workflow skills and the docs.
+
+  The repo has no code generation. The embedded inputs are compiled in with `go:embed`: tool description YAML, `instructions.md`, templates and the vendored CSS. The CSS (`static/app.css`) is rebuilt by hand with `scripts/build-css.sh`.
+- **Area researched:**
+  - the `Task` model and frontmatter encode/decode;
+  - the create path and where `created_at` is stamped;
+  - user identity resolution;
+  - attached-file storage, validation and listing;
+  - today's phase derivation (`phase.go`, `BoardSnapshot`);
+  - `start_task` / `complete_task` / `update_task`, with every git flow, the `gitTxn` journal, the update guard and the current-task pointer;
+  - tool registration;
+  - the concurrency discipline;
+  - web view models, templates and CSS;
+  - CLI output;
+  - the skills;
+  - test support, fault injection and the current test baseline;
+  - archive, delete and reopen interactions.
+- **Documents loaded:**
+  - `CLAUDE.md`, `README.md`, `_design.md`, `internal/app/instructions.md`;
+  - `tasks/git-branch-per-task/design` (its record too);
+  - `tasks/in-progress-phase-columns/{task,design,test-baseline}`;
+  - `docs/git-branching.md` (only the parts about `start_task`);
+  - `tasks/phase-tracking-workflow/{task,phase-tracking-workflow.md}`.
+- **Out of scope:** config resolution internals, relations, migration internals and the `vcs` command plumbing. They are read only where a fact depended on them.
+
+### Confirmed Facts
+
+**A. Repository and environment state**
+
+- **Branch.** HEAD is `igor.cwer/wip/phase-tracking-workflow`. This task's own record already has `branch`, `base_branch: main_patched` and `start_commit: 3253b08…`, because `start_task` started it with git branching on. Its only attached file is `task` (`tasks/phase-tracking-workflow/phase-tracking-workflow.md:1-12`). So the new "branch only at implementation" rule cannot apply to this task itself: its wip branch already exists.
+- **Config, with an uncommitted change.** `mcp-tasks.yaml` enables `git: {branching: true, base_branches: [main_patched, master_patched, main, master]}`. It also has `tasks_dir: tasks` and `auto_archive: {enabled: true, after_days: 30}` (`mcp-tasks.yaml:1-17`; the `git diff` shows the git block was a commented reference before).
+- **Pointer.** This user's pointer exists: `tasks/.users/igor.cwer/current_task` holds `phase-tracking-workflow`. `tasks/.users/` is gitignored (`.gitignore:22-24`).
+- **Toolchain.** go1.27.1 windows/amd64, `CGO_ENABLED=1`, git 2.56.0.windows.1.
+- **No CI tests.** `.github/workflows/release.yml` contains no `go test` or `go vet` step.
+
+**B. Task model and frontmatter persistence**
+
+- **`task.Task` fields** (`internal/task/task.go:46-92`):
+  - `ID`, `ParentID` (omitempty), `Title`, `Description` (`yaml:"-"`, it is the body), `Status`, `Priority`, `Type`, `Relations` (omitempty);
+  - `CreatedAt` and `UpdatedAt` (`time.Time`, **not** omitempty, `:56-57`);
+  - `Resolution`, `ResolutionNote`, `ClosedAt *time.Time`, `VerifiedAt *time.Time`, all omitempty (`:63-75`);
+  - the branch fields `Branch`, `BaseBranch`, `StartCommit`, `FinalBranch`, `SquashCommit`, all omitempty (`:77-91`).
+  - No field records a creator, and no field records anything about phases.
+- **Writing.** `MarkdownStorage.Save` does not encode `task.Task` directly. It builds an anonymous frontmatter struct that lists every key, so a new key must be added there explicitly (`internal/storage/markdown.go:45-85`).
+  - Optional keys use `omitempty`. Optional timestamps are rendered as `""` through `formatTime` so the key disappears (`:57-65, 241-248`).
+  - `created_at` and `updated_at` are always written, in `2006-01-02T15:04:05Z07:00` format (`:74-75`).
+  - YAML key order follows the struct field order. The write is atomic (`writeFileAtomic`: write `<path>.tmp`, then rename, after `MkdirAll` of the parent; `:97, 100-111`).
+- **Reading.** `parse` decodes into a second hand-written struct with `yaml.Unmarshal`. That call is not strict (`KnownFields` is never enabled), so unknown keys are ignored and missing keys load as zero values (`markdown.go:181-203`).
+  - Timestamps are parsed with errors ignored (`:215-216`). Optional ones go through `parseOptionalTime`, where empty or unparsable reads as nil (`:250-262`).
+  - Every field must also be copied into the returned `Task` by hand (`:218-238`).
+- **Precedent for adding fields.** `_design.md` records it: "All four keys are `omitempty`: an open task's frontmatter is byte-identical … and old files parse unchanged. No migration runs" (`_design.md:137-139`). The storage test `TestMarkdownStorage_ResolutionRoundTrip` checks the round trip and checks that empty keys are not emitted (`internal/storage/storage_test.go:2537-2611`).
+- **The in-memory index is a projection.** `IndexEntry` (`internal/storage/index.go:27-52`) carries:
+  - `ID`, `ParentID`, `Title`, `Status`, `Priority`, `Type`, `CreatedAt`, `UpdatedAt`;
+  - `Resolution`, `ClosedAt`, `VerifiedAt`;
+  - `Branch`, `FinalBranch`, `SquashCommit`.
+
+  `Description`, `ResolutionNote`, `BaseBranch` and `StartCommit` are left out on purpose. `taskToEntry` and `entryToTask` copy these fields by hand (`:54-96`).
+  - **Who reads only index fields:** `Index.All`, `Filter`, `GetSubtasks` and `NextTodo` return index-only tasks (`internal/task/service.go:49-53`; `index.go:285-337`). That includes `list_tasks`, CLI `list`, and every card on the board (`BoardSnapshot.Tasks`, `internal/task/view.go:24-26, 60`). A field missing from `IndexEntry` is therefore missing from all of those outputs.
+  - **Self-healing** compares only `{id}/{id}.md` mtimes and the task count (`index.go:206-245`, the stat at `:224`). Attached files never mark the index stale.
+- **Scans.** `LoadAll` and `isStaleOnDisk` skip non-directories, `archive` and `.users` (`markdown.go:141`; `index.go:220`).
+
+**C. Create path**
+
+- **MCP.** `create_task` → `createTaskHandler` reads `title`, `description`, `priority`, `type`, `parent_id` and `id`, then calls `svc.Create(title, description, priority, taskType, parentID, customID)` and returns `taskResult(t)`, which is the whole `task.Task` marshalled as JSON (`internal/tools/management.go:154-170, 413-419`).
+- **Service.** `Service.Create` locks and calls `create` (`internal/task/service.go:202-206`). `create` does the following, in order:
+  1. validates title, priority and type;
+  2. validates the parent: it must exist and must not itself be a subtask;
+  3. runs `EnsureDir`;
+  4. validates a custom id, or allocates `index.NextID()`;
+  5. stamps `now := time.Now().UTC()` into **both** `CreatedAt` and `UpdatedAt`, with status `todo` (`:251-262`);
+  6. runs `storage.Save` and then `index.Set` (`:208-271`).
+
+  `create` takes no identity parameter and stamps nothing about the user. `CreateSubtask` is a second exported entry point into the same twin (`:274-278`).
+- **Who calls `Create`:**
+  - in production, `internal/tools/management.go:163` and `internal/cli/commands.go:256`;
+  - in test support, `internal/testsupport/testsupport.go:76` (`Seed`);
+  - in tests, 12 `_test.go` files.
+- **CLI.** `mcp-task-manager create <title> [-p] [-t] [-d] [--parent] [--id] [--json]` (`internal/cli/cli.go:91-106`) → `cmdCreate` → `svc.Create`. It prints `FormatTaskDetail(t)`, or the task as JSON (`internal/cli/commands.go:249-273`).
+
+**D. User identity**
+
+- **Resolution.** `vcs.ResolveIdentity(root)` runs `git config --get user.email` (works outside a repository). It keeps only the part before `@` and sanitizes it (`internal/vcs/vcs.go:317-334`).
+  - Sanitizing (`:358-383`): lowercase; runes outside `[a-z0-9._-]` become `-`; runs of `-` collapse; leading and trailing `.`/`-` are trimmed; `..` becomes `.`; a trailing `.lock` is stripped.
+  - **Fallback order:** `user.Current().Username` (the part after `\`), then `$USER`, then `$USERNAME`, then `"default"`, with `FromGitEmail: false` (`:336-350`).
+  - **The full email is never kept.** `vcs.Identity` has only `Name` and `FromGitEmail` (`:43-49`).
+- **Injection.** `task.Identity{Name, FromGitEmail}` is set with `WithIdentity` (`internal/task/git.go:37-43, 61-64`) and stored in the write-once field `Service.identity` (`service.go:107-113`).
+- **Construction.** `project.Build` is the single construction site. It **always** resolves the identity and passes `WithCurrentTaskStore(mdStorage)` and `WithIdentity(...)`, whatever `cfg.Git.Branching` says. `WithGit(vcs.New(root, tasksDir))` is added only when branching is on (`internal/project/resolver.go:131-166`, lines `150-157`). So an identity is available with branching off too. It costs one `git config` process per Build.
+- **What the identity is used for today:**
+  - branch names (`wipBranch(s.identity.Name, …)`, `branching_start.go:104`);
+  - the pointer user (`current.go:25, 47, 50, 60-73`);
+  - the branching precondition `FromGitEmail` (`branching_start.go:38-40`, `errNoEmail` at `:20`).
+- **No exported accessor.** No exported `Service` method returns the identity. `keepsPointer()` is false when `identity.Name == ""` (`current.go:38-40`).
+- **Test identities:**
+
+  | Test service | Identity |
+  |---|---|
+  | `testsupport.NewBacklog` | `Identity{Name: "dev"}`, not from git email (`internal/testsupport/testsupport.go:35-36`) |
+  | `NewGitBacklog` | `dev`, resolved from repository email `dev@example.com` (`internal/testsupport/gitbacklog.go:53-56`; `git.go:58-60`) |
+  | In-package `newConcurrentService` | none (`internal/task/concurrency_test.go:17-26`) |
+  | In-package `newPointerService` | `dev` (`internal/task/current_test.go:38-44`) |
+
+- **In this repository** the identity is `igor.cwer`: the pointer directory and the branch prefix show it.
+
+**E. Attached files**
+
+- **Validation.** `validatePathSegment` rejects empty or blank names, names with `/` or `\`, and `..` (`internal/storage/files.go:14-25`). `validateFilename` adds one reserved name, the task's own `{id}.md`, and only when writing (`:32-40`).
+  - **No other names are reserved, and no suffixes are restricted.** `research.phase` is a valid attached filename today.
+  - Reserved task **ids** are a separate map: `"0"`, `"archive"`, `".index.json"`, `.users` (`:44-49`).
+- **Write.** `MarkdownStorage.WriteFile` validates, then writes atomically into `tasks/{id}/` (`files.go:71-78`). The storage layer does not check that the task exists; `writeFileAtomic` would `MkdirAll`. The service does check, in `Service.WriteTaskFile`: the task must be in the active index, an archived task is refused with "task %s is archived; files are read-only", and anything else is "task not found" (`service.go:318-331`).
+- **Read and list.** `ReadFile` and `ListFiles` resolve the directory as active first, then archive (`files.go:80-101, 103-125, 127-138`).
+  - `ListFiles` drops subdirectories and `{id}.md`, and returns every other entry in `os.ReadDir` order, which is sorted by filename (`:111-124`).
+  - It does not filter `*.tmp` leftovers or dotfiles.
+  - The in-package `mockFileStorage.ListFiles` returns map order, i.e. unsorted (`internal/task/service_test.go:141-147`).
+- **Service methods without twins.** `WriteTaskFile`, `ReadTaskFile` and `ListTaskFiles` take the lock and do the work inline (`service.go:320-355`). Code that already holds `s.mu` must call `s.fileStorage` directly.
+- **Interface.** `task.FileStorage` has just `WriteFile`, `ReadFile` and `ListFiles` (`service.go:87-96`). `NewService` receives the same `*MarkdownStorage` as `Storage`, `ArchiveStorage`, `FileStorage` and the pointer store (`resolver.go:160`).
+- **Read-only consumers.** `Service.attachedFiles(id)` is an unlocked helper: a nil file store, or a listing error, reads as "no files" (`internal/task/view.go:92-105`). `detail()` puts the result in `TaskDetail.Files` for active and archived tasks (`view.go:115-139`).
+- **Tools.** `write_task_file` takes `task_id`, `filename` and `content`, all required. `read_task_file` and `list_task_files` call `EnsureProjectExists` first. `list_task_files` returns a JSON array, or the text "No files attached to task X" (`internal/tools/files.go:14-120`). The descriptions are minimal (`internal/tools/descriptions/write_task_file.yaml:1-5`, `list_task_files.yaml:1-3`).
+- **CLI.** `write-task-file`, `read-task-file` and `list-task-files` exist (`internal/cli/commands.go:415-468`).
+
+**F. How the phase is derived today**
+
+- **Type.** `task.Phase` has the constants `research`, `design`, `planning` and `implementation`. `Phases()` returns them in workflow order. `Order()` maps anything unknown to 0 (`internal/task/phase.go:8-35`).
+- **Mapping.** `phaseMarkers` maps file names to the phase a task has *reached* (`phase.go:37-48`):
+
+  | Attached file | Phase |
+  |---|---|
+  | `task` | research |
+  | `research` | design |
+  | `design` | planning |
+  | `plan` | implementation |
+  | `implementation` | implementation |
+
+  `phaseFromFiles` lowercases each name and trims one `.md`, matches exactly, takes the maximum rank, and defaults to Research (`:50-62`). A name such as `research.phase` matches no marker and is ignored; near-miss tests such as `plan.txt` and `plan.tmp` show this (`internal/task/phase_test.go:38-47`).
+- **Snapshot.** `boardSnapshot()` runs under the one lock. It takes `index.All()` and, **for in-progress tasks only**, sets `snap.Phases[id] = phaseFromFiles(s.attachedFiles(id))`. That is one directory listing per in-progress task per snapshot, and no file contents are read (`view.go:59-90`, lines `73-75`). `BoardSnapshot.Phases` documents that a missing entry reads as Research (`view.go:33-36`).
+- **Grouping.** The "furthest phase of the group" rule lives in the web view model. `newPhaseLanes` gives each root In-progress card the maximum `Order()` over itself and its nested subtasks; a lane's `Count` is 1 plus the number of nested subtasks (`internal/web/view.go:215-234`). A subtask shown standalone uses its own phase.
+- **Failure fallback.** No file store, or a failed listing, reads as Research (`internal/task/view_test.go:131-173`). CLAUDE.md documents the whole rule (`CLAUDE.md:237`).
+- **Earlier decisions.** The in-progress-phase-columns task decided "No new frontmatter field, no tool/schema changes; purely read-side" (`tasks/in-progress-phase-columns/task:9`). Its design listed as non-goals: a phase chip on cards, and phases in the detail view, CLI or MCP tools (`tasks/in-progress-phase-columns/design:39-45, 330-332`).
+
+**G. Lifecycle: `start_task`, `complete_task`, `update_task`**
+
+*Handlers*
+
+- **`start_task`** handler: `svc.StartTask(id)`, result `taskResult(t)` (`internal/tools/workflow.go:95-106`).
+- **`complete_task`** handler: builds `WithResolution` and `WithResolutionNote` only when the key is present, `WithCommitMessage` when the value is non-empty, then calls `svc.CompleteTask` followed by `svc.RunAutoArchive()` (error ignored) (`workflow.go:108-134`).
+- **`update_task`** handler: builds pointer arguments only for keys that are present, plus the resolution, note and `verified` options, then calls `svc.Update` (`management.go:253-301`).
+
+*`StartTask` → `startTask`* (`service.go:616-650`)
+
+1. Load the task with `get`, which falls back to the archive.
+2. **Restart check.** If `s.git != nil`, `t.Branch != ""`, the status is `todo` or `in_progress`, and the wip ref exists (`git.BranchSHA`), it calls `restartBranched(t)` (`:629-636`).
+3. Otherwise the status must be `todo`, or the call fails with "task %s is not in todo status (current: %s)" (`:638-640`). So an `in_progress` task **without** a branch, or whose branch ref is gone, cannot be started again.
+4. The `blockedError` check (`:642-644`; defined at `branching_restart.go:108-119`).
+5. With git: `startBranched` (`:646-648`). Without: `startPlain` (`:649`).
+
+*The start flows*
+
+- **`startPlain`** journals only records and the pointer. It calls `startTaskRecords`, which auto-starts a `todo` parent and then the task itself through `updateStatus`, then `setPointer`. Everything runs inside `runFlow` with a `gitTxn` (`service.go:652-682`).
+- **`startBranched`** sends a subtask to `startSub` and a top-level task to `startFresh` (`branching_start.go:251-258`).
+- **`startFresh`** (design 5.2), in order (`branching_start.go:262-292`):
+  1. `preflightGit`: `git.Check`, `identity.FromGitEmail` (else `errNoEmail`), `Head` (a detached HEAD is refused) and `IndexTree` (`:34-50`).
+  2. `planFresh`: `FirstExistingBranch(cfg.Git.BaseBranches)`; wip = `<user>/wip/<shortName>`; final derived from wip; `BranchAvailable(wip)`; the final branch must be free or equal `t.FinalBranch` (`:99-123`).
+  3. `classifyVacate(h, carryFrom=plan.base, self="", …)` (`:145-167`).
+     - Clean: nothing to do.
+     - HEAD is the `Branch` of an `in_progress` task: checkpoint on it (`wipOwner`, `:127-137`).
+     - HEAD is the chosen base: changes are carried.
+     - Anything else: refused with "uncommitted changes on X (…up to 20 paths); commit or stash them before starting <id>".
+     - `DirtyPaths` excludes the tasks directory.
+  4. Inside `runFlow`: `checkpoint` (a `Snapshot` commit, journaled), then `startOnNewBranch`, then `switchTo(wip)` (the only worktree change), then `afterSwitch`, which runs `index.Load()`.
+- **`startOnNewBranch`** (`:294-313`) is reused for a todo parent. It runs:
+  1. `createBranch(wip, tip)`, journaled by `DeleteBranch`;
+  2. `updateStatus(t → in_progress, withBranch{Branch, BaseBranch, StartCommit})`, with the record journaled by `captureTask`;
+  3. `setPointer`, journaled.
+
+  **None of these checks the task's current status.** Status preconditions live in `startTask`.
+- **`startSub`** (`:315-374`):
+  - If the parent is `in_progress` and has **no** branch, the subtask is started with `startPlain`: record-only, no git, even while branching is on (`:324-326`).
+  - Otherwise it runs `preflightGit`, then `parentLineFor` (`branching_restart.go:164-220`):
+    - a `done` parent is refused;
+    - an `in_progress` parent must have a live wip;
+    - a `todo` parent is restarted in place if its branch ref exists, otherwise **started fresh with its own wip branch inside the same journal** (`planFresh` + `startOnNewBranch(p…)`, `:210-219`).
+  - Then: sub-wip `<parent wip>--<shortName>`, `BranchAvailable`, vacate, `startOnNewBranch(t, subWip, parentBranch, ptip)`, switch to the sub-wip.
+- **Restart, `restartBranched`** (design 5.4; `branching_restart.go:14-106`):
+  1. The blocked check, only for `todo` (`:20-24`).
+  2. `preflightGit`, then `wipTip`, which checks that `StartCommit` resolves and is an ancestor of the wip tip (`:121-149`).
+  3. Pick the target: a top-level task uses `baseFor(t)` (`BaseBranch` if it still exists, else the first base, `branching_start.go:74-85`); a subtask uses the parent line.
+  4. `classifyVacate(h, "", self=t.ID, …)`.
+  5. In the flow: checkpoint, an optional parent step, then `restartRecords`. That `git.Replay`s the wip onto the target tip if it moved, refusing on conflicts, moves the ref by compare-and-swap unless it is checked out, and runs `updateStatus(→ in_progress, BaseBranch/StartCommit rewritten)` (`:235-264`).
+  6. `setPointer`, then either `switchTo(t.Branch)` or `ResetKeep(newTip)` when HEAD is already on the wip.
+
+  So `start_task` on an **in_progress** task whose wip ref exists always goes through restart: a rebase if the base moved, then a checkout. It is never a no-op error.
+
+*`CompleteTask` → `completeTask`* (`service.go:704-751`)
+
+1. Already closed: refused.
+2. A delivered resolution needs `in_progress`. A non-delivered one may close from `todo`.
+3. Open subtasks block a delivered close only.
+4. **Git dispatch.** Only `if s.git != nil && t.Branch != ""` (`:741-745`) does it go to `completeBranched`. Otherwise it is record-only through `runFlow(completeRecords)` (`:747-750`).
+   - So an `in_progress` task **without** `branch` completes record-only with no git calls, even with branching on. `TestLegacyInProgressTaskNoGitCalls` checks this, asserting zero mutating git calls (`internal/task/branching_complete_test.go:446-466`).
+
+*The completion flows*
+
+- **`completeBranched`** (`branching_complete.go:8-35`):
+
+  | Case | Flow |
+  |---|---|
+  | Delivered subtask whose parent has a `Branch` | `completeSubDelivered` |
+  | Other delivered | `completeDelivered` |
+  | Non-delivered, branch checked out | `completeAbandoned` |
+  | Non-delivered, branch not checked out | `handled=false`, falls through to record-only |
+
+  A delivered subtask **with** a branch whose parent has **no** branch takes the top-level `completeDelivered` path, and gets a final branch `finalBranch(t.Branch)` (`:13-25`).
+- **`completeDelivered`** (design 5.5; `:107-169`):
+  - Preflight: `preflightWip` (HEAD must be `t.Branch`; `StartCommit` must be an ancestor of HEAD, `:37-51`), the final-branch ownership check, `subtaskGate` (`:53-78`) and `commitMessageFor`.
+  - Flow: `snapshotHead`; `CommitTree(TreeOf(W), StartCommit, msg)`; create the final branch, or move it by compare-and-swap; `completeRecords(..., withBranch{FinalBranch, SquashCommit})`; `switchTo(final)`.
+- **`completeSubDelivered`** (design 5.6; `:171-217`): snapshot; `MergeTrees(StartCommit, ptip, W)`, where conflicts fail and roll back; `CommitTree(merged, ptip)`; `moveBranch(p.Branch)`; record with `SquashCommit`; switch to the parent's wip.
+- **`completeAbandoned`** (`:219-248`): safety snapshot, then records, then switch to `returnTarget` (the parent's wip, or the base).
+- **`completeRecords`** (`:98-105`) = `completeTaskRecords` + `clearPointerIf`. `completeTaskRecords` (`service.go:753-813`):
+  - journals and cascades open subtasks through `closeSubtasksWith` (`:815-829`);
+  - closes the task;
+  - auto-completes the parent when every sibling is done, **unless the parent has a `Branch`** (`:795-804`).
+
+*Journal, guard and update*
+
+- **`gitTxn`.** A slice of named undo closures; `rollback()` runs them in reverse and joins the errors (`internal/task/branching.go:149-182`).
+  - Undo kinds that exist today: task records (`captureTask`, `:184-204`), the pointer (`capturePointer`, `:214-232`), branch create, move and snapshot (`branching_start.go:181-218`), and `ResetKeep` inside restart.
+  - **No undo kind exists for attached files.**
+  - `updateStatus` = `captureTask` + `update` (`branching.go:206-212`). `runFlow` rolls back on error (`branching_start.go:241-249`). `withRollback` joins a rollback error (`service.go:684-692`).
+- **Update guard.** `Update` runs `branchingGuard` only when `s.git != nil` (`service.go:412-425`). It refuses three moves (`branching.go:234-251`):
+  - `todo → in_progress`: "git branching is enabled; use start_task …";
+  - closing an `in_progress` task that has a `Branch`;
+  - `done → in_progress` for a task with a `Branch`.
+
+  Reopening to `todo` is allowed. With branching on, `update_task` therefore cannot move a task to `in_progress`.
+- **`update`.**
+  - Reopening clears `Resolution`, `ResolutionNote` and `ClosedAt` (`service.go:493-502`).
+  - Branch fields change only through the unexported `withBranch(branchInfo)`, and survive a reopen (`:504-508`; `branching.go:253-285`).
+  - `UpdatedAt` is restamped on every update (`:519`).
+- **`UpdateOption`** is the variadic pattern for adding inputs without breaking callers (`service.go:368-410`; `_design.md:155-157`).
+
+*Pointer*
+
+- `setPointer` writes the user's pointer, journaled. `clearPointerIf` moves it to the still-open parent, or removes it, but only when it names a task the call closed (`internal/task/current.go:42-74`).
+- `CurrentTask` reads it; `get` includes archived tasks (`current.go:13-34`).
+- Storage: `<tasks_dir>/.users/<user>/current_task`, written atomically, where a missing file means no pointer (`internal/storage/current.go:9-59`).
+- Start writes the pointer in every path: `startPlain` (`service.go:660`), `startOnNewBranch` (`branching_start.go:309`) and restart (`branching_restart.go:86`).
+
+*Commit messages*
+
+- The default squash message is the title, the description and a `Task: <id>` trailer. Bookkeeping commits use fixed subjects such as `wip(<id>): checkpoint before …` (`branching.go:103-147`).
+
+**H. Tool registration and descriptions**
+
+- **Assembly.** `tools.Build` assembles management, workflow, relation, file and web tools. `Register` calls `s.AddTools` (`internal/tools/tools.go:23-43`). `withService` resolves the project lazily and turns resolution errors into tool errors (`:45-56`).
+- **Pattern.** Each tool:
+  1. calls `textFor("<name>")`;
+  2. builds `mcp.NewTool(name, mcp.WithDescription(...), mcp.WithString/WithBoolean(param, mcp.Required()?, mcp.Description(text.param(param)), mcp.Enum(...)?))`;
+  3. appends `server.ServerTool{Tool, Handler}` (e.g. `workflow.go:12-61`, `management.go:15-152`).
+- **Description text** comes from embedded `internal/tools/descriptions/*.yaml` (`description:` plus `params:` map) (`descriptions.go:11-50`). A missing YAML file or param entry **panics** (`:52-72`).
+  - Tests turn that into failures: `TestToolDescriptionsComplete` (`internal/tools/current_test.go:88-96`), `TestEveryToolHasDescriptions` (`internal/tools/web_test.go:129-137`) and `TestCompleteTaskCommitMessageParamDocumented` (`workflow_git_test.go:65-76`).
+  - So a new tool needs `descriptions/<tool>.yaml` with every param.
+- **Re-publishing.** The tool schemas are registered on `config.DefaultConfig()` types. When the resolved project's task or relation types differ, `srv.SetTools(tools.Build(...))` republishes them, which sends `tools/list_changed` (`internal/app/app.go:199-216`, capability at `:190`).
+  - Only task and relation types drive this. A phase enum built from `task.Phases()` would be static.
+  - Server instructions are the embedded `instructions.md` (`app.go:31-32, 191`).
+- **Response shapes:**
+
+  | Tool | Shape | Fields shown |
+  |---|---|---|
+  | `create_task`, `update_task`, `start_task`, `complete_task`, `get_next_task`, `get_current_task` | `taskResult` = `json.MarshalIndent(*task.Task)` (`management.go:413-419`) | every JSON-tagged `Task` field |
+  | `get_task` | explicit `taskWithSubtasksResponse` (`management.go:172-193`, filled `:219-237`) | listed fields only; currently **no branch fields**, and a new field must be added explicitly |
+  | `list_tasks` | index-only `*task.Task` embedded with `Blocked` (`management.go:382-409`) | only fields carried by `IndexEntry` |
+
+- **Description content today:**
+  - `start_task.yaml`: start, current task, and the full branching behaviour, i.e. a fresh branch, restart and rebase, and the dirty-tree rules (`descriptions/start_task.yaml:1-21`).
+  - `complete_task.yaml`: closing rules, pointer moves, squash/merge/safety commit, and the `commit_message` param (`complete_task.yaml:1-35`).
+  - `update_task.yaml`: the branching refusals (`:1-6`).
+  - `get_current_task.yaml`: the pointer rules.
+  - `create_task.yaml`: lists the reserved ids as `"0"`, `"archive"`, `".index.json"`. It **omits `.users`**, which the code reserves (`create_task.yaml:8-13` vs `files.go:48`).
+- **`instructions.md`:**
+  - Workflows should use `write_task_file`, `read_task_file` and `list_task_files` for workflow-step data; `start_task` makes a task current (`internal/app/instructions.md:3-9`).
+  - Implementation loop: `get_next_task` → `start_task` → work → `complete_task` (`:21-30`).
+  - A "Git branching" section: "`start_task` and `complete_task` do all the git work … After `start_task`, you are on the task's wip branch" (`:32-52`).
+  - Notes and attached files (`:80-83`).
+
+**I. Concurrency discipline**
+
+- **One mutex.** `Service.mu` is the only lock. Exported methods lock and delegate to unexported twins and never call exported methods (`service.go:115-123`; `CLAUDE.md:486-493`).
+- **Deliberately unlocked**, because they read write-once fields: `EnsureProjectExists`, `ProjectFound`, `Config`, `BranchingEnabled` (`service.go:142-171`; `view.go:197-202`).
+- **`TestServiceNoSelfDeadlock`** (`internal/task/concurrency_test.go:104-152`) calls a **hand-written list** of exported methods on one goroutine under a 10 s watchdog. It does not enumerate methods by reflection, so a new exported method is only checked if it is added to that list. CLAUDE.md says the test "fails if a new method breaks the shape" (`CLAUDE.md:488`); in code that holds only for methods in the list.
+- **`TestServiceRace`** runs hand-listed readers and writers concurrently over lock-free in-package mocks. The writers include `StartTask`, `CompleteTask` and `WriteTaskFile` (`concurrency_test.go:56-102`).
+- **Web race test.** `TestHandlerRaceAgainstWrites` mixes HTTP GETs with `Create`, `Update` and `WriteTaskFile` on an in-progress task (`internal/web/race_test.go:19-69`, `WriteTaskFile` at `:66`).
+- **Git runs under the lock**, and web reads wait for it (`CLAUDE.md:490`).
+
+**J. Web UI**
+
+- **Read-only routing.** Only GET patterns are registered: `/`, `/board`, `/tasks/{id}`, `/tasks/{id}/panel`, `/static/`, `/healthz` (`internal/web/server.go:49-65`).
+  - `Deps.Project` must be `Resolver.Current` and must never resolve (`server.go:17-31`; `app.go:70, 110`).
+  - Handlers call `h.Project()` and then `BoardSnapshot()` or `Detail()` (`internal/web/handlers.go:55-85`).
+  - The detail view also calls `BoardSnapshot()` a second time for relation titles, but only when relations exist (`handlers.go:78-98`).
+  - The board polls every 5 s (`server.go:12-15`; `templates/_board.html:1`).
+- **View models are plain strings** (`view.go:12-15`).
+  - `CardView` fields (`view.go:57-82`): `ID`, `Title`, `Priority`, `Type`, `Status`, `PriorityRank`, `IsSubtask`, `ParentID`, `Blocked`/`Blockers`, `SubtaskTotal`/`SubtaskDone`, `Resolution`, `InProgress`, `UpdatedAgo`, `Branch`, `Subtasks`, and `createdAt` (unexported, used only for sorting). No creator, no creation time display, no phase, no tokens.
+  - `PhaseLaneView{Phase, Count, Cards}` (`:46-55`).
+  - `DetailView` (`:99-123`): `CreatedAt`, `UpdatedAt`, `ClosedAt` and `VerifiedAt` as strings, `Files []string`, and the git fields.
+- **Mapping** (`view.go:145-213`):
+  - `newCardView` maps index-only tasks from the snapshot (`:255-279`).
+  - `cardBranch` shows the final branch, else the wip branch (`:281-288`).
+  - `newDetailView` maps the full task; times use `2006-01-02 15:04` (`:298-379`, `timeFormat` at `:143`).
+  - Lanes are built only for In progress (`:193-195`).
+  - The danger zone lists every in-progress task (`:199-210`).
+- **Card template** (`templates/_card.html:1-47`):
+  - `<article>` wrapping an `<a>` with `hx-get` to the panel;
+  - inside the link: `#ID`, `↳ parent`, the priority chip, the title, a chip row (type, resolution, N/M subtasks, in progress, blocked) and `UpdatedAgo`;
+  - after the `<a>`: the branch row, `{{ template "branch" .Branch }}`, whose copy button is in `_branch.html:1-5`;
+  - then nested subtask links.
+
+  A button cannot sit inside the `<a>` (`tasks/git-branch-per-task/design:101`).
+- **Detail template** (`templates/_detail.html:1-122`):
+  - a Git block (`:79-100`);
+  - an "Attached files" chip list rendered from `.Files` (`:102-109`);
+  - a timestamps `<dl>` with created, updated, closed and verified (`:111-116`).
+- **Lane markup and CSS.**
+  - Markup: `section.lane.lane-{{ .Phase }}` with `data-phase` and a count chip (`templates/_board.html:21-36`).
+  - CSS component classes: `.lanes`, `.lane`, `.lane-research` … `.lane-implementation` (`--lane: 0..3`), and a container-query collapse (`internal/web/assets/input.css:47-70`).
+  - Tailwind scans `@source "../templates"` (`input.css:12`).
+- **CSS rebuild.** `app.css` must be regenerated with `bash scripts/build-css.sh` after template or class changes, from Git Bash on Windows. It is served as immutable (`CLAUDE.md:235`; `README.md:602-622`).
+  - README warns that Tailwind's automatic source detection also scans non-gitignored untracked files, so the build should run from a clean checkout (`README.md:619-622`).
+  - `tasks/in-progress-phase-columns/` and `tasks/phase-tracking-workflow/` are currently untracked.
+  - `TestAppCSSDefinesLaneClasses` asserts that the compiled CSS contains the lane rules for every `task.Phases()` entry (`internal/web/assets_test.go:15-30`).
+- **Embedding.** Assets are embedded file by file: `static/app.css`, `static/htmx.min.js`, `static/app.js` (`internal/web/assets.go:12-13`). Templates are parsed with no funcMap, so all text is escaped (`internal/web/templates.go:1-31`).
+- **Web tests:**
+  - `view_test.go`: the lanes, lane grouping by furthest phase, nil `Phases`, sorting, nesting, danger zone and detail shapes (`internal/web/view_test.go:74-437`);
+  - `handlers_test.go`: rendering, lanes via `WriteTaskFile`, escaping, no mutating routes, and the placeholder (`internal/web/handlers_test.go:55-483`; `seedBoard` at `:43-52`);
+  - `branch_test.go`: the chip and the detail Git block;
+  - `assets_test.go`;
+  - `race_test.go`.
+
+**K. CLI**
+
+- **`FormatTaskDetail`** prints, in order (`internal/cli/output.go:20-81`): Task #, Title, Status (with `[BLOCKED]` and the resolution), Priority, Type, Parent, Created, Updated, Closed, Verified, Why, then `Branch`, `Base branch`, `Start commit` and `Final branch` when set (not `SquashCommit`), then Relations, Blocked by, Description and Subtasks.
+- **`FormatTaskTable`** has the columns `ID | Title | Status | Priority | Type | Subtasks` (`output.go:89-125`).
+- **JSON output:**
+  - `get --json` embeds the full `*task.Task`, so it carries all JSON fields (`commands.go:181-194`);
+  - `list --json` prints index-only tasks (`commands.go:119, 138-146`);
+  - `create`, `update` and `next` `--json` print the task;
+  - `start`, `complete`, `delete` and `archive` `--json` print `{message, id}` (`commands.go:360-387, 471-518`).
+- **Lifecycle commands.** `start <id>` and `complete <id> [--resolution] [--note] [-m]` exist (`internal/cli/cli.go:140-158`).
+  - `cmdStart` prints "started on branch X" when a branch exists (`commands.go:373-376`).
+  - `cmdComplete` appends the final branch, or "merged into" (`commands.go:499-507`).
+  - There is no CLI equivalent of any phase operation.
+- **CLI tests:** `output_test.go` (including `TestFormatTaskDetailBranchLines`, `:159`), `git_test.go` (`TestStartCommandPrintsBranch`, `TestCompleteCommandMessageFlag`), and `cli_test.go` (32 tests).
+
+**L. Skills, commands and docs that mention the workflow**
+
+- **Copies match.** `.claude/skills/{begin_task,research,design,planning,implementation,workflow}/SKILL.md` are byte-identical to `plugins/mcp-task-manager/skills/*/SKILL.md` (checked with `diff -q`).
+  - `.claude/skills/` is a generated copy: `scripts/sync-skills.sh` rewrites it, and `--check` detects drift (`scripts/sync-skills.sh:1-48`; `README.md:624-640`).
+  - The plugin directory is the only copy to edit.
+  - A plugin change requires bumping `version` (currently `1.5.1`) in `plugins/mcp-task-manager/.claude-plugin/plugin.json:4`, `.codex-plugin/plugin.json:3` and `.claude-plugin/marketplace.json:4,14` (`README.md:642-645`).
+- **`begin_task`** (`plugins/mcp-task-manager/skills/begin_task/SKILL.md`):
+  - Step 1 (`:10-21`):
+    - ask clarifying questions (`:13`);
+    - create the task with a kebab id (`:14-15`);
+    - "**Call `start_task` on it right away** … When the project enables git branching, this also creates the task's wip branch and checks it out" (`:16`);
+    - write the `task` file (`:17-21`).
+  - Artifacts saved: `research` (`:36`), `design` (`:53`), `plan` (`:56`), `implementation` (`:66`). They are read back through "the current task" (`get_current_task`).
+  - Rules (`:69-76`), including "If the user rejects a phase output … update the relevant file, and retry" (`:73`).
+  - No mention of tokens, `complete_task` or phases as tool calls. The skill never calls `complete_task`.
+- **`workflow/SKILL.md:51`** and **`implementation/SKILL.md:37`**: "Under git branching, the commits `start_task` and `complete_task` make are part of the task lifecycle, not agent commits." `research`, `design` and `planning` mention no task-manager tool.
+- **`commands/begin-task.md:12`**: "Turn the input into a task … and start it, making it your current task."
+- **`superpowers-workflow`**, not in the task's skill list, depends on today's `start_task` semantics:
+  - `start_task` for parents and subtasks (`plugins/mcp-task-manager/skills/superpowers-workflow/SKILL.md:91, 174`);
+  - `complete_task` with `commit_message`, plus "If the result has a `branch` the server has already committed …" (`:340-342`).
+- **README:**
+  - features (`README.md:14-15`);
+  - the lanes derived from `research`, `design` and `plan` (`:97`);
+  - CLI start and complete (`:146-151, 176-177`);
+  - the begin-task flow, "creates the task and starts it right away" (`:284-302`);
+  - the tools table (`:409-413`);
+  - the Git Branch-per-Task section (`:473-515`);
+  - the Task Format example, which has no branch fields (`:517-537`).
+- **`docs/git-branching.md`** also describes `start_task` creating the wip branch and the dirty-tree table (`docs/git-branching.md:49-59, 86-93`).
+- **Earlier design decision.** `tasks/git-branch-per-task/design:433` chose "start_task right after intake" for `begin_task`, which is the current behaviour. That design also says it was "itself implemented the old way" (`:869`).
+
+**M. Archive, delete, reopen and auto-archive**
+
+- **Archive** renames the whole `tasks/{id}/` directory into `tasks/archive/{id}/` (`internal/storage/markdown.go:290-298`). Any attached file moves with it.
+  - `archiveTask` needs `done`. For a parent, every subtask must be done; it archives the subtasks first and cleans relations (`internal/task/service.go:963-1017`).
+  - Archived tasks stay readable through `get` and `Detail`, files included (`view.go:115-139`). Writes are refused (`service.go:324-329`).
+- **Delete** runs `os.RemoveAll(tasks/{id})` (`markdown.go:123-126`; `service.go:530-594`).
+- **Reopen** through `update_task(status: todo)` clears the closure fields and keeps the branch fields (`service.go:493-508`). Attached files are not touched by any lifecycle method.
+- **Auto-archive** runs on `Initialize` when enabled (`service.go:188-194`) and after every MCP `complete_task` (`workflow.go:129-130`). The CLI `complete` does not run it.
+  - Delivered tasks wait `after_days` counted from `updated_at`; non-delivered ones are archived immediately; subtasks only once their parent is done (`service.go:1048-1104`).
+  - In this repo it is enabled (`mcp-tasks.yaml:6-8`), so a completed task's directory is archived after 30 days without updates.
+- **Flat migration** only matches `^\d+\.md$` (`internal/storage/migrate.go:10`). Other files are untouched.
+
+**N. Test support and fault injection**
+
+- **`NewBacklog`.** A temp directory, branching off, identity `dev`, a pointer store, and a static resolver (`internal/testsupport/testsupport.go:19-42`). `Seed` creates tasks and then moves statuses with `Update`, so it is unusable with branching on (`:56-106`). `IsolateEnv` clears the resolution and env variables (`:108-127`).
+- **`NewGitBacklog(t, layout, opts...)`.** Builds through `project.Build` with branching on, across five layouts: tracked, ignored, nested, separate, untracked (`internal/testsupport/gitbacklog.go:20-112`).
+  - `CaptureState` records refs, HEAD, the index tree, the worktree status, the hashes of dirty non-task files, **every task record** (a full `task.Task`, so new fields are compared automatically), the pointer, and the tasks repo state (`:147-217`).
+  - **It does not capture attached files.**
+  - `RequireStateEqual` reports per-part diffs (`:245-266`).
+- **`RequireGit`** sets `GIT_CONFIG_GLOBAL=os.DevNull`, `GIT_CONFIG_NOSYSTEM`, fixed dates and cleared identity variables (`internal/testsupport/git.go:17-34`). `NewGitRepo` runs `git init -b main_patched` with `dev@example.com` (`:49-65`).
+- **Fault injection.**
+  - `failingGit` embeds `task.GitRepo` and fails the n-th mutating call: Snapshot, CreateBranch, MoveBranch, DeleteBranch, Switch, ResetKeep, RestoreIndex, CommitTree, MergeTrees, Replay. `failingStore` fails pointer writes (`internal/task/gitfault_test.go:16-134`).
+  - `newFaultBacklog` injects both through `task.WithGit` / `task.WithCurrentTaskStore`, then fills in the real values (`:136-146`).
+  - `runFaults` arms fault 1, 2, … until the op succeeds, and asserts the state is unchanged after each failure (`:148-178`).
+  - Users: `TestStartFaultInjection` (`branching_start_test.go:325-366`), `TestCompleteFaultInjection` (`branching_complete_test.go:406-444`) and `TestRestartFaultInjection` (`branching_restart_test.go:292-324`).
+  - `setRecord` rewrites records behind the service to simulate legacy tasks (`branching_complete_test.go:41-54`).
+- **Tool tests:**
+  - handlers over a git backlog (`internal/tools/workflow_git_test.go:26-63`);
+  - `get_current_task` (`current_test.go:38-87`);
+  - schema and description completeness (`tools_test.go`, `web_test.go:101-137`).
+
+**O. Baseline quality gates** (run with `GOWORK=off`)
+
+- **`go vet ./...`** passes (exit 0).
+- **`go test ./...`**: `internal/storage` passes. `app`, `cli`, `config`, `project`, `task`, `tools`, `vcs` and `web` FAIL, all for environment-specific reasons on this Windows machine:
+  1. **Every git-backed test** fails at `git init -q -b main_patched: exit status 128`, because `RequireGit` sets `GIT_CONFIG_GLOBAL` to `os.DevNull` (`NUL`). git 2.56.0.windows.1 rejects that: a manual probe reproduced `fatal: unable to access 'NUL': Invalid argument`, and plain `git init` works. Affected:
+     - every branching test in `internal/task`, including all fault-injection tests and `TestLegacyInProgressTaskNoGitCalls`;
+     - all of `internal/vcs`;
+     - `internal/tools` `TestStartCompleteHandlersWithGit` and `TestUpdateTaskRefusedUnderBranching`;
+     - `internal/cli` `TestStartCommandPrintsBranch` and `TestCompleteCommandMessageFlag`.
+  2. **POSIX-path assertions:** `config` `TestTasksDir_Absolute` and `TestLoad_WithEnvOverride`; `project` `TestPathFromURI`; `app` `TestServer_ResolvesProjectFromRoots`, where roots resolution falls back to the cwd and fails with "invalid task type: chore".
+  3. **`web` `TestEscaping`**, which writes an attached file named `x<script>.md`, invalid on Windows.
+- **Matches the earlier baseline.** The failing top-level tests are exactly those in `tasks/in-progress-phase-columns/test-baseline`, minus `TestCopyButtonHasNoHtmxAttributes`, which now passes.
+- **Non-git tests pass.** Every non-git test in `internal/task` (service, concurrency, phase, view, current, resolution) passes, as does every web view, handler and lane test except `TestEscaping`.
+- **`go test -race ./...` runs.** cgo is available, the failure set is the same, and the output contains 0 `DATA RACE` reports.
+- **Consequence.** Git-branching behaviour, including the fault injection, cannot be verified on this machine as configured.
+
+### Evidence Map
+
+| Concern | Current implementation | Evidence |
+| ------- | ---------------------- | -------- |
+| Task fields | No `created_by`; `CreatedAt`/`UpdatedAt` always written; optional fields omitempty; 5 branch fields | `internal/task/task.go:46-92` |
+| Frontmatter write | Hand-listed anonymous struct, atomic write | `internal/storage/markdown.go:45-111` |
+| Frontmatter read / back-compat | Non-strict `yaml.Unmarshal` into a hand-listed struct; unknown keys ignored, missing keys zero | `internal/storage/markdown.go:181-238`; `_design.md:137-139` |
+| Index projection | `IndexEntry` + `taskToEntry`/`entryToTask` copy fields by hand; feeds list, board and CLI list | `internal/storage/index.go:27-96`; `internal/task/view.go:60` |
+| `created_at` stamp | `create()` sets `CreatedAt = UpdatedAt = time.Now().UTC()`; no user | `internal/task/service.go:251-262` |
+| Create callers | MCP handler, CLI, `testsupport.Seed`, 12 test files | `internal/tools/management.go:163`; `internal/cli/commands.go:256`; `internal/testsupport/testsupport.go:76` |
+| Identity | Sanitized email local part, else OS user, else "default"; full email discarded | `internal/vcs/vcs.go:317-383` |
+| Identity injection | Always via `project.Build`, independent of branching | `internal/project/resolver.go:141-157`; `internal/task/git.go:37-64` |
+| Attached file validation | Non-empty, no separators, not `..`, not `{id}.md`; nothing else reserved | `internal/storage/files.go:14-40` |
+| File listing | Sorted (`os.ReadDir`), excludes dirs and `{id}.md`, active then archive | `internal/storage/files.go:103-138` |
+| File service methods | Lock inline, no unlocked twins; writes refused for archived tasks | `internal/task/service.go:318-355` |
+| Phase derivation | File-name markers, furthest wins, `.phase` names ignored | `internal/task/phase.go:37-62`; `internal/task/phase_test.go:38-47` |
+| Board phases | `Phases` only for in_progress, one `ListFiles` per task per snapshot | `internal/task/view.go:59-105` |
+| Lane grouping | Furthest phase over a card and its nested subtasks | `internal/web/view.go:215-234` |
+| `start_task` dispatch | Restart if a branch ref exists; else todo-only; blocked check; git → `startBranched`, else `startPlain` | `internal/task/service.go:616-662` |
+| Fresh start flow | preflight → planFresh → vacate → checkpoint → CreateBranch → record+branch fields → pointer → Switch → index reload | `internal/task/branching_start.go:34-313` |
+| Subtask start | Parent in_progress without a branch → record-only; todo parent gets its own wip in the same journal | `internal/task/branching_start.go:319-374`; `internal/task/branching_restart.go:164-220` |
+| Restart | Replay onto the base/parent tip, CAS or `reset --keep`, rewrite `StartCommit` | `internal/task/branching_restart.go:14-106, 235-264` |
+| Complete dispatch | Git only when `s.git != nil && t.Branch != ""`; else record-only | `internal/task/service.go:741-750`; `internal/task/branching_complete_test.go:446-466` |
+| Complete flows | Delivered top-level squash, subtask merge-tree, abandoned safety snapshot, parent gate | `internal/task/branching_complete.go:8-272` |
+| Rollback journal | `gitTxn` undo closures; records, pointer, refs, index; nothing for attached files | `internal/task/branching.go:149-232` |
+| `update_task` guard | Refuses todo→in_progress, closing a branched in_progress task, done→in_progress with a branch | `internal/task/branching.go:234-251`; `internal/task/service.go:412-425` |
+| Reopen | Clears resolution/note/closed_at; keeps branch fields | `internal/task/service.go:493-508` |
+| Pointer | Set on start, moved or cleared on close; `.users/<user>/current_task` | `internal/task/current.go:13-74`; `internal/storage/current.go:9-59` |
+| Tool registration | `textFor`/`param` from embedded YAML (panics if missing); `server.ServerTool` lists | `internal/tools/descriptions.go:11-72`; `internal/tools/workflow.go:12-61` |
+| Tool re-publish | `SetTools` on resolve when task/relation types differ | `internal/app/app.go:199-216` |
+| `get_task` shape | Explicit struct, no branch fields | `internal/tools/management.go:172-251` |
+| Twin-discipline guard | Hand-written call list plus a watchdog | `internal/task/concurrency_test.go:104-152` |
+| Card content | id, parent, priority, title, type, resolution, subtasks, live, blocked, updated-ago, branch chip | `internal/web/templates/_card.html:1-47`; `internal/web/view.go:57-82` |
+| Detail content | Git block, attached-file chips, created/updated/closed/verified | `internal/web/templates/_detail.html:79-116`; `internal/web/view.go:298-379` |
+| Read-only web | GET-only mux; `Resolver.Current` | `internal/web/server.go:17-65`; `internal/web/handlers.go:55-85` |
+| CSS | Lane classes in `input.css`; app.css rebuilt manually; CSS test | `internal/web/assets/input.css:47-70`; `internal/web/assets_test.go:15-30`; `README.md:602-622` |
+| CLI output | Detail lines, table columns, JSON shapes | `internal/cli/output.go:20-125`; `internal/cli/commands.go:181-194, 360-518` |
+| Skills | `begin_task` starts right after intake; artifacts `task`/`research`/`design`/`plan`/`implementation`; copies identical | `plugins/mcp-task-manager/skills/begin_task/SKILL.md:10-76`; `scripts/sync-skills.sh:1-48` |
+| Fault-injection harness | `failingGit`/`failingStore` + `runFaults` + `CaptureState` (records, not files) | `internal/task/gitfault_test.go:16-178`; `internal/testsupport/gitbacklog.go:147-266` |
+| Test baseline | vet passes; Windows-env failures (NUL git config, POSIX paths, `<` in filename); race works | `internal/testsupport/git.go:22`; `tasks/in-progress-phase-columns/test-baseline` |
+
+### Relevant Files
+
+1. `internal/task/service.go`: `create` (where a creator stamp would sit), `startTask`/`startPlain`/`startTaskRecords`, `completeTask`/`completeTaskRecords`, `update`, the file methods without twins, and the `UpdateOption` pattern.
+2. `internal/task/branching_start.go`: fresh and subtask start flows. `startOnNewBranch`, `planFresh`, `classifyVacate` and `preflightGit` are the git pieces that today run only from `start_task`.
+3. `internal/task/branching_restart.go`: the restart (rebase) path `start_task` takes whenever a wip ref exists, `parentLineFor` (a todo parent gets its own branch), and `blockedError`.
+4. `internal/task/branching_complete.go` and `internal/task/branching.go`: completion dispatch keyed on `t.Branch`, the `gitTxn` journal and its undo kinds, `branchingGuard`, and `withBranch`.
+5. `internal/task/current.go` and `internal/storage/current.go`: the pointer rules that the research-start would need to honour.
+6. `internal/task/task.go`, `internal/storage/markdown.go` and `internal/storage/index.go`: every place a new frontmatter field must be threaded (Task, Save struct, parse struct, IndexEntry and converters).
+7. `internal/storage/files.go` and `internal/tools/files.go`: filename validation (where reserved `.phase` names would be enforced) and listing behaviour.
+8. `internal/task/phase.go` and `internal/task/view.go`: the `Phase` enum, file-name derivation, `BoardSnapshot.Phases`, `attachedFiles`, and `TaskDetail`.
+9. `internal/web/view.go`, `templates/_card.html`, `templates/_detail.html`, `templates/_board.html` and `assets/input.css`: card and detail view models and markup, lanes, and the CSS rebuild requirement.
+10. `internal/tools/workflow.go`, `internal/tools/management.go`, `internal/tools/descriptions/*.yaml` and `internal/tools/tools.go`: the registration pattern, response shapes (`get_task` explicit struct, `list_tasks` index-only), and description YAML.
+11. `internal/project/resolver.go` and `internal/vcs/vcs.go`: where the identity is resolved and injected, and what form it has.
+12. `internal/testsupport/gitbacklog.go`, `internal/task/gitfault_test.go` and `internal/task/concurrency_test.go`: fault-injection harness, state capture, and the manual twin-discipline list.
+13. `internal/cli/output.go`, `internal/cli/commands.go` and `internal/cli/cli.go`: CLI detail, table and JSON outputs and the start/complete commands.
+14. `plugins/mcp-task-manager/skills/begin_task/SKILL.md` (plus `workflow`, `implementation`, `superpowers-workflow`, `commands/begin-task.md`) and `scripts/sync-skills.sh`: the workflow text to align and the mirroring procedure.
+15. `internal/app/instructions.md`, `CLAUDE.md`, `README.md`, `docs/git-branching.md` and `tasks/git-branch-per-task/design`: the docs that describe `start_task` as the branch-cutting step.
+
+### Inference
+
+- **Adding an omitempty `created_by` is backward compatible for reading.** Old files load with an empty value, and old binaries ignore the key.
+  - *Why this is an inference:* no test covers this specific field yet.
+  - *Evidence:* the non-strict `yaml.Unmarshal` (`markdown.go:201`), zero-value defaults, and the documented precedent for the resolution fields (`_design.md:137-139`).
+- **A creator field would not reach the board cards, `list_tasks` or CLI `list --json` unless `IndexEntry` and its converters carry it.**
+  - *Why this is an inference:* it is a consequence of the data path rather than an observed failure.
+  - *Evidence:* those consumers receive only index-projected tasks (`index.go:54-96`; `view.go:60`; `management.go:382-409`; `commands.go:119, 143`).
+- **The git part of a start can be separated from the `todo` precondition in code, but no public path does that today.**
+  - *Why this is an inference:* it is a reading of where the checks sit, not a tested path.
+  - *Evidence:* `startOnNewBranch` and `startFresh`'s mutating steps do not check status (`branching_start.go:262-313`). The `todo`-only check and the blocked check sit in `startTask` (`service.go:638-644`). Restart treats in_progress tasks as valid input (`service.go:630`).
+  - With branching on, a top-level task never reaches `in_progress` without a branch: `update_task` is refused by the guard (`branching.go:243`) and `start_task` always branches. The one exception is a subtask of a branchless in-progress parent (`branching_start.go:324-326`).
+- **Reading phase-file *contents* on the board would add per-poll file reads.**
+  - *Why this is an inference:* it is a cost estimate, not a measurement.
+  - *Evidence:* today `boardSnapshot` lists directories only (`view.go:73-75`). Every poll (5 s) and every detail open with relations (`handlers.go:80-83`) takes a full snapshot under the service lock.
+- **A server-written attached file inside a journaled git flow would not be undone by today's rollback, and today's fault-injection assertions would not notice a leftover.**
+  - *Why this is an inference:* it follows from what the journal and the state capture cover, not from a test.
+  - *Evidence:* `gitTxn` has no file undo kind (`branching.go:184-232`), and `CaptureState` does not capture attached files (`gitbacklog.go:147-217`).
+- **Under the new phase flow, subtasks would fall into the branchless path.** With today's code, a subtask started while its parent is `in_progress` without a branch (for example a parent still in research/design/planning) would be started record-only and never get a branch. A subtask of a `todo` parent would cut the parent's wip branch at that moment.
+  - *Why this is an inference:* it combines today's subtask rules with the proposed workflow rather than testing it.
+  - *Evidence:* `branching_start.go:324-326`; `branching_restart.go:210-219`.
+
+### Unknown
+
+- **Re-entry and history semantics for a phase that is redone.** `begin_task` lets the user reject a phase output and retry (`SKILL.md:73`), and rejection happens after the phase has finished. The code cannot tell whether a restarted phase should overwrite the `.phase` record or keep every run, nor whether tokens from rejected runs count toward the card total.
+- **Phases for subtasks and for tasks started through the old flow.** It is unclear whether `.phase` files and the phase tools apply to subtasks, which `superpowers-workflow` starts directly with `start_task`. It is also unclear how a task that already has a wip branch, such as this task (`tasks/phase-tracking-workflow/phase-tracking-workflow.md:9-11`), should react to "start implementation". Today `start_task` on such a task performs a rebase-restart, not a no-op (`service.go:629-636`).
+- **What "user" means in the phase files and `created_by`.** Only the sanitized email local part (for example `igor.cwer`) or the OS user is available (`vcs.go:317-351`). Whether that form is acceptable, or the full email or display name is wanted, is not determinable from the code.
+- **Where the token count comes from.** Nothing in the repository handles tokens (a grep of `internal/` finds none). Whether the orchestrating agent can actually read a phase sub-agent's total token usage depends on the agent host, not on this codebase.

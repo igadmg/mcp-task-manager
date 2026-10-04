@@ -1,0 +1,188 @@
+# Implementation: phase-tracking-workflow
+
+## Summary
+
+Phases P1–P15 are done: 15 commits on `igor.cwer/wip/phase-tracking-workflow`. **P0 is not committed:** the permission classifier denied committing the `mcp-tasks.yaml` change, so it is still an uncommitted working-tree change for you to commit.
+
+Final gates:
+- `go vet ./...` passes.
+- `go test -race ./...` shows exactly the 5 documented Windows baseline failures and 0 DATA RACE.
+- `sync-skills.sh --check` passes.
+
+**Coordinator's "minimal testing" instruction:** it arrived after all phases were committed and the final gate run had finished. All the tests described below had already been written and run, including the `-race` runs. I removed nothing, and I ran nothing more after it arrived. Removing tests now would mean rewriting commits, and rebasing is not allowed.
+
+The task was not completed. No mutating task-manager tools were called on the real backlog. Nothing under `tasks/` was staged.
+
+## Commits (`git log --oneline main_patched..HEAD`, oldest first)
+
+| Phase | Commit | Subject |
+|---|---|---|
+| P0 | — | **not committed** (see Deviations) |
+| P1 | 42ea091 | test(testsupport): pin git to an empty temp gitconfig instead of NUL |
+| P2 | a76a0ff | test(testsupport): include attached files in captured git-flow state |
+| P3 | af28b5e | feat(task): stamp created_by on new tasks and expose it |
+| P4 | 77f01c0 | feat(storage): add phase record files and reserve *.phase attachment names |
+| P5 | 759cc76 | refactor(task): add flow-step hook and phase-file undo to start flows |
+| P6 | bb7b8b0 | feat(task): record delivery phases with StartPhase/FinishPhase |
+| P7 | d367602 | feat(task): cut a branchless parent's wip when a subtask starts implementation |
+| P8 | 69091d7 | feat(task): close open phase runs when complete_task closes a task |
+| P9 | 032a250 | feat(task): drive board lanes and detail from phase records |
+| P10 | 8283a31 | feat(tools): add start_phase and finish_phase MCP tools |
+| P11 | b11bf24 | feat(cli): add start-phase and finish-phase commands |
+| P12 | a2fbb9a | feat(web): show creator, current phase and tokens on cards and phase history in detail |
+| P13 | b91ba31 | build(web): regenerate app.css for the phase views |
+| P14 | 97b1013 | feat(skills): drive begin_task through start_phase/finish_phase; bump plugin to 1.6.0 |
+| P15 | 26c6374 | docs: document phase records, created_by and start_phase/finish_phase |
+
+Every commit ends with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+
+## Per phase
+
+**P0 — stopped.**
+- `git add mcp-tasks.yaml && git commit` was refused by the auto-mode permission classifier (account and standing-rule changes).
+- I did not try to work around it. `mcp-tasks.yaml` is still modified (git branching on).
+- Pre-P1 baseline: vet passed, and the test failures were exactly as documented (every git-backed test, plus the POSIX-path tests and TestEscaping).
+
+**P1 — done.**
+- Change: `internal/testsupport/git.go`. `RequireGit` now writes an empty temp gitconfig instead of pointing at `os.DevNull`.
+- Results:
+  - `internal/task` passed in full (829 s, 0 fail).
+  - `go test ./internal/task/ -run Restart -v` showed 0 SKIP, so `git replay --ref-action` is available and the restart coverage is real.
+  - vcs, tools and cli passed.
+  - The full suite failed only the 5 baseline tests.
+- `-race` on task and vcs was covered by the final `-race` run and by the P5 `-race` run of task.
+
+**P2 — done.**
+- Changes: `testsupport/gitbacklog.go` adds `State.Attached` (hashes of non-record files under the active and archived task dirs, `*.tmp` included, `.users` skipped), compared in `RequireStateEqual`. `task/gitfault_test.go` gains `TestCaptureStateSeesAttachedFiles`.
+- Existing fault-injection tests pass against the stricter oracle: full `internal/task` run, 919 s.
+
+**P3 — done.** `created_by` on tasks.
+- Changes:
+  - `task.go`: `CreatedBy` field.
+  - `markdown.go`: save and parse structs, written right after `created_at`, omitempty.
+  - `index.go`: `IndexEntry.CreatedBy` and both converters.
+  - `service.go`: `create()` stamps `s.identity.Name`.
+  - `management.go`: `get_task` reports `created_by`.
+  - `cli/output.go`: `Created by:` line.
+  - `create_task.yaml` mentions the stamp and adds the missing `.users` reserved id; `get_task.yaml` updated.
+- Tests:
+  - `TestMarkdownStorage_CreatedByRoundTrip`: key order, omitted when empty, byte-identical re-save of a legacy file.
+  - `TestIndex_CarriesCreatedBy`.
+  - `TestCreateStampsCreatedBy` and `TestCreateWithoutIdentityLeavesCreatedByEmpty`.
+  - `TestCreatedByInTaskResponses` (get_task and list_tasks).
+  - `TestFormatTaskDetailCreatedBy`.
+- An export of the commit passed storage, cli and tools in full, plus the task create tests.
+
+**P4 — done.** Phase record types, store and reserved names.
+- Changes:
+  - `phase.go`: `PhaseStrings`, `ParsePhase`, `Prev`, `PhaseFileName`, `IsReservedFileName`. It trims trailing dots and spaces and ignores case before the `.phase` suffix check.
+  - New `phaserecord.go`: `PhaseRun`, `PhaseRecord` with `Last`, `Tokens` and a deep `clone`; `PhaseFinish`.
+  - `git.go`: the `PhaseStore` interface and `WithPhaseStore`; `service.go` gets the `phases` field.
+  - New `storage/phase.go`: the YAML codec. It always writes `version: 1`, refuses a newer version, reads a missing version as 1, and lets the file name win over the `phase` key. Load checks the active dir, then the archive; Remove of a missing file is a no-op.
+  - `files.go`: rejects reserved names with the exact error from the plan.
+  - `resolver.go` and `testsupport.go` wire the store.
+  - Descriptions updated: write, read and list task files.
+- Tests:
+  - Storage `phase_test.go`: round trip with exact YAML, absent, archived, remove-missing, unsupported version, name mismatch, and `TestWriteFileRefusesPhaseNames`.
+  - Task: `TestParsePhase`, `TestPhasePrev`, `TestPhaseFileName`, `TestIsReservedFileName`, `TestPhaseRecordTokens`.
+  - Tools: `TestWriteTaskFileRefusesPhaseFile`.
+- On the export, the only failure was the baseline `project/TestPathFromURI`.
+
+**P5 — done.** Behaviour-neutral journal plumbing.
+- Changes:
+  - `branching.go`: `capturePhase` undo kind (re-saves a deep copy, or removes the file when it was absent; a no-op without a store), plus `flowStep` and `startOpts`.
+  - `startPlain`, `startBranched`, `startFresh`, `startSub` and `restartBranched` take the hook. It runs after the records and pointer are written and before `switchTo` / `ResetKeep`.
+- Tests: `mockPhaseStore` and `TestCapturePhaseUndo`. No existing test expectation changed.
+- An export of exactly this commit passed `go test -race ./internal/task/` in full (1111 s): 0 fail, 0 skip, 0 race.
+
+**P6 — done.** `StartPhase` / `FinishPhase` / `PhaseHistory` in new `phaseflow.go`, following the twin discipline.
+- Start rules run in order, before any change: archived, done, any open run, predecessor finished (with the migration escape), parent done, blocked todo.
+- Paths:
+  - Record-only for research, design, planning, and implementation without git.
+  - Implementation under git: restart if a live wip exists; fresh or subtask start otherwise; refused on an `in_progress` task whose ref is dead.
+  - An empty `id` resolves to the current task.
+- Tests:
+  - `phaseflow_test.go`: a rules table and the re-run, migration-escape, status, pointer, default-id, finish-rules, history, no-store and rollback cases.
+  - `phaseflow_git_test.go`: no git calls before implementation; fresh, subtask under a todo parent, restart, dead ref, and no-branching cases.
+  - Fault injection: `TestStartPhaseFaultInjection` (fresh and restart) and `TestStartPhaseStoreFault` (record-only, fresh, restart), on the tracked and separate layouts.
+  - `failingPhaseStore` and `newPhaseFaultBacklog`.
+  - The deadlock and race lists include the 3 new methods; `newConcurrentService` gets the mock store.
+
+**P7 — done.** `cutParent`.
+- `startSub` skips the record-only shortcut when `cutParent` is set. `parentLineFor(t, h, cutParent)` uses `freshParentLine`, the factored-out todo-parent path. The phase flow passes `cutParent: true`.
+- `start_task` under git on an `in_progress` task with no branch now returns the hint error.
+- Tests: `TestStartPhaseImplementationCutsBranchlessParent`, `TestStartPhaseParentLaterRestarts`, `TestStartTaskInProgressWithoutBranchHint`, `TestStartPhaseCutParentFaultInjection` (runFaults plus the store-fault variant). The legacy test "parent started without branching" still passes unchanged.
+
+**P8 — done.**
+- `completeRecords` calls `closeOpenRuns` after `clearPointerIf`, inside the journal and before the switch. Runs are stamped with note `closed by complete_task (<resolution>)` and no tokens.
+- Tests:
+  - In-package: task, cascaded subtasks, auto-completed parent, finished runs untouched, update_task leaves runs open, store-failure rollback.
+  - Git: delivered, subtask delivered, abandoned.
+  - `TestCompleteWithOpenRunsFaultInjection` (runFaults plus the store-fault variant).
+
+**P9 — done.**
+- `BoardSnapshot.PhaseInfo` and `PhaseSummary`: the latest started run wins, a tie goes to the higher phase, tokens are summed. Records are read only for in-progress tasks, only for the `.phase` names they list, and unreadable ones are skipped. Without records the lane falls back to the file names.
+- `TaskDetail.Phases` is filled through the unlocked `phaseRecords`.
+- Tests: `TestBoardLaneFromLatestRun` (with the tie), `ReRunMovesLaneBack`, `FallbackWithoutRecords`, `UnparsableRecordFallsBack`, `TokensSum`, `PhaseInfoInProgressOnly`, `TestDetailPhasesIncludingArchived`. Run with `-race`; passed.
+
+**P10 — done.**
+- `start_phase` and `finish_phase` tools: phase enum, optional `id`; `finish_phase` adds numeric `tokens` (integer ≥ 0) and `note`. The result is `{task, phase, run, record}`. `get_task` returns `phases`.
+- New YAMLs: `start_phase`, `finish_phase`. Updated: `start_task`, `complete_task`, `update_task`, `get_task`.
+- Tests: new `workflow_test.go` (result shape and re-run, unknown phase, tokens fractional/negative/string/0/absent, default to current task, get_task phases, registration), plus git `TestStartPhaseImplementationHandlerWithGit`. Tools passed; app showed only its baseline failure.
+
+**P11 — done.**
+- CLI `start-phase <id> <phase> [--json]` and `finish-phase <id> <phase> [--tokens N] [--note s] [--json]`. `get` prints a `Phases:` block.
+- Tests: `TestStartPhaseCommand`, `TestStartPhaseCommandJSON`, `TestFinishPhaseCommand`, `TestStartPhaseCommandPrintsBranch` (git), `TestFormatTaskDetailPhases`. cli passed.
+
+**P12 — done.**
+- `CardView` gains creator, created-ago, phase, phase-by, phase-ago, phase-open and tokens fields; `DetailView` gains `CreatedBy`, `Phases` and `TotalTokens`; `Files` hides `*.phase`. Token humanizer: 950 / 81.2k / 1.4M.
+- Templates: `_card.html` adds a meta line, a phase line and a tokens chip, all inside the `<a>`. `_detail.html` adds a Phases grid and a "created by" row. `input.css` adds `.phase-runs`.
+- Tests: 7 view tests, `TestBoardShowsPhaseFromRecords`, `TestPhaseNoteEscaped`, and phase writers plus a detail fetch in `race_test.go`.
+- `-race` on web: only TestEscaping failed.
+
+**P13 — done.**
+- `app.css` was rebuilt from a detached worktree in the scratchpad, reusing the cached Tailwind v4.3.3. The worktree was removed and `git worktree list` shows only the main tree.
+- The diff is only `app.css` and `assets_test.go`, which gains `TestAppCSSDefinesPhaseRuns`. The new utility classes are present.
+
+**P14 — done.**
+- `begin_task` rewrite:
+  - Intake leaves the task in todo.
+  - Each phase runs `start_phase`, then the sub-agent, then the artifact, then `finish_phase(tokens)`, then the approval gate.
+  - A rejection starts a new run.
+  - Implementation relies on the wip that `start_phase` cuts, then asks "Complete the task?" and calls `complete_task`.
+  - New rules: never write `*.phase` files; finish a crashed open run before starting again.
+- `workflow` and `implementation` skills: the lifecycle-commit sentence now covers `start_phase`, and `workflow` gets the phase line. `commands/begin-task.md` updated.
+- Version 1.6.0 in all 4 places. `sync-skills.sh` run; `--check` passes.
+
+**P15 — done.** `CLAUDE.md`, `README.md`, `internal/app/instructions.md` and `docs/git-branching.md` updated as in design §10, including the new "Phase records" section. App tests showed only the baseline failure.
+
+## Final gates (after P15)
+
+- `GOWORK=off go vet ./...`: exit 0.
+- `GOWORK=off go test -race ./...`:
+  - **Fail (all baseline):**
+    - `app`: TestServer_ResolvesProjectFromRoots
+    - `config`: TestTasksDir_Absolute, TestLoad_WithEnvOverride
+    - `project`: TestPathFromURI
+    - `web`: TestEscaping
+  - **Pass:** cli, storage, task (1388 s), tools, vcs.
+  - DATA RACE count: 0.
+- `bash scripts/sync-skills.sh --check`: exit 0.
+- `git status --short`: only `mcp-tasks.yaml` (P0) and the `tasks/` entries.
+
+## Deviations from the plan
+
+1. **P0 not committed.** The permission classifier denied it; `mcp-tasks.yaml` is left for you to commit.
+2. **Verification of intermediate commits.** Shared files carry hunks from several phases. Each commit was staged by reverting the later phases' hunks with a script (no interactive add). Tests ran on the cumulative tree. Each intermediate commit was then exported with `git archive` and run through `go vet`, plus targeted tests: full storage/cli/tools for P3 and P4, full task `-race` for P5, the phase's own tests for P6–P11. After P11 the working tree had no leftover diffs outside `web/`, which confirms the split was complete.
+3. **Flaky tests outside the baseline:** `web/TestCopyButtonHasNoHtmxAttributes` and `TestBoardShowsBranchChip` fail intermittently. On an export of the P1 commit, which does not touch the web code, the first failed in 7 of 8 runs and the second in 1. They are pre-existing timing flakes on Windows: index mtime against `builtAt`. Both passed in the final run. Not fixed; out of scope.
+4. **New fault-injection tests use 2 layouts.** They run on tracked and separate (`restartLayouts`) to keep the runtime bearable; the existing tests still cover all 5.
+5. **Small additions beyond the design text:**
+   - The CLI phase line also prints `open` for an open run and `(note)` when there is a note.
+   - `started_by` is always written.
+   - `complete_task` skips an unreadable `.phase` record with a log warning instead of failing the completion.
+   - `PhaseHistory` returns the readable records together with an error naming the unreadable ones.
+
+## Not verified
+
+- **Browser view.** The page was not looked at in a browser, so the visual styling and the hard reload are unchecked. The rendered HTML was checked with curl against a scratch repo using `serve web`: lanes, the "created by" line, the phase line, and the `phase-runs` grid in the detail view.
+- **CLI smoke test**, in a scratch git repo with branching on, never this repo. It covered: create (`Created by: jane`); research leaves HEAD on main_patched; a design re-run gives two runs; implementation cuts `jane/wip/login`; complete gives `jane/login` with exactly one commit over the base; a subtask under a parent that is still in research cuts `jane/wip/par` and `jane/wip/par--sub`; `write-task-file login research.phase` is refused.

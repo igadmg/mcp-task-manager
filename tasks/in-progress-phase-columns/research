@@ -1,0 +1,294 @@
+# Research: in-progress-phase-columns
+
+### Task Slice
+
+- **Classification:** a read-side feature for the web UI's kanban board. It touches `internal/task/view.go` (the board snapshot), `internal/web/view.go` (the view model), `internal/web/templates/_board.html` and `_card.html`, `internal/web/assets/input.css` plus the generated `static/app.css`, and the `CLAUDE.md` "Web UI" section. No tool, schema or frontmatter change is involved.
+- **Scope covered:**
+  - the board render path, from the HTTP route to the templates;
+  - how columns, cards, nested subtasks, the danger zone, branch chips and blocked flags are built today;
+  - how attached files are stored and listed, what it costs, and what file names the workflow skills actually write;
+  - service locking and the twin discipline;
+  - polling, the Tailwind build and embedded assets;
+  - existing tests and helpers, and the baseline test status on this machine;
+  - the current CSS layout and breakpoints.
+- **Documents loaded:**
+  - `CLAUDE.md` (Web UI section at lines 226-239, Package boundary at lines 29-34, Concurrency, Subtasks);
+  - `README.md` lines 80-100 (Web Dashboard);
+  - `_design.md` (resolution and verified_at only; nothing relevant here);
+  - `.claude/skills/research|begin_task|workflow|implementation/SKILL.md`;
+  - `plugins/mcp-task-manager/skills/*` (diffed against `.claude/skills`), `plugins/mcp-task-manager/commands/*.md` and `scripts/sync-skills.sh`;
+  - the earlier web UI design artifact `tasks/web-ui-kanban-module/design.md` (grepped for column, poll and layout decisions);
+  - `internal/app/instructions.md`.
+  - There is no `doc/` directory. `docs/plans/*` contains nothing about the web UI.
+
+### Confirmed Facts
+
+#### 1. Rendering path (route → handler → resolver → snapshot → view model → template → assets)
+
+- **Routes.** Only GET patterns are registered in `internal/web/server.go`:
+  - `GET /{$}` → `h.board` (line 58)
+  - `GET /board` → `h.boardFragment` (line 59, the htmx poll target)
+  - `GET /tasks/{id}` (line 60) and `GET /tasks/{id}/panel` (line 61)
+  - `GET /static/` (line 62)
+  - `GET /healthz` (line 63)
+  - `NewHandler` is at `internal/web/server.go:54-65`.
+- **Poll interval.** `DefaultPollSeconds = 5` (`internal/web/server.go:15`). `Deps.PollSeconds` overrides it (`server.go:29-30`), and `withDefaults` applies the default when it is ≤0 (`server.go:33-47`). The production wiring in `internal/app/app.go:70` and `:110` never sets `PollSeconds`, so the poll is always 5 s.
+- **Handlers never resolve.** `Deps.Project` is documented as "Wire this to Resolver.Current, never to Resolver.Get" (`internal/web/server.go:19-23`). `internal/app/app.go:70` and `:110` pass `resolver.Current`. `Resolver.Current()` only reads the cached value under its own mutex (`internal/project/resolver.go:112-116`).
+- **Handlers:**
+  - `board` renders `boardPage` / `layout.html` with `h.boardView()` (`internal/web/handlers.go:15-17`).
+  - `boardFragment` renders `_board.html`, or `_unresolved.html` when `!view.Project.Resolved` (`handlers.go:21-28`).
+  - `boardView()` calls `h.Project()`; if nothing is resolved it returns `unresolvedBoardView`. Otherwise it calls `resolved.Service.BoardSnapshot()` and then `newBoardView(snap, resolved.Config, h.Now(), h.PollSeconds)` (`handlers.go:55-66`). A snapshot error is logged and falls back to the placeholder (`handlers.go:61-63`).
+  - `render` buffers the output, then writes it; a template error becomes a 500 (`handlers.go:102-112`).
+- **`BoardSnapshot` has a second caller.** `handlers.go:87-98` (`titles`) calls `svc.BoardSnapshot()` to resolve relation titles for the detail view. It runs only when the task has relations (`handlers.go:80-83`). Any added cost in `BoardSnapshot` is therefore also paid by those detail views. These are the only two callers of `BoardSnapshot` outside tests (grep of `internal/`).
+- **Service snapshot.**
+  - `Service.BoardSnapshot()` locks `s.mu` and delegates to the unlocked `boardSnapshot()` (`internal/task/view.go:49-53`).
+  - `boardSnapshot()` calls `s.index.All()`. It fills `Subtasks` (grouped by parent id) and `Counts` (per-parent total/done) in one loop, then sets `Blocked = s.blockedMap(ids)` (`view.go:55-82`).
+  - Snapshot type `BoardSnapshot{Tasks []*Task; Subtasks map[string][]*Task; Blocked map[string][]BlockingInfo; Counts map[string]SubtaskCount; TakenAt time.Time}` is at `view.go:21-35`. `Tasks` holds "every active task, top-level and subtask alike, without descriptions (index entries only)" (`view.go:24-26`).
+- **View model.** `newBoardView` is documented as "Pure: everything it needs was already read under the service lock" (`internal/web/view.go:131-133`). It:
+  1. builds one `CardView` per task (`view.go:140-144`);
+  2. places each card in the column of its own status, or nests it in its parent's card when the parent has the same status (`view.go:146-162`);
+  3. builds the columns from the fixed `columns` slice (`view.go:164-179`);
+  4. builds the danger zone (`view.go:181-192`).
+- **Templates:**
+  - `board.html` lays out the board next to a `#panel` aside, and includes `_board.html` or `_unresolved.html` (`internal/web/templates/board.html:1-13`).
+  - `_board.html` is the poll container: `<div id="board" hx-get="/board" hx-trigger="every {{ .PollSeconds }}s" hx-swap="outerHTML">` (`_board.html:1`). Every 5 s the whole board, columns included, is replaced.
+  - `_unresolved.html:1` carries the same poll attributes.
+  - `layout.html` loads `/static/app.css`, `/static/htmx.min.js` and `/static/app.js` (`layout.html:7-9`).
+- **Template parsing.**
+  - `fragments` is `ParseFS("templates/_*.html")`.
+  - Each page set is `layout.html` + the page + `templates/_*.html` (`internal/web/templates.go:19-31`).
+  - A new `_*.html` partial is therefore picked up by both sets through the glob.
+  - No funcMap is registered, deliberately: "every field is already a plain string" and there is no `template.HTML` (`templates.go:11-18`).
+- **Static assets.**
+  - `//go:embed static/app.css static/htmx.min.js static/app.js` names each file explicitly (`internal/web/assets.go:9-13`).
+  - They are served with `Cache-Control: public, max-age=31536000, immutable` (`assets.go:17-27`).
+  - `app.js` is a single delegated click listener for `[data-copy]` that sends no request (`internal/web/static/app.js:37-53`).
+
+#### 2. Data structures; how columns, cards, flags and subtasks are built
+
+- **`BoardView`** = `{Project ProjectView; Columns []ColumnView; DangerZone []DangerItem; PollSeconds int; Generated string}` (`internal/web/view.go:27-33`).
+- **`ColumnView`** = `{Status, Title string; Count int; Cards []CardView}` (`view.go:35-41`). There is no sub-column or grouping field.
+- **`CardView` fields** (`view.go:43-68`): ID, Title, Priority, Type, Status, PriorityRank, IsSubtask, ParentID, Blocked, Blockers, SubtaskTotal, SubtaskDone, Resolution, InProgress, UpdatedAgo, Branch, Subtasks, and the unexported `createdAt`, used for sorting only. There is no phase or files field.
+- **The column abstraction is a Go slice, not template branching.**
+  - `var columns = []struct{Status task.Status; Title string}{{todo,"To do"},{in_progress,"In progress"},{done,"Done"}}` (`view.go:119-127`).
+  - The template ranges over `.Columns` with one generic `<section class="column">` per column. There is no per-status branch in `_board.html` (`_board.html:13-28`).
+  - Each column header shows `dot dot-{{ .Status }}`, the title, and a `chip chip-muted` count (`_board.html:16-20`). An empty column renders `<p ...>empty</p>` (`_board.html:22-24`).
+- **Column count.** `Count` is the number of tasks in that status, nested subtasks included, not the number of cards (`view.go:167-172`). The test `TestSubtaskNestsWhenParentShareColumn` asserts "the count is tasks, not cards" (`internal/web/view_test.go:102-104`).
+- **Sorting.** `sortCards` orders by priority rank, then `createdAt` (oldest first), then ID (`view.go:345-356`). It is applied to root cards per column (`view.go:165-166`) and to nested kids (`view.go:159-162`).
+- **Subtask placement.** A card nests under its parent only when `parent.Status == card.Status` (`view.go:149-158`); otherwise it is a standalone root card with `IsSubtask`/`ParentID` set (`view.go:224-225`).
+  - The key is status equality only.
+  - Starting a subtask auto-starts a `todo` parent (`internal/task/service.go:668`; CLAUDE.md Subtasks). In-progress parents with in-progress subtasks are therefore the common case, and those subtasks nest inside the parent card in the In progress column.
+  - The parent card's `SubtaskTotal`/`SubtaskDone` come from `snap.Counts` (`view.go:236-238`).
+- **Card flags** (`newCardView`, `view.go:216-240`):
+  - `InProgress = t.Status == StatusInProgress` (`view.go:227`);
+  - `Blocked`/`Blockers` come from `snap.Blocked[t.ID]` (`view.go:232-235`);
+  - `Branch = cardBranch(t)`, which is `FinalBranch` if set, else `Branch` (`view.go:244-249`).
+- **Card markup** (`_card.html`):
+  - `<article class="card {{ if .InProgress }}card-live{{ end }} {{ if .Blocked }}card-blocked{{ end }}">` (line 1);
+  - the main link carries `hx-get="/tasks/{{ .ID }}/panel" hx-target="#panel" hx-swap="innerHTML" hx-push-url="/tasks/{{ .ID }}"` (lines 2-7);
+  - the ID and `↳ parent` meta, plus the priority chip (lines 8-12); the title (line 13);
+  - the chips: type, resolution, `N/M subtasks`, `chip-live` "in progress", `chip-blocked` with blocker tooltip, and UpdatedAgo (lines 14-21);
+  - the branch row via `{{ template "branch" .Branch }}` (lines 24-28);
+  - nested subtasks as compact links showing ID, title, a blocked chip and the priority chip. They have no branch chip and no in-progress chip (lines 30-46).
+- **Branch template.** The `"branch"` template defined in `_branch.html:2-5` is a `code.chip` plus `<button class="copy-btn" data-copy=...>`.
+- **Danger zone.**
+  - Built from every task with status `in_progress` (subtasks included) as `DangerItem{ID, Title, Type, UpdatedAgo}`, sorted by ID (`view.go:181-192`; type at `view.go:77-83`).
+  - Rendered as an amber banner above the grid, only when non-empty (`_board.html:2-11`).
+  - Card highlighting is the `card-live` class plus the `chip-live` chip (`_card.html:1`, `:18`).
+- **Placeholder.** `unresolvedBoardView(poll)` returns a `BoardView` with only `PollSeconds` set (`view.go:199-201`).
+- **No template uses `ColumnView.Status` except for the `dot-{{ .Status }}` class** (`_board.html:17`).
+
+#### 3. Attached files: storage API, cost, names actually written
+
+- **Service-level interface.** `FileStorage` is `{WriteFile; ReadFile; ListFiles(taskID) ([]string, error)}` (`internal/task/service.go:87-96`). It is held in `Service.fileStorage` (`service.go:102`).
+  - In production it is the same `*MarkdownStorage` as storage and archive (`internal/project/resolver.go:160`).
+  - Many unit tests pass `nil` for fileStorage, for example `internal/task/service_test.go:373`, `:396`, `:501`, `internal/task/resolution_test.go:11` and `internal/task/current_test.go:40`.
+  - `detail()` guards against nil with `if s.fileStorage != nil` (`internal/task/view.go:114-118`).
+- **`MarkdownStorage.ListFiles(taskID)`** (`internal/storage/files.go:105-125`):
+  - calls `resolveTaskDir`: an `os.Stat` of `{dir}/{id}/{id}.md`, falling back to `os.Stat` of the archive path (`files.go:130-138`);
+  - then one `os.ReadDir(dir)`;
+  - skips subdirectories and the `{id}.md` record file;
+  - returns `entry.Name()` verbatim. `os.ReadDir` returns entries sorted by name.
+  - Cost per task: one or two `stat` calls plus one `ReadDir`.
+  - It does not filter `*.tmp`. `writeFileAtomic` writes `<path>.tmp` and then renames it (`internal/storage/markdown.go:102-112`).
+- **Name handling.**
+  - No case normalization or extension handling exists anywhere. `validateFilename` only rejects empty names, `/`, `\`, `..`, and `{id}.md` on write (`files.go:14-40`).
+  - The mock `ListFiles` in task tests iterates a map, so its order is random (`internal/task/service_test.go:141-147`).
+- **Callers of file listing.**
+  - `Service.ListTaskFiles` (exported, locked) has no unlocked twin. It calls `s.get` and then `s.fileStorage.ListFiles` (`service.go:345-355`).
+  - `detail()` calls `s.fileStorage.ListFiles` directly (`view.go:114-118`).
+  - The CLI calls it at `internal/cli/commands.go:458` and the MCP tool at `internal/tools/files.go:104`.
+- **Writing a file does not touch the task record or the index.**
+  - `WriteTaskFile` checks `s.index.Get(taskID)` and then calls `fileStorage.WriteFile` only (`service.go:318-331`).
+  - `UpdatedAt` is unchanged, so the card's "x ago" does not move when a phase file is written.
+  - The index staleness check only stats `{id}/{id}.md` mtimes and counts task dirs (`internal/storage/index.go:209-245`; `After(idx.builtAt)` at line 231; count check at line 240). Attached-file writes are invisible to the index.
+- **The board snapshot already touches the filesystem beyond the in-memory index:**
+  - `index.All()` calls `syncIfStale()` (`index.go:286-287`), which runs `isStaleOnDisk`: one `os.ReadDir(tasksDir)` plus one `os.Stat` per task dir (`index.go:209-237`), and a full `Rebuild` when stale (`index.go:198-204`);
+  - `blockedMap` calls `s.index.AllBlockers()`, which runs `syncIfStale` again (`index.go:609-610`);
+  - its `lookup` calls `s.index.Get(id)` once per distinct blocker target (`view.go:148-160`), and each of those runs `syncIfStale` plus `storage.Load`, a task-file read (`index.go:261-272`).
+  - Today the snapshot never calls `ListFiles` or any `fileStorage` method (`view.go:55-82`).
+  - The earlier design doc claimed "zero file reads on the steady path" (`tasks/web-ui-kanban-module/design.md:815`). The code does read task files when blockers exist, as shown above; the code wins.
+  - Precedent: the earlier design declined per-card description excerpts because they "would cost one file read per card per poll" (`tasks/web-ui-kanban-module/design.md:92`).
+- **Names the current workflow writes** (`.claude/skills/begin_task/SKILL.md`; identical in `plugins/mcp-task-manager/skills/begin_task/SKILL.md`, since `diff -r` shows only the extra `superpowers-workflow` dir in plugins):
+  - `task`, at line 17: "Write a `task` file … a `.md` document" — the file is named `task`, its content is Markdown;
+  - `research` (line 36), `design` (line 46), `plan` (line 56), `implementation` (line 66).
+  - The plugin skills are the source; `.claude/skills` is a generated mirror (`scripts/sync-skills.sh:1-12`).
+  - Each phase file is saved after its phase finishes: `research` at the end of step 2, `design` at the end of step 3, `plan` at the end of step 4, `implementation` after implementation (`begin_task/SKILL.md:36,46,56,66`).
+  - `superpowers-workflow` and `plugins/.../commands/*.md` do not name any attached files.
+- **Names actually present on disk** (scan of `tasks/`):
+  - `tasks/git-branch-per-task/` has `task`, `research`, `design`, `plan`, `implementation`, no extension. Its status is `done`.
+  - `tasks/in-progress-phase-columns/` has `task` only. Its status is `in_progress`, and it is the current task in `tasks/.users/igor.cwer/current_task`.
+  - `tasks/web-ui-kanban-module/` has `task.md`, `research.md`, `design.md`, `plan.md`, with a `.md` extension. Its status is `done`.
+  - The extension came from the old `create_task` skill, which wrote `.tasks/{task-name}/task.md`, `research.md`, `design.md`, `plan.md` and `implementation.md`. Commit `e989d62` renamed it to `begin_task` and switched to suffix-less names (`git show e989d62`, removed lines).
+  - None of the 87 archived tasks carries a workflow file.
+- **Case sensitivity.** All skill texts use lowercase names. Nothing in the code lowercases names, and this machine's NTFS checkout is case-insensitive at the filesystem level.
+
+#### 4. Locking and the twin discipline
+
+- One `sync.Mutex` sits on `Service`. The discipline comment reads: "exported methods lock once on entry and delegate to an unexported, unlocked twin. Service methods NEVER call each other's exported forms … add it in this shape or TestServiceNoSelfDeadlock will fail" (`internal/task/service.go:113-123`).
+- `Config`, `EnsureProjectExists`, `ProjectFound` and `BranchingEnabled` are deliberately unlocked, because they read write-once fields (`service.go:143-172`; `view.go:178-183`).
+- **`TestServiceNoSelfDeadlock`** (`internal/task/concurrency_test.go:105-149`):
+  - it is a hand-written list of calls under a 10 s watchdog that panics on deadlock;
+  - it covers `BoardSnapshot` (line 138), `Detail` (line 139), `ListTaskFiles` (line 133) and others;
+  - a new exported method is only guarded if it is added to that list.
+- **`TestServiceRace`** runs `BoardSnapshot`, `Detail` and `ListTaskFiles` concurrently with writers, including `WriteTaskFile`, over unlocked map mocks (`concurrency_test.go:59-100`). Its service is `newConcurrentService()` with `newMockFileStorage()` (`concurrency_test.go:17-26`).
+- During `BoardSnapshot` the mutex is held for the whole of `index.All()` and `blockedMap` (`view.go:49-53`). Git flows run while holding the same lock, with a 60 s timeout per git command (CLAUDE.md Concurrency). A board poll waits behind them.
+
+#### 5. Subsystem dependencies and side effects
+
+- **Tailwind build** (`scripts/build-css.sh`):
+  - it downloads the Tailwind standalone CLI v4.3.3 into `.cache/` (gitignored, `.gitignore` `/.cache/`) and runs `--input internal/web/assets/input.css --output internal/web/static/app.css --minify` (lines 17-41);
+  - its platform `case` only maps Darwin-arm64/x86_64 and Linux-aarch64/x86_64; anything else exits "unsupported platform" (lines 23-29);
+  - this machine reports `MINGW64_NT-10.0-26300-x86_64`, so the script as written exits 1 here;
+  - no `.cache/` exists and no `tailwindcss` is on PATH;
+  - `node` v26.10.0, `npm` 11.19.1, `npx` and `curl` are installed. No global Tailwind package is present.
+  - The script header says to run it after changing anything under `internal/web/templates/` (lines 8-9). It is never part of `go build`/`go test` (lines 4-6).
+- **Tailwind only scans templates.** `@source "../templates"` (`internal/web/assets/input.css:12`). Class names assembled dynamically, such as `chip-{{ .Priority }}` or `dot-{{ .Status }}`, work only because they are defined as component classes in `input.css` (`input.css:6-8`): chips at lines 20-29, `.dot-todo`/`.dot-in_progress`/`.dot-done` at lines 31-34, `.card`/`.card-live`/`.card-blocked` at lines 36-41, `.column` at lines 43-45, `.meta` at line 46, `.copy-btn` at lines 48-52.
+- **app.css is current.** It was last rebuilt in `097af2d`. The only later template commit, `930bbd7`, moved existing markup into `_branch.html` (verified by `git show`).
+- **Logging** goes to stderr only (`server.go:24-26`; `withDefaults` uses `os.Stderr`).
+- **Read-only guarantee.** `TestNoMutatingRoutes` requires every non-GET to return 405 and checks that a GET sweep leaves the tasks directory byte-identical, comparing names, mtimes and sizes recursively (`internal/web/handlers_test.go:247-269`, `:342-362`). Read-only directory listing does not change it.
+
+#### 6. Existing tests, helpers and how they run
+
+- **`internal/web/view_test.go`** (pure mapping):
+  - helpers `tk()` (lines 11-22), `boardOf(tasks...)`, which builds a `BoardSnapshot` by hand (lines 24-45), and `column(v, status)` (lines 47-54);
+  - tests: `TestColumnsAreInFixedOrder`, which asserts exactly `["todo","in_progress","done"]` and `len(v.Columns)==3` (lines 56-67); `TestCardsSortByPriorityThenAge`; `TestSubtaskNestsWhenParentShareColumn`; `TestSubtaskStandsAloneAcrossColumns`, which looks up `column(v,"in_progress").Cards` (lines 107-124); `TestDangerZoneIsTheInProgressSet`; `TestBlockedCardCarriesBlockers`; and the detail-view tests.
+- **`internal/web/handlers_test.go`:**
+  - `newTestHandler` uses `testsupport.NewBacklog` with a fixed `Now` (lines 26-35);
+  - `seedBoard` creates tasks 1 (todo, parent), 2 (subtask of 1), 3 (in_progress), 4 (done) and 5 (blocked by 3) (lines 44-53);
+  - `TestBoardRendersThreeColumns` checks the strings "To do", "In progress" and "Done" (lines 55-78);
+  - `TestBoardCardBadges` checks `chip-critical`, `chip-blocked`, `chip-live`, the danger banner text and `0/1 subtasks` (lines 80-100);
+  - `TestDetailPage` writes `research.md` through `svc.WriteTaskFile` (line 114);
+  - also: `TestNoMutatingRoutes`, `TestEscaping` (lines 272-299), `TestUnresolvedProjectPlaceholder` (lines 304-324) and `TestNoExternalAssetReferences`.
+- **`internal/web/branch_test.go`:**
+  - `setBranch` writes record fields through a separate `storage.NewMarkdownStorage(tasksDir)`, behind the service's back (lines 20-36);
+  - tests: `TestBoardShowsBranchChip` (lines 69-107) and `TestCopyButtonHasNoHtmxAttributes` (lines 111-127).
+- **`internal/web/race_test.go`:** `TestHandlerRaceAgainstWrites` runs `/`, `/board`, `/tasks/1/panel` and `/tasks/5` against `Create`/`Update` writers on a real `httptest.Server` (lines 19-66). No file writes.
+- **`internal/task/view_test.go`:** `TestBoardSnapshotShape` (30 tasks), `TestBoardSnapshotSubtaskGrouping`, `TestBlockedMapMatchesIsBlocked`, `TestDetailActiveTask` (writes `research.md` via the mock, then checks `d.Files`), `TestDetailArchivedTaskHasEmptyDerivedData` and others. All use `newConcurrentService()` + `seedBacklog` (`concurrency_test.go:29-54`: 10 parents `p0..p9`, two subtasks each, `blocked_by` edges).
+- **`internal/testsupport/testsupport.go`:**
+  - `NewBacklog(t)` gives a real `MarkdownStorage`/`Index` in `t.TempDir()`, a service with `WithCurrentTaskStore` and `Identity{Name:"dev"}`, and returns a `project.NewStatic` resolver (lines 21-42);
+  - `TaskSpec{ID, Title, Status, Priority, Type, ParentID, BlockedBy}` has no files field (lines 46-54);
+  - `Seed` creates the tasks, adds relations, then applies statuses through `svc.Update` (lines 59-106);
+  - files can be attached afterwards with `svc.WriteTaskFile(id, name, content)`, as `handlers_test.go:114` does;
+  - `testsupport` cannot be imported from `internal/task` tests because of an import cycle (lines 5-6; `concurrency_test.go:16`).
+- **No test workflow in CI.** `.github/workflows/release.yml` only builds release binaries. `go.mod` declares `go 1.25.5`; the local toolchain is `go1.27.1 windows/amd64` with CGO_ENABLED=1 and mingw gcc, so `-race` works.
+- **Baseline results on this machine** (commands run, no files changed):
+  - `go build ./...`: OK.
+  - `go vet ./internal/web/ ./internal/task/ ./internal/storage/`: OK.
+  - `go test ./...`: FAILS on this Windows machine before any change.
+    - `internal/vcs`, `internal/task` branching tests, `internal/tools` git tests and `internal/cli` git tests fail with `fatal: unable to access 'NUL'`. `testsupport/git.go:22` sets `GIT_CONFIG_GLOBAL=os.DevNull`.
+    - `internal/config` and `internal/project` fail on Unix-path assertions, for example `TestTasksDir_Absolute` wants `/absolute/path`.
+    - `internal/app` fails `TestServer_ResolvesProjectFromRoots`.
+    - `internal/storage`: OK.
+    - In `internal/task`, `TestServiceRace`, `TestServiceNoSelfDeadlock` and all view tests PASS.
+  - `go test ./internal/web/` fails `TestEscaping` deterministically: `WriteTaskFile("1","x<script>.md")` is an invalid Windows filename (`handlers_test.go:279-281`).
+  - `TestBoardShowsBranchChip` and `TestCopyButtonHasNoHtmxAttributes` are flaky: 5 of 10 runs failed with `-count=10` without `-race`, 0 of 10 with `-race`.
+  - `go test -race ./internal/web/`: only `TestEscaping` fails, and no DATA RACE is reported.
+- **gofmt.** `gofmt -l internal/` lists every Go file. The cause is CRLF line endings in the working copy (`core.autocrlf=true`, no `.gitattributes`). Piping `view.go` through `tr -d '\r' | gofmt -l` reports clean.
+
+#### 7. Layout facts
+
+- **Page shell.**
+  - `main` is `mx-auto max-w-[1600px] px-4 py-5` (`layout.html:20`).
+  - `board.html` uses `grid gap-5 lg:grid-cols-[minmax(0,1fr)_22rem]`, with the board in `min-w-0` and the `#panel` aside `lg:sticky lg:top-20 lg:self-start` (`board.html:2-11`).
+  - Below `lg` the panel stacks under the board.
+- **Board grid.** `<div class="grid gap-3 md:grid-cols-3">` (`_board.html:13`). Below `md` the three columns stack vertically, one per row. At `md` and above they are three equal `minmax(0,1fr)` tracks.
+- **Column and card styling.**
+  - `.column` = `flex min-w-0 flex-col rounded-xl border border-white/5 bg-white/[0.02] p-2` (`input.css:43-45`).
+  - Cards stack in `flex flex-col gap-2` (`_board.html:21`).
+  - There is no overflow or max-height on columns, and no horizontal scroll container.
+  - `.card` = `block rounded-lg border … p-3` (`input.css:36-39`).
+- **Compiled breakpoints in `static/app.css`.** Only two `min-width` media queries exist:
+  - `48rem` (md), containing only `.md:grid-cols-3`;
+  - `64rem` (lg), containing `lg:sticky`, `lg:top-20`, `lg:grid-cols-[minmax(0,1fr)_22rem]` and `lg:self-start`.
+  - Compiled `grid-cols-*` rules: `grid-cols-2`, `grid-cols-3`, `grid-cols-[auto_minmax(0,1fr)]` and `grid-cols-[minmax(0,1fr)_22rem]` (grep of `app.css`).
+  - No `sm:`, `xl:` or `2xl:` variants are compiled. Any new utility class requires a CSS rebuild.
+
+### Evidence Map
+
+| Concern | Current implementation | Evidence |
+| ------- | ---------------------- | -------- |
+| Board routes | GET-only ServeMux; `/` full page, `/board` fragment | `internal/web/server.go:54-63` |
+| Resolution in handlers | `Deps.Project` = `Resolver.Current` | `internal/web/server.go:19-23`; `internal/app/app.go:70,110`; `internal/project/resolver.go:112-116` |
+| Snapshot | One lock, `index.All()` + subtask grouping + `blockedMap` | `internal/task/view.go:49-82` |
+| Snapshot type | Tasks / Subtasks / Blocked / Counts / TakenAt | `internal/task/view.go:21-35` |
+| Column definition | Fixed Go slice of 3 (status, title) | `internal/web/view.go:119-127` |
+| Column building | Roots per status, nested-by-same-status, count = tasks | `internal/web/view.go:146-179` |
+| Card view model | `CardView` fields, no phase/files | `internal/web/view.go:43-68,216-240` |
+| Danger zone | All `in_progress` tasks, sorted by ID; banner + `card-live`/`chip-live` | `internal/web/view.go:181-192`; `_board.html:2-11`; `_card.html:1,18` |
+| Branch chip | `cardBranch` final-else-wip; shared `"branch"` template | `internal/web/view.go:244-249`; `_branch.html:2-5`; `_card.html:24-28` |
+| Blocked flag | `snap.Blocked[id]` → `Blocked`/`Blockers` | `internal/web/view.go:232-235`; `internal/task/view.go:139-176` |
+| Subtask placement | Nest only when parent has same status | `internal/web/view.go:149-158`; `_card.html:30-46` |
+| Polling | `hx-trigger="every 5s"`, `outerHTML` swap of `#board` | `_board.html:1`; `internal/web/server.go:15` |
+| File listing API | `ListFiles` = stat + `ReadDir`, excludes `{id}.md`, verbatim names | `internal/storage/files.go:105-138` |
+| File listing in service | `ListTaskFiles` (locked, no twin); `detail()` calls `fileStorage.ListFiles` directly with nil guard | `internal/task/service.go:345-355`; `internal/task/view.go:114-118` |
+| Snapshot I/O today | `syncIfStale` ReadDir + per-dir stat; per-blocker task-file load; no file listing | `internal/storage/index.go:198-245,261-272,286-287,609-610`; `internal/task/view.go:148-160` |
+| Attached-file writes vs index | Don't touch record/`UpdatedAt`/index; staleness checks only `{id}.md` | `internal/task/service.go:318-331`; `internal/storage/index.go:209-245` |
+| Workflow file names | `task`, `research`, `design`, `plan`, `implementation` (no extension) | `.claude/skills/begin_task/SKILL.md:17,36,46,56,66` |
+| Legacy names on disk | `task.md`/`research.md`/`design.md`/`plan.md` on done task `web-ui-kanban-module` | `tasks/web-ui-kanban-module/`; `git show e989d62` |
+| Twin discipline guard | Manual call list + 10 s watchdog | `internal/task/service.go:113-123`; `internal/task/concurrency_test.go:105-149` |
+| Race coverage | Service-level and HTTP-level race tests | `internal/task/concurrency_test.go:59-100`; `internal/web/race_test.go:19-66` |
+| CSS build | Tailwind v4.3.3 standalone; no Windows mapping | `scripts/build-css.sh:17-41` |
+| Dynamic class names | Must be component classes in input.css | `internal/web/assets/input.css:6-8,19-52` |
+| Grid layout | `grid gap-3 md:grid-cols-3`; page `lg:grid-cols-[minmax(0,1fr)_22rem]` | `_board.html:13`; `board.html:2`; `layout.html:20` |
+| Docs to update | CLAUDE.md Web UI bullets | `CLAUDE.md:226-239` |
+
+### Relevant Files
+
+1. `internal/task/view.go`: the board snapshot type and `boardSnapshot()`, the only service read path for the board; also the precedent for calling `fileStorage.ListFiles` inside an unlocked twin (`detail`).
+2. `internal/web/view.go`: `columns`, `ColumnView`, `CardView` and `newBoardView`, i.e. column building, nesting, counts and the danger zone.
+3. `internal/web/templates/_board.html`: the poll container, banner and generic column loop with the grid classes.
+4. `internal/web/templates/_card.html` and `_branch.html`: the card markup that has to keep working inside any new grouping.
+5. `internal/web/assets/input.css`: component classes for dynamic names (`dot-*`, `chip-*`) and `.column`/`.card`; Tailwind's `@source`.
+6. `internal/storage/files.go`: `ListFiles` semantics and cost.
+7. `internal/task/service.go` (lines 87-123, 318-355): the `FileStorage` interface, Service fields, the twin-discipline comment and the file methods.
+8. `internal/task/concurrency_test.go`: `TestServiceNoSelfDeadlock` (manual list), `TestServiceRace`, `newConcurrentService`/`seedBacklog` used by the view tests.
+9. `internal/web/view_test.go`, `handlers_test.go`, `branch_test.go`, `race_test.go`: assertions on the column count, order and titles that a layout change would touch.
+10. `internal/testsupport/testsupport.go`: `NewBacklog`/`Seed`. There is no files support; attach with `svc.WriteTaskFile`.
+11. `scripts/build-css.sh`: the CSS regeneration step and its platform limits.
+12. `.claude/skills/begin_task/SKILL.md` (source: `plugins/mcp-task-manager/skills/begin_task/SKILL.md`): the authoritative workflow file names.
+13. `CLAUDE.md` lines 226-239: the Web UI section that must document the change.
+
+### Inference
+
+- **Cause of the flaky branch-chip tests (inference).** `setBranch` saves a record directly after `Seed`'s last `svc.Update`, which set `idx.builtAt = time.Now()` (`index.go:276`). The staleness check is `info.ModTime().After(idx.builtAt)` (`index.go:231`). On Windows the file mtime can be equal to or not after `builtAt` when both land in the same clock tick, and the task count is unchanged (`index.go:240`), so the index keeps the old entry with no `Branch`.
+  - Supporting evidence: the failures disappear under `-race`, which slows execution. The detail-page part of the same test, which reads the record fresh through `storage.Load`, does not fail.
+  - Relevance: a test that writes records behind the service on Windows can be flaky, while files attached via `svc.WriteTaskFile` never involve the index.
+- **Column widths (inference, arithmetic from the classes above).** Each figure is the inner width of the In progress column.
+  - At a 1280 px viewport with the panel beside the board: board ≈ 1248 − 352 − 20 = 876 px; each column ≈ (876 − 24)/3 ≈ 284 px; inner ≈ 266 px after `p-2` and the border.
+  - At 1024 px: ≈ 180 px inner.
+  - At ≥1600 px: ≈ 372 px inner.
+  - Between 768 and 1023 px (panel stacked below): ≈ 230 px inner.
+  - Below 768 px, columns stack at full width.
+  - These figures indicate how much horizontal room four sub-columns would have inside today's 1/3-width column. They are derived, not measured in a browser.
+- **Polling cost (inference).** Each open browser tab polls `/board` independently every 5 s, because the poll is a per-page `hx-trigger` (`_board.html:1`). Any per-task directory read added to the snapshot multiplies by the number of in-progress tasks and the number of open tabs, all under the service mutex.
+- **Status of the old `.md` names (inference).** The suffix-less names are the current convention. The `.md`-suffixed names exist only on a done task from before commit `e989d62`. No in-progress task in this repository currently carries `.md`-suffixed workflow files (`ls tasks/*/`).
+
+### Unknown
+
+- **Do the old `.md`-suffixed names count?** The task's mapping names `task`/`research`/`design`/`plan` without an extension. Nothing says whether `research.md`, `design.md` and `plan.md` (the old `create_task` convention, still on disk in `tasks/web-ui-kanban-module/`) should map to the same phases, or be ignored like any other attached file.
+- **Should name matching be case-insensitive?** For example, should `Plan` count? Nothing in the code or the skills normalizes case.
+- **Which phase does a nested in-progress subtask use?** Today a subtask nests inside its parent's card whenever both are `in_progress` (`internal/web/view.go:153`). With sub-columns, the parent and the subtask can have different phases, and the task file does not say which wins: the subtask's own phase, or nesting under the parent regardless.
+- **Which column does `Count` mean?** The task does not say whether the In progress column header keeps one total count, whether each sub-column shows its own count, or both. `TestSubtaskNestsWhenParentShareColumn` (`internal/web/view_test.go:102-104`) and `TestColumnsAreInFixedOrder` (lines 56-67) pin the current `Count` semantics and the 3-column shape.
+- **How is app.css regenerated on this machine?** `scripts/build-css.sh` exits "unsupported platform" on MINGW64 (lines 23-29). No Tailwind binary is cached locally. Running the Tailwind CLI any other way needs network access, which is unverified.
+- **Can "`go test ./...` passes" be verified here?** It cannot be satisfied on this Windows machine at baseline. Unrelated packages already fail, and `internal/web` `TestEscaping` fails deterministically. Nothing records where the acceptance run is expected to happen (Linux/macOS, or Windows scoped to packages).
