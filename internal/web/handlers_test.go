@@ -385,3 +385,99 @@ func TestCardIDTruncates(t *testing.T) {
 		}
 	}
 }
+
+// laneSection returns the markup of one In progress phase lane: from its
+// data-phase attribute to the first closing section tag after it. Lanes
+// hold only card articles, so that tag closes the lane itself.
+func laneSection(t *testing.T, body, phase string) string {
+	t.Helper()
+	i := strings.Index(body, `data-phase="`+phase+`"`)
+	if i < 0 {
+		t.Fatalf("board has no %s lane", phase)
+	}
+	j := strings.Index(body[i:], "</section>")
+	if j < 0 {
+		t.Fatalf("the %s lane is never closed", phase)
+	}
+	return body[i : i+j]
+}
+
+func TestBoardRendersPhaseLanes(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedBoard(t, svc)
+	if err := svc.WriteTaskFile("3", "design", "x"); err != nil {
+		t.Fatalf("WriteTaskFile() error = %v", err)
+	}
+
+	body := get(t, h, "/board").Body.String()
+	if n := strings.Count(body, `class="lanes"`); n != 1 {
+		t.Errorf("board has %d lane stacks, want 1", n)
+	}
+	last := -1
+	for _, phase := range []string{"research", "design", "planning", "implementation"} {
+		i := strings.Index(body, `class="lane lane-`+phase+`" data-phase="`+phase+`"`)
+		if i <= last {
+			t.Errorf("lane %s at %d, want after %d", phase, i, last)
+		}
+		last = i
+	}
+
+	planning := laneSection(t, body, "planning")
+	for _, want := range []string{"Fix the index", "chip-live", `hx-get="/tasks/3/panel"`, ">1</span>"} {
+		if !strings.Contains(planning, want) {
+			t.Errorf("planning lane is missing %q", want)
+		}
+	}
+	for _, phase := range []string{"research", "design", "implementation"} {
+		s := laneSection(t, body, phase)
+		if strings.Contains(s, "<article") {
+			t.Errorf("%s lane holds a card, want none", phase)
+		}
+		if !strings.Contains(s, ">0</span>") {
+			t.Errorf("%s lane does not count 0", phase)
+		}
+	}
+	if n := strings.Count(body, `hx-get="/tasks/3/panel"`); n != 1 {
+		t.Errorf("task 3 renders %d times, want once", n)
+	}
+}
+
+func TestBoardLaneGroupsByFurthestPhase(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	testsupport.Seed(t, svc,
+		testsupport.TaskSpec{ID: "10", Status: "in_progress"},
+		testsupport.TaskSpec{ID: "11", ParentID: "10", Status: "in_progress"},
+	)
+	if err := svc.WriteTaskFile("11", "plan.md", "x"); err != nil {
+		t.Fatalf("WriteTaskFile() error = %v", err)
+	}
+
+	body := get(t, h, "/board").Body.String()
+	impl := laneSection(t, body, "implementation")
+	for _, want := range []string{"#10</span>", "#11</span>", ">2</span>"} {
+		if !strings.Contains(impl, want) {
+			t.Errorf("implementation lane is missing %q", want)
+		}
+	}
+	if strings.Contains(laneSection(t, body, "research"), "<article") {
+		t.Error("research lane holds a card, want none")
+	}
+}
+
+func TestBoardEmptyInProgressShowsFourStubs(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	testsupport.Seed(t, svc, testsupport.TaskSpec{ID: "1"})
+
+	body := get(t, h, "/board").Body.String()
+	if n := strings.Count(body, `data-phase="`); n != 4 {
+		t.Errorf("board has %d lanes, want 4", n)
+	}
+	for _, phase := range []string{"research", "design", "planning", "implementation"} {
+		if strings.Contains(laneSection(t, body, phase), "<article") {
+			t.Errorf("%s lane holds a card, want none", phase)
+		}
+	}
+	if n := strings.Count(body, ">empty</p>"); n != 1 {
+		t.Errorf("board shows %d empty placeholders, want 1 (Done only)", n)
+	}
+}

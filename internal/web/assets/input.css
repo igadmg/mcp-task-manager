@@ -43,6 +43,31 @@
   .column {
     @apply flex min-w-0 flex-col rounded-xl border border-white/5 bg-white/[0.02] p-2;
   }
+
+  /* In progress phase lanes: one vertical stack, each later lane shifted
+   * right by one step. The step is a half card (20% of the stack, card 40%)
+   * when the column allows it, shrinks to keep cards at least --lane-min
+   * wide, and the container query below drops the indent entirely when the
+   * stack is narrower than 14rem. --lane comes from .lane-<phase>, named
+   * like chip-<priority>, so Go never computes geometry. */
+  .lanes {
+    @apply flex flex-col gap-3;
+    container: lanes / inline-size;
+    --lane-min: 11rem;
+    --lane-step: clamp(0px, (100% - var(--lane-min)) / 3, 20%);
+  }
+  .lane {
+    @apply min-w-0;
+    margin-left: calc(var(--lane, 0) * var(--lane-step));
+    width: calc(100% - 3 * var(--lane-step));
+  }
+  .lane-research       { --lane: 0; }
+  .lane-design         { --lane: 1; }
+  .lane-planning       { --lane: 2; }
+  .lane-implementation { --lane: 3; }
+  @container lanes (width < 14rem) {
+    .lane { margin-left: 0; width: auto; }
+  }
   .meta { @apply font-mono text-[11px] text-neutral-500; }
 
   .copy-btn {
