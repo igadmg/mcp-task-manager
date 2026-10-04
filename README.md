@@ -94,6 +94,7 @@ call shows up on the board on the next refresh (every 5 seconds).
 - `serve web` resolves the project eagerly, so the board has data from the very first request. Started from inside the MCP server it comes up before the client has named a project and shows a placeholder until the first tool call.
 - `serve web --mcp` additionally serves MCP over stdio in the same process. It is off by default: a terminal has a TTY on stdin, and a JSON-RPC reader there would eat your keystrokes.
 - Tailwind CSS and htmx are compiled into the binary, so the page renders with no network access.
+- In progress groups its cards into Research / Design / Planning / Implementation lanes, each shifted right by half a card, derived from the workflow files (`research`, `design`, `plan`) attached to each task.
 
 **The HTTP surface is read-only and unauthenticated.** No route mutates a task,
 but anyone who can reach the port can read the whole backlog. The default
@@ -613,6 +614,12 @@ The script downloads the pinned Tailwind standalone CLI (**v4.3.3**, no Node
 required) into the gitignored `.cache/` directory and runs it over
 `internal/web/assets/input.css`. It is never invoked by `go build`,
 `go generate` or `go test`. htmx is pinned at **2.0.4**.
+
+On Windows x64, run the script from Git Bash. Hard-reload the board after
+rebuilding: `/static/app.css` is cached as immutable. Tailwind's automatic
+source detection scans every non-gitignored file under the directory it runs
+from, not only the templates, so build from a clean checkout: untracked notes
+or task artifacts would otherwise add stray utility classes.
 
 ### Editing the Packaged Skills
 
