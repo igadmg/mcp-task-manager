@@ -48,13 +48,63 @@ type ColumnView struct {
 	Stats []StatsCardView
 }
 
-// StatsCardView is one bars card of the Done column. ID is the configured
-// card id, the stable key of data-stats-card.
+// StatsCardView is one statistics card of the Done column. ID is the
+// configured card id, the stable key of data-stats-card. Kind picks the
+// partial: a bars card fills Bars, a lines card Chart (nil when the card has
+// no lines to draw).
 type StatsCardView struct {
 	ID    string
+	Kind  string
 	Title string
 	Bars  []StatsBarView
+	Chart *StatsChartView
 }
+
+// StatsChartView is a lines card's chart. Its coordinates are data, like a
+// bar's: day i spans x 2i..2i+2 with its points at 2i+1, so Width is twice
+// the day count, and each group's viewBox is its Max high with y = Max -
+// value. Go prints integers only and the browser scales them.
+type StatsChartView struct {
+	Width  int
+	First  string // the first day, "Jan 2"
+	Last   string // the last day: today
+	Groups []StatsLineGroupView
+	Legend []StatsSeriesView
+	Days   []StatsDayView
+}
+
+// StatsLineGroupView is the lines that share one y scale: the per-day
+// counts, or the running totals. Peak is the largest value of any of its
+// lines, hidden ones included, and Max the viewBox height: Peak, at least 1,
+// so an all-zero group is a flat line on the baseline.
+type StatsLineGroupView struct {
+	Cumulative bool
+	Width      int
+	Peak       int
+	Max        int
+	Lines      []StatsSeriesView
+}
+
+// StatsSeriesView is one line. Key is the line name or the split value
+// (data-stats-line); Color is its series-<…> class, picked from a fixed set
+// so a key never becomes a class; Points is "x,y x,y …" in data units.
+type StatsSeriesView struct {
+	Key    string
+	Color  string
+	Hidden bool
+	Points string
+}
+
+// StatsDayView is one day's hover column, starting at X and 2 wide; Title
+// lists every line's value that day.
+type StatsDayView struct {
+	X     int
+	Title string
+}
+
+// statsSplitColors is the number of series-<i> classes a split card cycles
+// through.
+const statsSplitColors = 8
 
 // StatsBarView is one value's row of a bars card. Every number is a task
 // count: the bar is an SVG whose viewBox is Total wide, so the browser
@@ -308,15 +358,19 @@ func newPhaseLanes(roots []*CardView, snap *task.BoardSnapshot) []PhaseLaneView 
 	return lanes
 }
 
-// newStatsCards maps the snapshot's bars cards. Lines cards are left out
-// until the board can draw them.
+// newStatsCards maps the snapshot's statistics cards, in config order.
 func newStatsCards(cards []task.StatsCard) []StatsCardView {
 	var out []StatsCardView
 	for _, c := range cards {
+		card := StatsCardView{ID: c.ID, Kind: c.Kind, Title: c.Title}
+		if c.Kind == config.StatsKindLines {
+			card.Chart = newStatsChart(c)
+			out = append(out, card)
+			continue
+		}
 		if c.Kind != config.StatsKindBars {
 			continue
 		}
-		card := StatsCardView{ID: c.ID, Title: c.Title}
 		for _, b := range c.Bars {
 			if b.Total <= 0 { // an empty viewBox is invalid
 				continue
@@ -336,6 +390,77 @@ func newStatsCards(cards []task.StatsCard) []StatsCardView {
 		out = append(out, card)
 	}
 	return out
+}
+
+// newStatsChart maps a lines card; nil when it has no lines (an unknown
+// metric, or a split card with no value in the window). Per-day lines and
+// running totals get a group each, per-day first, so neither flattens the
+// other. A one-day window draws a flat segment across the day, since a
+// one-point polyline paints nothing.
+func newStatsChart(c task.StatsCard) *StatsChartView {
+	if len(c.Lines) == 0 || len(c.Days) == 0 {
+		return nil
+	}
+	n := len(c.Days)
+	value := func(l task.StatsLine, i int) int {
+		if i < len(l.Values) {
+			return l.Values[i]
+		}
+		return 0
+	}
+	chart := &StatsChartView{
+		Width: 2 * n,
+		First: c.Days[0].Format("Jan 2"),
+		Last:  c.Days[n-1].Format("Jan 2"),
+	}
+
+	split := c.Field != ""
+	groups := [2]StatsLineGroupView{{Width: 2 * n, Max: 1}, {Cumulative: true, Width: 2 * n, Max: 1}}
+	member := make([]int, len(c.Lines))
+	for li, l := range c.Lines {
+		g := 0
+		if (split && strings.HasSuffix(c.Metric, "_cumulative")) || (!split && strings.HasSuffix(l.Key, "_cumulative")) {
+			g = 1
+		}
+		member[li] = g
+		for i := range n {
+			groups[g].Peak = max(groups[g].Peak, value(l, i))
+		}
+		groups[g].Max = max(groups[g].Peak, 1)
+	}
+	for li, l := range c.Lines {
+		color := "series-" + l.Key
+		if split {
+			color = "series-" + strconv.Itoa(li%statsSplitColors)
+		}
+		g := &groups[member[li]]
+		var pts []string
+		for i := range n {
+			y := strconv.Itoa(g.Max - value(l, i))
+			pts = append(pts, strconv.Itoa(2*i+1)+","+y)
+		}
+		if n == 1 {
+			y := strconv.Itoa(g.Max - value(l, 0))
+			pts = []string{"0," + y, "2," + y}
+		}
+		s := StatsSeriesView{Key: l.Key, Color: color, Hidden: l.Hidden, Points: strings.Join(pts, " ")}
+		g.Lines = append(g.Lines, s)
+		chart.Legend = append(chart.Legend, s)
+	}
+	for _, g := range groups {
+		if len(g.Lines) > 0 {
+			chart.Groups = append(chart.Groups, g)
+		}
+	}
+
+	for i, day := range c.Days {
+		parts := []string{day.Format("Jan 2")}
+		for _, l := range c.Lines {
+			parts = append(parts, l.Key+" "+strconv.Itoa(value(l, i)))
+		}
+		chart.Days = append(chart.Days, StatsDayView{X: 2 * i, Title: strings.Join(parts, " · ")})
+	}
+	return chart
 }
 
 // unresolvedBoardView is what the board shows while no project is resolved

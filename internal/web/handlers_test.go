@@ -618,3 +618,90 @@ func TestStatsBarsEscaping(t *testing.T) {
 		t.Errorf("escaped payload missing:\n%s", out)
 	}
 }
+
+func TestBoardDoneColumnRendersLines(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedBoard(t, svc)
+
+	body := get(t, h, "/board").Body.String()
+	at := strings.Index(body, `data-stats-card="lines-14d"`)
+	if at < 0 {
+		t.Fatal("Done column lacks the lines-14d card")
+	}
+	if at < strings.Index(body, `data-stats-card="bars-resolution"`) {
+		t.Error("the lines card is not after the bars cards (config order)")
+	}
+	card := body[at:]
+	card = card[:strings.Index(card, "</section>")]
+	// All five seeded tasks were created today and task 4 closed today, so
+	// the per-day scale is 5 and today's points are created 5, closed 1,
+	// whatever the date.
+	for _, want := range []string{
+		`viewBox="0 0 28 1"`,
+		`viewBox="0 0 28 5"`,
+		`<polyline class="stats-line series-created" data-stats-line="created" points="1,5 `,
+		` 27,0"/>`,
+		`<polyline class="stats-line series-closed" data-stats-line="closed" points="1,5 `,
+		` 27,4"/>`,
+		`<button type="button" class="stats-legend-item" data-stats-line="created" aria-pressed="true"`,
+		`<button type="button" class="stats-legend-item" data-stats-line="closed" aria-pressed="true"`,
+		`>5/day<`,
+		` · created 5 · closed 1</title>`,
+	} {
+		if !strings.Contains(card, want) {
+			t.Errorf("lines card lacks %s", want)
+		}
+	}
+	if n := strings.Count(card, `<rect class="stats-day"`); n != 14 {
+		t.Errorf("lines card has %d day columns, want 14", n)
+	}
+	for _, bad := range []string{"style=", "hx-", "stats-off"} {
+		if strings.Contains(card, bad) {
+			t.Errorf("lines card carries %q", bad)
+		}
+	}
+}
+
+func TestBoardHiddenLineRendersOff(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedBoard(t, svc)
+	svc.Config().Web.DoneStats.Cards = []config.StatsCard{{
+		ID: "recent", Kind: config.StatsKindLines, Title: "Recent", Days: 7,
+		Lines: []string{"created", "closed_cumulative"}, Hidden: []string{"closed_cumulative"},
+	}}
+
+	body := get(t, h, "/board").Body.String()
+	for _, want := range []string{
+		`<polyline class="stats-line series-created" data-stats-line="created"`,
+		`<polyline class="stats-line series-closed_cumulative stats-off" data-stats-line="closed_cumulative"`,
+		`data-stats-line="closed_cumulative" aria-pressed="false"`,
+		`data-stats-line="created" aria-pressed="true"`,
+		`5/day &middot; 1 total`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("board lacks %s", want)
+		}
+	}
+}
+
+func TestStatsLinesEscaping(t *testing.T) {
+	const payload = `<script>alert(1)</script>`
+	line := StatsSeriesView{Key: `x" onmouseover="y` + payload, Color: "series-0", Points: "1,0"}
+	card := StatsCardView{ID: `x" onmouseover="y`, Kind: config.StatsKindLines, Title: payload,
+		Chart: &StatsChartView{Width: 2, First: payload, Last: payload,
+			Groups: []StatsLineGroupView{{Width: 2, Max: 1, Lines: []StatsSeriesView{line}}},
+			Legend: []StatsSeriesView{line},
+			Days:   []StatsDayView{{X: 0, Title: payload}}}}
+
+	var b strings.Builder
+	if err := fragments.ExecuteTemplate(&b, "_stats_lines.html", card); err != nil {
+		t.Fatalf("execute _stats_lines.html: %v", err)
+	}
+	out := b.String()
+	if strings.Contains(out, "<script>") || strings.Contains(out, `" onmouseover="`) || strings.Contains(out, "ZgotmplZ") {
+		t.Errorf("lines card output is not escaped:\n%s", out)
+	}
+	if !strings.Contains(out, "<title>&lt;script&gt;") {
+		t.Errorf("escaped day title missing:\n%s", out)
+	}
+}

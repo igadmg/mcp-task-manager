@@ -2,6 +2,7 @@ package web
 
 import (
 	"slices"
+	"strconv"
 	"testing"
 	"time"
 
@@ -605,19 +606,23 @@ func TestDoneColumnHasStatsNotCards(t *testing.T) {
 	}
 }
 
-func TestStatsCardsKeepBarsInConfigOrder(t *testing.T) {
+func TestStatsCardsKeepConfigOrder(t *testing.T) {
 	got := newStatsCards([]task.StatsCard{
 		{ID: "bars-type", Kind: config.StatsKindBars},
 		{ID: "lines-14d", Kind: config.StatsKindLines},
 		{ID: "bars-priority", Kind: config.StatsKindBars},
 		{ID: "odd", Kind: "pie"},
 	})
-	var ids []string
+	var ids, kinds []string
 	for _, c := range got {
 		ids = append(ids, c.ID)
+		kinds = append(kinds, c.Kind)
 	}
-	if want := []string{"bars-type", "bars-priority"}; !slices.Equal(ids, want) {
-		t.Errorf("stats cards = %v, want %v (bars only, config order)", ids, want)
+	if want := []string{"bars-type", "lines-14d", "bars-priority"}; !slices.Equal(ids, want) {
+		t.Errorf("stats cards = %v, want %v (known kinds, config order)", ids, want)
+	}
+	if want := []string{"bars", "lines", "bars"}; !slices.Equal(kinds, want) {
+		t.Errorf("kinds = %v, want %v", kinds, want)
 	}
 }
 
@@ -643,5 +648,141 @@ func TestStatsBarSkipsEmptyTotal(t *testing.T) {
 	}}})
 	if len(cards) != 1 || len(cards[0].Bars) != 1 || cards[0].Bars[0].Value != "one" {
 		t.Errorf("cards = %+v, want only the row with tasks", cards)
+	}
+}
+
+// statsDays returns n consecutive local midnights ending on Oct 6 2026.
+func statsDays(n int) []time.Time {
+	days := make([]time.Time, n)
+	for i := range days {
+		days[i] = time.Date(2026, 10, 6-(n-1-i), 0, 0, 0, 0, time.UTC)
+	}
+	return days
+}
+
+func linesCard(lines ...task.StatsLine) task.StatsCard {
+	n := 0
+	if len(lines) > 0 {
+		n = len(lines[0].Values)
+	}
+	return task.StatsCard{ID: "lines", Kind: config.StatsKindLines, Days: statsDays(n), Lines: lines}
+}
+
+func TestStatsChartPoints(t *testing.T) {
+	c := newStatsChart(linesCard(task.StatsLine{Key: "created", Values: []int{1, 0, 2}}))
+	if c == nil {
+		t.Fatal("chart is nil")
+	}
+	if c.Width != 6 || c.First != "Oct 4" || c.Last != "Oct 6" {
+		t.Errorf("chart = width %d, %s..%s; want 6, Oct 4..Oct 6", c.Width, c.First, c.Last)
+	}
+	if len(c.Groups) != 1 {
+		t.Fatalf("groups = %+v, want one", c.Groups)
+	}
+	g := c.Groups[0]
+	if g.Cumulative || g.Width != 6 || g.Max != 2 || g.Peak != 2 {
+		t.Errorf("group = %+v, want per-day, width 6, max 2", g)
+	}
+	if got := g.Lines[0].Points; got != "1,1 3,2 5,0" {
+		t.Errorf("points = %q, want %q", got, "1,1 3,2 5,0")
+	}
+}
+
+func TestStatsChartGroupsByKind(t *testing.T) {
+	c := newStatsChart(linesCard(
+		task.StatsLine{Key: "created_cumulative", Values: []int{3, 5, 9}},
+		task.StatsLine{Key: "created", Values: []int{3, 2, 4}},
+		task.StatsLine{Key: "closed", Values: []int{0, 1, 0}},
+	))
+	if len(c.Groups) != 2 || c.Groups[0].Cumulative || !c.Groups[1].Cumulative {
+		t.Fatalf("groups = %+v, want per-day then cumulative", c.Groups)
+	}
+	if c.Groups[0].Max != 4 || len(c.Groups[0].Lines) != 2 {
+		t.Errorf("per-day group = %+v, want max 4 with created and closed", c.Groups[0])
+	}
+	if c.Groups[1].Max != 9 || c.Groups[1].Lines[0].Points != "1,6 3,4 5,0" {
+		t.Errorf("cumulative group = %+v, want max 9, points 1,6 3,4 5,0", c.Groups[1])
+	}
+	var legend []string
+	for _, s := range c.Legend {
+		legend = append(legend, s.Key)
+	}
+	if want := []string{"created_cumulative", "created", "closed"}; !slices.Equal(legend, want) {
+		t.Errorf("legend = %v, want card order %v", legend, want)
+	}
+
+	split := linesCard(task.StatsLine{Key: "high", Values: []int{1, 2, 2}}, task.StatsLine{Key: "low", Values: []int{0, 0, 1}})
+	split.Field, split.Metric = "priority", config.StatsLineClosedCumulative
+	sc := newStatsChart(split)
+	if len(sc.Groups) != 1 || !sc.Groups[0].Cumulative || len(sc.Groups[0].Lines) != 2 {
+		t.Errorf("cumulative split groups = %+v, want one cumulative group of two", sc.Groups)
+	}
+}
+
+func TestStatsChartZeroAndSingleDay(t *testing.T) {
+	zero := newStatsChart(linesCard(task.StatsLine{Key: "closed", Values: []int{0, 0}}))
+	g := zero.Groups[0]
+	if g.Max != 1 || g.Peak != 0 || g.Lines[0].Points != "1,1 3,1" {
+		t.Errorf("all-zero group = %+v, want max 1, peak 0, points on the baseline", g)
+	}
+
+	one := newStatsChart(linesCard(task.StatsLine{Key: "created", Values: []int{3}}))
+	if one.Width != 2 || one.Groups[0].Lines[0].Points != "0,0 2,0" {
+		t.Errorf("one-day chart = width %d, points %q; want 2, a flat segment 0,0 2,0", one.Width, one.Groups[0].Lines[0].Points)
+	}
+	if len(one.Days) != 1 || one.Days[0].X != 0 {
+		t.Errorf("one-day hover columns = %+v", one.Days)
+	}
+}
+
+func TestStatsChartColours(t *testing.T) {
+	plain := newStatsChart(linesCard(
+		task.StatsLine{Key: "created", Values: []int{1}},
+		task.StatsLine{Key: "closed_cumulative", Values: []int{1}},
+	))
+	if plain.Legend[0].Color != "series-created" || plain.Legend[1].Color != "series-closed_cumulative" {
+		t.Errorf("plain colours = %+v", plain.Legend)
+	}
+
+	var lines []task.StatsLine
+	for i := range 9 {
+		lines = append(lines, task.StatsLine{Key: "user" + strconv.Itoa(i), Values: []int{1}})
+	}
+	card := linesCard(lines...)
+	card.Field, card.Metric = "created_by", config.StatsLineClosed
+	split := newStatsChart(card)
+	if split.Legend[0].Color != "series-0" || split.Legend[7].Color != "series-7" || split.Legend[8].Color != "series-0" {
+		t.Errorf("split colours = %s, %s, %s; want series-0, series-7, series-0",
+			split.Legend[0].Color, split.Legend[7].Color, split.Legend[8].Color)
+	}
+}
+
+func TestStatsChartHiddenAndTitles(t *testing.T) {
+	c := newStatsChart(linesCard(
+		task.StatsLine{Key: "created", Values: []int{1, 2}},
+		task.StatsLine{Key: "closed", Values: []int{0, 3}, Hidden: true},
+	))
+	if c.Legend[0].Hidden || !c.Legend[1].Hidden || !c.Groups[0].Lines[1].Hidden {
+		t.Errorf("hidden flags = legend %+v, lines %+v", c.Legend, c.Groups[0].Lines)
+	}
+	if c.Groups[0].Max != 3 {
+		t.Errorf("max = %d, want 3: a hidden line still sets the scale", c.Groups[0].Max)
+	}
+	want := []StatsDayView{
+		{X: 0, Title: "Oct 5 · created 1 · closed 0"},
+		{X: 2, Title: "Oct 6 · created 2 · closed 3"},
+	}
+	if !slices.Equal(c.Days, want) {
+		t.Errorf("days = %+v\nwant %+v", c.Days, want)
+	}
+}
+
+func TestStatsChartNoLines(t *testing.T) {
+	card := task.StatsCard{ID: "x", Kind: config.StatsKindLines, Days: statsDays(3)}
+	if c := newStatsChart(card); c != nil {
+		t.Errorf("chart = %+v, want nil without lines", c)
+	}
+	if got := newStatsCards([]task.StatsCard{card}); len(got) != 1 || got[0].Chart != nil {
+		t.Errorf("cards = %+v, want the card without a chart", got)
 	}
 }
