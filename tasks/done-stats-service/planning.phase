@@ -1,0 +1,8 @@
+version: 1
+phase: planning
+runs:
+  - started_at: "2026-10-06T18:20:04Z"
+    started_by: igor.cwer
+    finished_at: "2026-10-06T18:20:15Z"
+    finished_by: igor.cwer
+    note: P1 clock, P2 stats.go + snapshot wiring, P3 tests, P4 CLAUDE.md
