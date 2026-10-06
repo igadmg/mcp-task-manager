@@ -411,6 +411,21 @@ web:                  # optional
   enabled: false      # start the dashboard with the MCP server; default: false
   addr: 127.0.0.1:7777  # default
   with_mcp: false     # `serve web` also serves MCP over stdio; default: false
+  done_stats:         # Done-column statistics cards; default: the four below
+    cards:            # board order; `cards: []` = no cards
+      - kind: bars    # bars | lines; blank: bars with a field, else lines
+        field: priority
+      - {kind: bars, field: type}
+      - {kind: bars, field: resolution}
+      - kind: lines
+        id: recent    # optional stable key (line toggles); derived when blank
+        title: Last 14 days  # optional, derived when blank
+        days: 14      # default 14; <= 0 also means 14
+        lines: [created, closed]  # + created_cumulative, closed_cumulative; default created, closed
+        hidden: []    # lines (or split values) that start switched off
+      - kind: lines
+        split_by: priority  # one line per value of this field
+        metric: closed      # line name drawn per value; default closed
 git:                  # optional
   branching: false    # git branch per task; default: false
   base_branches:      # first existing one is the base; default: these four
@@ -424,6 +439,18 @@ A partially written section keeps the defaults for the keys it omits
 (`config.applyDefaults`), so `web: {enabled: true}` still listens on the
 default address, `auto_archive: {enabled: true}` still waits 30 days, and a
 `base_branches` list that is empty after trimming falls back to the defaults.
+
+`web.done_stats.cards` (`internal/config/stats.go`): an absent or null list
+means the defaults (bars for priority, type and resolution, plus a 14-day
+lines card with created and closed); `cards: []` means no cards. yaml decodes
+every card from zero, so per-card defaults are filled after decoding: kind,
+`days`, `lines`, `metric`, a title, and an `id` derived from the content
+(`bars-<field>`, `lines-<days>d`, `lines-<split_by>-<metric>-<days>d`), made
+unique in list order with `-2`, `-3`. Consumers read
+`Config.DoneStatsCards()`, which is nil-safe, fills the same defaults for a
+config that skipped `applyDefaults`, and returns a copy. Invalid entries are
+not rejected yet (task `done-stats-config-errors`); a YAML type error such as
+`days: abc` fails the load like any other.
 
 Environment overrides:
 
@@ -465,6 +492,7 @@ mcp-task-manager/
 │   │   └── output_test.go       # Output formatter tests
 │   ├── config/
 │   │   ├── config.go            # Project root / tasks dir resolution + config loading
+│   │   ├── stats.go             # web.done_stats cards: defaults, per-card defaults, DoneStatsCards
 │   │   └── resolve_test.go      # Resolution order tests
 │   ├── project/
 │   │   ├── resolver.go          # Lazy, cached project resolution (used by tool handlers)
@@ -557,7 +585,7 @@ mcp-task-manager/
 - Resolution: `completed` | `obsolete` | `superseded` | `duplicate` | `wontfix`; only valid on a `done` task
 - Phase: `research` | `design` | `planning` | `implementation`; tokens a non-negative integer (at most 1e15)
 - Attached filenames: `{id}.md` and anything ending in `.phase` are reserved for writes
-- Config: `applyDefaults` fills in what a partially written YAML section left out, so a half-specified `web:` or `auto_archive:` block cannot silently zero the rest
+- Config: `applyDefaults` fills in what a partially written YAML section left out, so a half-specified `web:` or `auto_archive:` block cannot silently zero the rest; it also fills each `web.done_stats` card's defaults (nothing in a card is validated yet)
 
 ## Future Considerations (Post-MVP)
 - Comments/history
