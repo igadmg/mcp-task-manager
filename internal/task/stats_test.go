@@ -240,14 +240,14 @@ func TestStatsLinesSeries(t *testing.T) {
 	want := []StatsLine{
 		{Key: "created", Values: []int{0, 2, 0, 1}},
 		{Key: "closed", Values: []int{0, 1, 1, 1}},
-		{Key: "created_cumulative", Values: []int{0, 2, 2, 3}},
-		{Key: "closed_cumulative", Values: []int{0, 1, 2, 3}, Hidden: true},
+		{Key: "created_cumulative", Values: []int{0, 2, 2, 3}, Cumulative: true},
+		{Key: "closed_cumulative", Values: []int{0, 1, 2, 3}, Hidden: true, Cumulative: true},
 	}
 	if !reflect.DeepEqual(card.Lines, want) {
 		t.Errorf("Lines = %+v, want %+v", card.Lines, want)
 	}
-	if card.Field != "" || card.Metric != "" {
-		t.Errorf("Field, Metric = %q, %q, want empty for a plain card", card.Field, card.Metric)
+	if card.Field != "" {
+		t.Errorf("Field = %q, want empty for a plain card", card.Field)
 	}
 }
 
@@ -274,14 +274,14 @@ func TestStatsLinesSplitBy(t *testing.T) {
 	if !reflect.DeepEqual(card.Lines, want) {
 		t.Errorf("Lines = %+v, want %+v", card.Lines, want)
 	}
-	if card.Field != "priority" || card.Metric != "closed" {
-		t.Errorf("Field, Metric = %q, %q", card.Field, card.Metric)
+	if card.Field != "priority" {
+		t.Errorf("Field = %q, want priority", card.Field)
 	}
 
 	split.Metric = config.StatsLineClosedCumulative
 	card = oneCard(t, all, split, statsNow)
-	if got, want := card.Lines[1].Values, []int{0, 1, 2}; !reflect.DeepEqual(got, want) {
-		t.Errorf("cumulative low = %v, want %v", got, want)
+	if got, want := card.Lines[1], (StatsLine{Key: "low", Values: []int{0, 1, 2}, Hidden: true, Cumulative: true}); !reflect.DeepEqual(got, want) {
+		t.Errorf("cumulative low = %+v, want %+v", got, want)
 	}
 
 	// Resolution split counts done tasks only.

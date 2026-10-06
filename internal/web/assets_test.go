@@ -53,7 +53,7 @@ func TestAppCSSDefinesStatsClasses(t *testing.T) {
 		t.Fatalf("read embedded app.css: %v", err)
 	}
 	for _, w := range []string{
-		".stats-card{", ".stats-row{", ".stats-bar{", ".stats-recent{",
+		".stats-card{", ".stats-title{", ".stats-row{", ".stats-bar{", ".stats-recent{",
 		".bar-done{", ".bar-recent{", ".bar-in_progress{", ".bar-todo{",
 		"--color-emerald-200:",
 		".stats-chart{", ".stats-chart svg{", ".stats-line{", ".stats-off{", ".stats-day{",

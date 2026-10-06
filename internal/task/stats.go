@@ -18,10 +18,9 @@ type StatsCard struct {
 	ID    string
 	Kind  string
 	Title string
-	// Field is the field a bars card groups on, or a split card's split_by.
+	// Field is the field a bars card groups on, or a split card's split_by
+	// (empty for a lines card without one).
 	Field string
-	// Metric is the line name a split card draws per value.
-	Metric string
 	// Bars holds a bars card's rows: one per value present, in value order.
 	Bars []StatsBar
 	// Days holds a lines card's days: the start (local midnight) of each,
@@ -51,6 +50,9 @@ type StatsLine struct {
 	// Hidden says the line starts switched off: the card lists Key in its
 	// hidden lines.
 	Hidden bool
+	// Cumulative says Values are a running total over the window, not
+	// per-day counts.
+	Cumulative bool
 }
 
 // statsRecent is the window ClosedRecently counts.
@@ -70,9 +72,6 @@ func computeStats(all []*Task, cards []config.StatsCard, types []string, now tim
 			card.Bars = statsBars(all, c.Field, types, now)
 		case config.StatsKindLines:
 			card.Field = c.SplitBy
-			if c.SplitBy != "" {
-				card.Metric = c.Metric
-			}
 			card.Days, card.Lines = statsLines(all, c, types, now)
 		}
 		out = append(out, card)
@@ -116,39 +115,27 @@ func statsBars(all []*Task, field string, types []string, now time.Time) []Stats
 // statsLines returns a lines card's days and lines.
 func statsLines(all []*Task, c config.StatsCard, types []string, now time.Time) ([]time.Time, []StatsLine) {
 	days, bucket := dayWindow(now, c.Days)
-	hidden := func(key string) bool { return slices.Contains(c.Hidden, key) }
+	line := func(key string, values []int, cumulative bool) StatsLine {
+		if values == nil {
+			values = make([]int, len(days))
+		}
+		if cumulative {
+			values = runningSum(values)
+		}
+		return StatsLine{Key: key, Values: values, Hidden: slices.Contains(c.Hidden, key), Cumulative: cumulative}
+	}
 
 	if c.SplitBy != "" {
 		base, cumulative, ok := statsMetric(c.Metric)
 		if !ok {
 			return days, nil
 		}
-		perValue := make(map[string][]int)
-		for _, t := range all {
-			v, ok := statsValue(t, c.SplitBy)
-			if !ok {
-				continue
-			}
-			at, ok := metricTime(t, base)
-			if !ok {
-				continue
-			}
-			i, ok := bucket(at)
-			if !ok {
-				continue
-			}
-			if perValue[v] == nil {
-				perValue[v] = make([]int, len(days))
-			}
-			perValue[v][i]++
-		}
+		perValue := countDays(all, base, len(days), bucket, func(t *Task) (string, bool) {
+			return statsValue(t, c.SplitBy)
+		})
 		var lines []StatsLine
 		for _, v := range statsOrder(c.SplitBy, types, perValue) {
-			values := perValue[v]
-			if cumulative {
-				values = runningSum(values)
-			}
-			lines = append(lines, StatsLine{Key: v, Values: values, Hidden: hidden(v)})
+			lines = append(lines, line(v, perValue[v], cumulative))
 		}
 		return days, lines
 	}
@@ -161,20 +148,36 @@ func statsLines(all []*Task, c config.StatsCard, types []string, now time.Time) 
 			continue
 		}
 		seen[name] = true
-		values := make([]int, len(days))
-		for _, t := range all {
-			if at, ok := metricTime(t, base); ok {
-				if i, ok := bucket(at); ok {
-					values[i]++
-				}
-			}
-		}
-		if cumulative {
-			values = runningSum(values)
-		}
-		lines = append(lines, StatsLine{Key: name, Values: values, Hidden: hidden(name)})
+		counts := countDays(all, base, len(days), bucket, func(*Task) (string, bool) { return name, true })
+		lines = append(lines, line(name, counts[name], cumulative))
 	}
 	return days, lines
+}
+
+// countDays counts the tasks of a base metric per key and per day of an
+// n-day window: keyOf names a task's key (false skips it), bucket its day.
+// A key appears only when it counted at least one task.
+func countDays(all []*Task, base string, n int, bucket func(time.Time) (int, bool), keyOf func(*Task) (string, bool)) map[string][]int {
+	counts := make(map[string][]int)
+	for _, t := range all {
+		at, ok := metricTime(t, base)
+		if !ok {
+			continue
+		}
+		i, ok := bucket(at)
+		if !ok {
+			continue
+		}
+		key, ok := keyOf(t)
+		if !ok {
+			continue
+		}
+		if counts[key] == nil {
+			counts[key] = make([]int, n)
+		}
+		counts[key][i]++
+	}
+	return counts
 }
 
 // statsMetric splits a line name into its per-day base (created or closed)
@@ -260,23 +263,45 @@ func runningSum(values []int) []int {
 	return out
 }
 
+// statsField is a field statistics group on: a task's value of it, and the
+// field's domain order given the configured task_types.
+type statsField struct {
+	value func(*Task) string
+	order func(types []string) []string
+}
+
+var statsFields = map[string]statsField{
+	"priority": {
+		value: func(t *Task) string { return string(t.Priority) },
+		order: func([]string) []string { return strs(Priorities()) },
+	},
+	"type": {
+		value: func(t *Task) string { return t.Type },
+		order: func(types []string) []string { return types },
+	},
+	"status": {
+		value: func(t *Task) string { return string(t.Status) },
+		order: func([]string) []string { return strs(Statuses()) },
+	},
+	// A done task's effective resolution, so open tasks have none.
+	"resolution": {
+		value: func(t *Task) string { return string(t.EffectiveResolution()) },
+		order: func([]string) []string { return ResolutionStrings() },
+	},
+	"created_by": {
+		value: func(t *Task) string { return t.CreatedBy },
+		order: func([]string) []string { return nil },
+	},
+}
+
 // statsValue is t's value of a card field; false when the value is empty or
-// the field is not one statistics group on. Resolution is a done task's
-// effective resolution, so open tasks have none.
+// the field is not one statistics group on.
 func statsValue(t *Task, field string) (string, bool) {
-	var v string
-	switch field {
-	case "priority":
-		v = string(t.Priority)
-	case "type":
-		v = t.Type
-	case "status":
-		v = string(t.Status)
-	case "resolution":
-		v = string(t.EffectiveResolution())
-	case "created_by":
-		v = t.CreatedBy
+	f, ok := statsFields[field]
+	if !ok {
+		return "", false
 	}
+	v := f.value(t)
 	return v, v != ""
 }
 
@@ -286,17 +311,8 @@ func statsValue(t *Task, field string) (string, bool) {
 // alphabetically.
 func statsOrder[V any](field string, types []string, present map[string]V) []string {
 	var known []string
-	switch field {
-	case "priority":
-		for _, p := range []Priority{PriorityCritical, PriorityHigh, PriorityMedium, PriorityLow} {
-			known = append(known, string(p))
-		}
-	case "type":
-		known = types
-	case "status":
-		known = []string{string(StatusTodo), string(StatusInProgress), string(StatusDone)}
-	case "resolution":
-		known = ResolutionStrings()
+	if f, ok := statsFields[field]; ok {
+		known = f.order(types)
 	}
 
 	out := make([]string, 0, len(present))

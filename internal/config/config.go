@@ -261,12 +261,7 @@ func (c *Config) applyDefaults() {
 		c.Web.Addr = d.Web.Addr
 	}
 	c.Web.DoneStats.Cards = normalizeStatsCards(c.Web.DoneStats.Cards)
-	var bases []string
-	for _, b := range c.Git.BaseBranches {
-		if b = strings.TrimSpace(b); b != "" {
-			bases = append(bases, b)
-		}
-	}
+	bases := trimList(c.Git.BaseBranches)
 	if len(bases) == 0 {
 		bases = d.Git.BaseBranches
 	}

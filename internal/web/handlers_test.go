@@ -391,20 +391,26 @@ func TestCardIDTruncates(t *testing.T) {
 	}
 }
 
-// laneSection returns the markup of one In progress phase lane: from its
-// data-phase attribute to the first closing section tag after it. Lanes
-// hold only card articles, so that tag closes the lane itself.
-func laneSection(t *testing.T, body, phase string) string {
+// sectionAfter returns the body from marker to the first closing section
+// tag after it. Lanes hold only card articles and statistics cards hold no
+// sections, so for either that tag closes the section the marker opens.
+func sectionAfter(t *testing.T, body, marker string) string {
 	t.Helper()
-	_, rest, ok := strings.Cut(body, `data-phase="`+phase+`"`)
+	_, rest, ok := strings.Cut(body, marker)
 	if !ok {
-		t.Fatalf("board has no %s lane", phase)
+		t.Fatalf("body has no %s", marker)
 	}
 	section, _, ok := strings.Cut(rest, "</section>")
 	if !ok {
-		t.Fatalf("the %s lane is never closed", phase)
+		t.Fatalf("%s is never closed", marker)
 	}
 	return section
+}
+
+// laneSection returns the In progress lane of phase.
+func laneSection(t *testing.T, body, phase string) string {
+	t.Helper()
+	return sectionAfter(t, body, `data-phase="`+phase+`"`)
 }
 
 func TestBoardRendersPhaseLanes(t *testing.T) {
@@ -625,15 +631,10 @@ func TestBoardDoneColumnRendersLines(t *testing.T) {
 	seedBoard(t, svc)
 
 	body := get(t, h, "/board").Body.String()
-	at := strings.Index(body, `data-stats-card="lines-14d"`)
-	if at < 0 {
-		t.Fatal("Done column lacks the lines-14d card")
-	}
-	if at < strings.Index(body, `data-stats-card="bars-resolution"`) {
+	if strings.Index(body, `data-stats-card="lines-14d"`) < strings.Index(body, `data-stats-card="bars-resolution"`) {
 		t.Error("the lines card is not after the bars cards (config order)")
 	}
-	card := body[at:]
-	card = card[:strings.Index(card, "</section>")]
+	card := sectionAfter(t, body, `data-stats-card="lines-14d"`)
 	// All five seeded tasks were created today and task 4 closed today, so
 	// the per-day scale is 5 and today's points are created 5, closed 1,
 	// whatever the date.

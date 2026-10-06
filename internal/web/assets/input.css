@@ -83,6 +83,7 @@
    * Segments use the column dot colours; the part closed in the last 24 h
    * is a light emerald over the end of done. */
   .stats-card { @apply rounded-lg border border-white/10 bg-neutral-900/60 p-3; }
+  .stats-title { @apply text-[11px] font-medium uppercase tracking-wider text-neutral-400; }
   .stats-row  { @apply mt-2; }
   .stats-bar  { @apply mt-1 block h-1.5 w-full overflow-hidden rounded-full bg-white/5; }
   .bar-done        { fill: var(--color-emerald-500); }

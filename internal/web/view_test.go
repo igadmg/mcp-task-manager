@@ -690,7 +690,7 @@ func TestStatsChartPoints(t *testing.T) {
 
 func TestStatsChartGroupsByKind(t *testing.T) {
 	c := newStatsChart(linesCard(
-		task.StatsLine{Key: "created_cumulative", Values: []int{3, 5, 9}},
+		task.StatsLine{Key: "created_cumulative", Values: []int{3, 5, 9}, Cumulative: true},
 		task.StatsLine{Key: "created", Values: []int{3, 2, 4}},
 		task.StatsLine{Key: "closed", Values: []int{0, 1, 0}},
 	))
@@ -711,8 +711,8 @@ func TestStatsChartGroupsByKind(t *testing.T) {
 		t.Errorf("legend = %v, want card order %v", legend, want)
 	}
 
-	split := linesCard(task.StatsLine{Key: "high", Values: []int{1, 2, 2}}, task.StatsLine{Key: "low", Values: []int{0, 0, 1}})
-	split.Field, split.Metric = "priority", config.StatsLineClosedCumulative
+	split := linesCard(task.StatsLine{Key: "high", Values: []int{1, 2, 2}, Cumulative: true}, task.StatsLine{Key: "low", Values: []int{0, 0, 1}, Cumulative: true})
+	split.Field = "priority"
 	sc := newStatsChart(split)
 	if len(sc.Groups) != 1 || !sc.Groups[0].Cumulative || len(sc.Groups[0].Lines) != 2 {
 		t.Errorf("cumulative split groups = %+v, want one cumulative group of two", sc.Groups)
@@ -749,7 +749,7 @@ func TestStatsChartColours(t *testing.T) {
 		lines = append(lines, task.StatsLine{Key: "user" + strconv.Itoa(i), Values: []int{1}})
 	}
 	card := linesCard(lines...)
-	card.Field, card.Metric = "created_by", config.StatsLineClosed
+	card.Field = "created_by"
 	split := newStatsChart(card)
 	if split.Legend[0].Color != "series-0" || split.Legend[7].Color != "series-7" || split.Legend[8].Color != "series-0" {
 		t.Errorf("split colours = %s, %s, %s; want series-0, series-7, series-0",

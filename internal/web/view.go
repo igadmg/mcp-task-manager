@@ -261,6 +261,9 @@ var columns = []struct {
 
 const timeFormat = "2006-01-02 15:04"
 
+// dayFormat labels a statistics day: "Oct 6".
+const dayFormat = "Jan 2"
+
 // newBoardView maps a snapshot onto the board. Pure: everything it needs was
 // already read under the service lock.
 func newBoardView(snap *task.BoardSnapshot, cfg *config.Config, now time.Time, poll int) BoardView {
@@ -410,8 +413,8 @@ func newStatsChart(c task.StatsCard) *StatsChartView {
 	}
 	chart := &StatsChartView{
 		Width: 2 * n,
-		First: c.Days[0].Format("Jan 2"),
-		Last:  c.Days[n-1].Format("Jan 2"),
+		First: c.Days[0].Format(dayFormat),
+		Last:  c.Days[n-1].Format(dayFormat),
 	}
 
 	split := c.Field != ""
@@ -419,7 +422,7 @@ func newStatsChart(c task.StatsCard) *StatsChartView {
 	member := make([]int, len(c.Lines))
 	for li, l := range c.Lines {
 		g := 0
-		if (split && strings.HasSuffix(c.Metric, "_cumulative")) || (!split && strings.HasSuffix(l.Key, "_cumulative")) {
+		if l.Cumulative {
 			g = 1
 		}
 		member[li] = g
@@ -435,13 +438,13 @@ func newStatsChart(c task.StatsCard) *StatsChartView {
 		}
 		g := &groups[member[li]]
 		var pts []string
-		for i := range n {
-			y := strconv.Itoa(g.Max - value(l, i))
-			pts = append(pts, strconv.Itoa(2*i+1)+","+y)
-		}
 		if n == 1 {
 			y := strconv.Itoa(g.Max - value(l, 0))
 			pts = []string{"0," + y, "2," + y}
+		} else {
+			for i := range n {
+				pts = append(pts, strconv.Itoa(2*i+1)+","+strconv.Itoa(g.Max-value(l, i)))
+			}
 		}
 		s := StatsSeriesView{Key: l.Key, Color: color, Hidden: l.Hidden, Points: strings.Join(pts, " ")}
 		g.Lines = append(g.Lines, s)
@@ -454,7 +457,7 @@ func newStatsChart(c task.StatsCard) *StatsChartView {
 	}
 
 	for i, day := range c.Days {
-		parts := []string{day.Format("Jan 2")}
+		parts := []string{day.Format(dayFormat)}
 		for _, l := range c.Lines {
 			parts = append(parts, l.Key+" "+strconv.Itoa(value(l, i)))
 		}
