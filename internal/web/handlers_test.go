@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gpayer/mcp-task-manager/internal/config"
 	"github.com/gpayer/mcp-task-manager/internal/project"
 	"github.com/gpayer/mcp-task-manager/internal/task"
 	"github.com/gpayer/mcp-task-manager/internal/testsupport"
@@ -67,10 +68,13 @@ func TestBoardRendersThreeColumns(t *testing.T) {
 			t.Errorf("board is missing the %q column", want)
 		}
 	}
-	for _, want := range []string{"Ship the board", "Fix the index", "Old chore", "Blocked work"} {
+	for _, want := range []string{"Ship the board", "Fix the index", "Blocked work"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("board is missing card %q", want)
 		}
+	}
+	if strings.Contains(body, "Old chore") {
+		t.Error("the Done column renders a task card, want statistics only")
 	}
 	if !strings.Contains(body, "<html") {
 		t.Error("GET / did not return a full page")
@@ -477,8 +481,11 @@ func TestBoardEmptyInProgressShowsFourStubs(t *testing.T) {
 			t.Errorf("%s lane holds a card, want none", phase)
 		}
 	}
-	if n := strings.Count(body, ">empty</p>"); n != 1 {
-		t.Errorf("board shows %d empty placeholders, want 1 (Done only)", n)
+	if n := strings.Count(body, ">empty</p>"); n != 0 {
+		t.Errorf("board shows %d empty placeholders, want 0 (Done holds the statistics cards)", n)
+	}
+	if !strings.Contains(body, `data-stats-card="`) {
+		t.Error("the Done column shows no statistics card")
 	}
 }
 
@@ -538,5 +545,76 @@ func TestPhaseNoteEscaped(t *testing.T) {
 	}
 	if !strings.Contains(body, "&lt;script&gt;alert(1)&lt;/script&gt;") {
 		t.Error("the escaped note is missing")
+	}
+}
+
+func TestBoardDoneColumnRendersStats(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedBoard(t, svc)
+
+	body := get(t, h, "/board").Body.String()
+	for _, id := range []string{"bars-priority", "bars-type", "bars-resolution"} {
+		if !strings.Contains(body, `data-stats-card="`+id+`"`) {
+			t.Errorf("Done column lacks the %s card", id)
+		}
+	}
+	if a, b := strings.Index(body, `data-stats-card="bars-priority"`), strings.Index(body, `data-stats-card="bars-type"`); a > b {
+		t.Error("stats cards are not in config order")
+	}
+	// Task 4 (medium bug) is the only done task, closed just now; task 5
+	// is the other medium one, still todo.
+	for _, want := range []string{
+		`data-value="medium"`,
+		`1/2 &middot; 1 open &middot; <span class="stats-recent">+1</span>`,
+		`viewBox="0 0 2 1"`,
+		`<rect class="bar-done" x="0" width="1" height="1"/>`,
+		`<rect class="bar-recent" x="0" width="1" height="1"/>`,
+		`<rect class="bar-todo" x="1" width="1" height="1"/>`,
+		`data-value="completed"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("Done column lacks %s", want)
+		}
+	}
+	if strings.Contains(body, "Old chore") || strings.Contains(body, `hx-get="/tasks/4/panel"`) {
+		t.Error("the Done column renders task 4 as a card")
+	}
+	if strings.Contains(body, "style=") {
+		t.Error("the board carries an inline style")
+	}
+}
+
+func TestBoardDoneColumnEmptyWithoutCards(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedBoard(t, svc)
+	svc.Config().Web.DoneStats.Cards = []config.StatsCard{}
+
+	body := get(t, h, "/board").Body.String()
+	if strings.Contains(body, "data-stats-card") {
+		t.Error("cards: [] still renders statistics cards")
+	}
+	if n := strings.Count(body, ">empty</p>"); n != 1 {
+		t.Errorf("board shows %d empty placeholders, want 1 (Done)", n)
+	}
+	if strings.Contains(body, "Old chore") {
+		t.Error("an empty Done column falls back to task cards")
+	}
+}
+
+func TestStatsBarsEscaping(t *testing.T) {
+	const payload = `<script>alert(1)</script>`
+	card := StatsCardView{ID: `x" onmouseover="y`, Title: payload,
+		Bars: []StatsBarView{{Value: payload, Total: 1, Done: 1}}}
+
+	var b strings.Builder
+	if err := fragments.ExecuteTemplate(&b, "_stats_bars.html", card); err != nil {
+		t.Fatalf("execute _stats_bars.html: %v", err)
+	}
+	out := b.String()
+	if strings.Contains(out, "<script>") || strings.Contains(out, `" onmouseover="`) {
+		t.Errorf("stats card output is not escaped:\n%s", out)
+	}
+	if !strings.Contains(out, "&lt;script&gt;") {
+		t.Errorf("escaped payload missing:\n%s", out)
 	}
 }

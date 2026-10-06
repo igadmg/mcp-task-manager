@@ -43,3 +43,22 @@ func TestAppCSSDefinesPhaseRuns(t *testing.T) {
 		}
 	}
 }
+
+// TestAppCSSDefinesStatsClasses ties the Done column's statistics markup to
+// the compiled CSS: the bar segment classes and the 24 h highlight colour,
+// which Tailwind emits only because a component references it.
+func TestAppCSSDefinesStatsClasses(t *testing.T) {
+	data, err := staticFS.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatalf("read embedded app.css: %v", err)
+	}
+	for _, w := range []string{
+		".stats-card{", ".stats-row{", ".stats-bar{", ".stats-recent{",
+		".bar-done{", ".bar-recent{", ".bar-in_progress{", ".bar-todo{",
+		"--color-emerald-200:",
+	} {
+		if !strings.Contains(string(data), w) {
+			t.Errorf("app.css lacks %q - rerun scripts/build-css.sh", w)
+		}
+	}
+}

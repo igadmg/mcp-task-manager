@@ -211,6 +211,11 @@ func TestLanesPartitionTheColumn(t *testing.T) {
 	if !slices.Equal(ids, want) {
 		t.Errorf("lanes hold %v, column holds %v: each card exactly once", ids, want)
 	}
+	for _, c := range newBoardView(snap, nil, fixedNow, 5).Columns {
+		if slices.Contains(cardIDs(c.Cards), "e") {
+			t.Errorf("done task e has a card in the %s column", c.Status)
+		}
+	}
 }
 
 func TestLaneSortsByPriorityThenAge(t *testing.T) {
@@ -571,5 +576,72 @@ func TestDetailPhasesMapping(t *testing.T) {
 	d.Phases = nil
 	if v := newDetailView(d, nil, nil, fixedNow); v.Phases != nil || v.TotalTokens != "" {
 		t.Errorf("no records: Phases %v, TotalTokens %q", v.Phases, v.TotalTokens)
+	}
+}
+
+func TestDoneColumnHasStatsNotCards(t *testing.T) {
+	snap := boardOf(
+		tk("a", "", task.StatusDone, task.PriorityHigh, fixedNow),
+		tk("b", "", task.StatusDone, task.PriorityLow, fixedNow),
+		tk("c", "", task.StatusTodo, task.PriorityLow, fixedNow),
+	)
+	snap.Stats = []task.StatsCard{{ID: "bars-priority", Kind: config.StatsKindBars, Title: "Priority",
+		Bars: []task.StatsBar{{Value: "high", Total: 1, Done: 1}}}}
+
+	done := column(newBoardView(snap, nil, fixedNow, 5), "done")
+	if done.Count != 2 {
+		t.Errorf("done Count = %d, want 2: done tasks are still counted", done.Count)
+	}
+	if len(done.Cards) != 0 {
+		t.Errorf("done column has cards %v, want none", cardIDs(done.Cards))
+	}
+	if len(done.Stats) != 1 || done.Stats[0].ID != "bars-priority" || done.Stats[0].Title != "Priority" {
+		t.Errorf("done Stats = %+v, want the bars-priority card", done.Stats)
+	}
+	for _, status := range []string{"todo", "in_progress"} {
+		if column(newBoardView(snap, nil, fixedNow, 5), status).Stats != nil {
+			t.Errorf("%s column has Stats, want nil", status)
+		}
+	}
+}
+
+func TestStatsCardsKeepBarsInConfigOrder(t *testing.T) {
+	got := newStatsCards([]task.StatsCard{
+		{ID: "bars-type", Kind: config.StatsKindBars},
+		{ID: "lines-14d", Kind: config.StatsKindLines},
+		{ID: "bars-priority", Kind: config.StatsKindBars},
+		{ID: "odd", Kind: "pie"},
+	})
+	var ids []string
+	for _, c := range got {
+		ids = append(ids, c.ID)
+	}
+	if want := []string{"bars-type", "bars-priority"}; !slices.Equal(ids, want) {
+		t.Errorf("stats cards = %v, want %v (bars only, config order)", ids, want)
+	}
+}
+
+func TestStatsBarOffsets(t *testing.T) {
+	cards := newStatsCards([]task.StatsCard{{Kind: config.StatsKindBars, Bars: []task.StatsBar{
+		{Value: "full", Total: 12, Done: 7, InProgress: 3, Todo: 2, ClosedRecently: 2},
+		{Value: "done-only", Total: 4, Done: 4},
+		{Value: "open-only", Total: 3, InProgress: 1, Todo: 2},
+	}}})
+	want := []StatsBarView{
+		{Value: "full", Total: 12, Done: 7, InProgress: 3, Todo: 2, Recent: 2, Open: 5, RecentX: 5, TodoX: 10},
+		{Value: "done-only", Total: 4, Done: 4, RecentX: 4, TodoX: 4},
+		{Value: "open-only", Total: 3, InProgress: 1, Todo: 2, Open: 3, TodoX: 1},
+	}
+	if !slices.Equal(cards[0].Bars, want) {
+		t.Errorf("bars = %+v\nwant %+v", cards[0].Bars, want)
+	}
+}
+
+func TestStatsBarSkipsEmptyTotal(t *testing.T) {
+	cards := newStatsCards([]task.StatsCard{{ID: "x", Kind: config.StatsKindBars, Bars: []task.StatsBar{
+		{Value: "none"}, {Value: "one", Total: 1, Todo: 1},
+	}}})
+	if len(cards) != 1 || len(cards[0].Bars) != 1 || cards[0].Bars[0].Value != "one" {
+		t.Errorf("cards = %+v, want only the row with tasks", cards)
 	}
 }

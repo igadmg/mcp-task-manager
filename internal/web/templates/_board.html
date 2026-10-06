@@ -34,6 +34,10 @@
         </section>
         {{ end }}
       </div>
+      {{ else if .Stats }}
+      <div class="flex flex-col gap-2">
+        {{ range .Stats }}{{ template "_stats_bars.html" . }}{{ end }}
+      </div>
       {{ else }}
       <div class="flex flex-col gap-2">
         {{ range .Cards }}{{ template "_card.html" . }}{{ else }}

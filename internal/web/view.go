@@ -43,6 +43,34 @@ type ColumnView struct {
 	// Lanes are the In progress column's phase lanes (virtual sub-columns),
 	// in workflow order; nil for every other column. They partition Cards.
 	Lanes []PhaseLaneView
+	// Stats are the Done column's statistics cards, in config order; nil
+	// for every other column. Done renders them instead of task cards.
+	Stats []StatsCardView
+}
+
+// StatsCardView is one bars card of the Done column. ID is the configured
+// card id, the stable key of data-stats-card.
+type StatsCardView struct {
+	ID    string
+	Title string
+	Bars  []StatsBarView
+}
+
+// StatsBarView is one value's row of a bars card. Every number is a task
+// count: the bar is an SVG whose viewBox is Total wide, so the browser
+// scales the segments and Go never computes geometry. Recent (closed in the
+// last 24 h) is part of Done and drawn over its end, from RecentX; Open is
+// InProgress + Todo, and TodoX is where the todo segment starts.
+type StatsBarView struct {
+	Value      string
+	Total      int
+	Done       int
+	InProgress int
+	Todo       int
+	Recent     int
+	Open       int
+	RecentX    int
+	TodoX      int
 }
 
 // PhaseLaneView is one workflow-phase lane inside In progress. Phase is
@@ -229,10 +257,16 @@ func newBoardView(snap *task.BoardSnapshot, cfg *config.Config, now time.Time, p
 			Status: string(col.Status),
 			Title:  col.Title,
 			Count:  count,
-			Cards:  deref(cards),
 		}
-		if col.Status == task.StatusInProgress {
+		switch col.Status {
+		case task.StatusInProgress:
+			cv.Cards = deref(cards)
 			cv.Lanes = newPhaseLanes(cards, snap)
+		case task.StatusDone:
+			// Done shows statistics, not tasks; its tasks are still counted.
+			cv.Stats = newStatsCards(snap.Stats)
+		default:
+			cv.Cards = deref(cards)
 		}
 		v.Columns = append(v.Columns, cv)
 	}
@@ -272,6 +306,36 @@ func newPhaseLanes(roots []*CardView, snap *task.BoardSnapshot) []PhaseLaneView 
 		lanes[rank].Count += 1 + len(card.Subtasks)
 	}
 	return lanes
+}
+
+// newStatsCards maps the snapshot's bars cards. Lines cards are left out
+// until the board can draw them.
+func newStatsCards(cards []task.StatsCard) []StatsCardView {
+	var out []StatsCardView
+	for _, c := range cards {
+		if c.Kind != config.StatsKindBars {
+			continue
+		}
+		card := StatsCardView{ID: c.ID, Title: c.Title}
+		for _, b := range c.Bars {
+			if b.Total <= 0 { // an empty viewBox is invalid
+				continue
+			}
+			card.Bars = append(card.Bars, StatsBarView{
+				Value:      b.Value,
+				Total:      b.Total,
+				Done:       b.Done,
+				InProgress: b.InProgress,
+				Todo:       b.Todo,
+				Recent:     b.ClosedRecently,
+				Open:       b.InProgress + b.Todo,
+				RecentX:    b.Done - b.ClosedRecently,
+				TodoX:      b.Done + b.InProgress,
+			})
+		}
+		out = append(out, card)
+	}
+	return out
 }
 
 // unresolvedBoardView is what the board shows while no project is resolved

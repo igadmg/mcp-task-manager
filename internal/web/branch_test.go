@@ -75,18 +75,19 @@ func TestBoardShowsBranchChip(t *testing.T) {
 	board := get(t, h, "/board").Body.String()
 	for _, want := range []string{
 		`data-copy="dev/wip/3-fix-the-index"`,
-		`data-copy="dev/4-old-chore"`,
 		`aria-label="Copy branch name"`,
 	} {
 		if !strings.Contains(board, want) {
 			t.Errorf("board lacks %s", want)
 		}
 	}
-	if strings.Contains(board, `data-copy="dev/wip/4-old-chore"`) {
-		t.Error("a delivered card names its wip branch instead of the final one")
+	// Done renders statistics, not cards: a delivered task's branch is
+	// shown by its detail view only.
+	if strings.Contains(board, "4-old-chore") {
+		t.Error("the board names done task 4's branch")
 	}
-	if n := strings.Count(board, "copy-btn"); n != 2 {
-		t.Errorf("board has %d copy buttons, want 2 (only branched tasks)", n)
+	if n := strings.Count(board, "copy-btn"); n != 1 {
+		t.Errorf("board has %d copy buttons, want 1 (only branched open tasks)", n)
 	}
 
 	detail := get(t, h, "/tasks/4").Body.String()
@@ -111,6 +112,7 @@ func TestBoardShowsBranchChip(t *testing.T) {
 func TestCopyButtonHasNoHtmxAttributes(t *testing.T) {
 	h, svc, tasksDir := newTestHandler(t)
 	seedBoard(t, svc)
+	setBranch(t, tasksDir, "3", "dev/wip/3-fix-the-index", "")
 	setBranch(t, tasksDir, "4", "dev/wip/4-old-chore", "dev/4-old-chore")
 
 	button := regexp.MustCompile(`<button[^>]*copy-btn[^>]*>`)
