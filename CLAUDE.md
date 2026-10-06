@@ -245,6 +245,7 @@ A read-only kanban dashboard, served by `internal/web` (`net/http` +
 - **Archived tasks are not on the board** (the snapshot is the active index); the detail route still serves them, read-only.
 - **Logging goes to stderr.** Nothing in `internal/web` writes to stdout — in stdio mode stdout is the JSON-RPC channel.
 - **Branch chip.** A card shows the task's branch (final once delivered, wip before) with a copy button; the detail view has a Git block. Copying is `static/app.js`, one delegated click listener with no request and no htmx attribute.
+- **Done statistics (data).** `BoardSnapshot.Stats` holds one `task.StatsCard` per configured `web.done_stats` card, in config order, computed by `computeStats` (`internal/task/stats.go`) from the snapshot's own `index.All()` read under the same lock, so no second index sync and no archive scan. Bars: per value of `priority`, `type`, `status`, `resolution` or `created_by`, the total, the done / in progress / todo split, and `ClosedRecently` (done tasks whose close time is in the last 24 h, future excluded). The close time is `closed_at`, else `updated_at`. Every task counts once, subtasks included; empty values are dropped; resolution is a done task's `EffectiveResolution`. Values come in domain order (priority critical→low, `task_types` order, status todo→done, `Resolutions()`), then unknown values alphabetically. Lines: one value per calendar day over `days` days, today last, bucketed by civil date in the clock's location (DST-safe). `created` / `closed` count per day; the `_cumulative` variants are running totals that start at 0 at the window start. A split card draws its metric per value, only for values with a count in the window. `Hidden` marks the lines the card lists as hidden. An unknown kind, field, line name or metric yields no data, never an error. The clock is `task.WithClock` (default `time.Now`); its `Location()` sets the day zone, so tests pin both.
 
 ### Git branching
 
@@ -517,6 +518,7 @@ mcp-task-manager/
 │   │   ├── phase.go             # Phase names, order, reserved *.phase names; name-based fallback derivation
 │   │   ├── phaserecord.go       # PhaseRun, PhaseRecord, PhaseSummary
 │   │   ├── phaseflow.go         # StartPhase, FinishPhase, the one phase loader; open runs closed on completion
+│   │   ├── stats.go             # Done-column statistics (bars, per-day lines) for BoardSnapshot
 │   │   └── view.go              # Board/detail composites for read-only consumers
 │   ├── testsupport/
 │   │   ├── testsupport.go       # Shared test backlog helpers (NewBacklog, Seed, IsolateEnv)
@@ -570,7 +572,7 @@ mcp-task-manager/
 ### Concurrency
 - A single `sync.Mutex` on `task.Service` serializes every task operation. It is the only lock over the index and the markdown storage, both of which are reachable solely through that type.
 - **Twin discipline:** exported methods lock once on entry and delegate to an unexported, unlocked twin (`Get`/`get`, `Update`/`update`, …). Service methods never call each other's exported forms — Go mutexes are not reentrant. `TestServiceNoSelfDeadlock` fails if a new method breaks the shape.
-- `EnsureProjectExists`, `ProjectFound`, `Config` and `BranchingEnabled` are deliberately unlocked: they read only write-once fields.
+- `EnsureProjectExists`, `ProjectFound`, `Config` and `BranchingEnabled` are deliberately unlocked: they read only write-once fields (as is the stats clock `now`, set by `WithClock`).
 - Git runs inside `StartTask` / `StartPhase` / `CompleteTask` while the lock is held, so a flow's ref, record, pointer and phase-record changes are atomic to every other call; web reads wait for it (each git command has a 60 s timeout). `StartPhase` and `FinishPhase` follow the twin discipline and are in `TestServiceNoSelfDeadlock` and `TestServiceRace`.
 - The lock matters because mcp-go's stdio server dispatches tool calls across a worker pool, and because the web dashboard reads the same service concurrently. `go test -race` covers both (`internal/task/concurrency_test.go`, `internal/web/race_test.go`).
 - File writes are atomic (write to temp file, then rename)

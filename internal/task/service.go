@@ -108,11 +108,14 @@ type Service struct {
 	// identity names the user branches and the current-task pointer
 	// belong to, and current keeps that pointer (nil: none is kept).
 	// phases keeps the <phase>.phase records (nil: phases are not tracked).
-	// All four are write-once, set by ServiceOptions in NewService.
+	// now is the clock the board statistics read; its Location() is the
+	// zone their day buckets use. All five are write-once, set by
+	// ServiceOptions in NewService.
 	git      GitRepo
 	identity Identity
 	current  CurrentTaskStore
 	phases   PhaseStore
+	now      func() time.Time
 
 	// mu serializes every task operation. It is the only lock over the
 	// index and the markdown storage, both of which are reachable solely
@@ -134,6 +137,7 @@ func NewService(storage Storage, archiveStorage ArchiveStorage, fileStorage File
 		index:          index,
 		validTypes:     validTypes,
 		config:         cfg,
+		now:            time.Now,
 	}
 	for _, apply := range opts {
 		apply(s)

@@ -1,5 +1,7 @@
 package task
 
+import "time"
+
 // GitRepo is the code repository the branch-per-task workflow drives. It is
 // implemented by *vcs.Repo and exported so external test packages can wrap
 // it for fault injection. A Service without one has branching off.
@@ -79,6 +81,17 @@ func WithIdentity(id Identity) ServiceOption {
 // one, no pointer is kept.
 func WithCurrentTaskStore(c CurrentTaskStore) ServiceOption {
 	return func(s *Service) { s.current = c }
+}
+
+// WithClock sets the clock the board statistics read. Its Location() is the
+// zone their per-day buckets use, so a test pins both the instant and the
+// zone. Nil keeps time.Now.
+func WithClock(now func() time.Time) ServiceOption {
+	return func(s *Service) {
+		if now != nil {
+			s.now = now
+		}
+	}
 }
 
 // WithPhaseStore sets where phase records are kept. Without one, the phase

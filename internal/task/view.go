@@ -38,7 +38,10 @@ type BoardSnapshot struct {
 	// PhaseInfo summarizes the phase records of the in-progress tasks that
 	// have readable ones. Todo and done tasks are never read.
 	PhaseInfo map[string]PhaseSummary
-	// TakenAt is when the snapshot was read.
+	// Stats holds the Done-column statistics cards, in config order,
+	// computed from Tasks (see stats.go).
+	Stats []StatsCard
+	// TakenAt is when the snapshot was read, in UTC; Stats counts up to it.
 	TakenAt time.Time
 }
 
@@ -73,6 +76,7 @@ func (s *Service) BoardSnapshot() (*BoardSnapshot, error) {
 
 func (s *Service) boardSnapshot() (*BoardSnapshot, error) {
 	all := s.index.All()
+	now := s.now()
 
 	snap := &BoardSnapshot{
 		Tasks:     all,
@@ -80,7 +84,8 @@ func (s *Service) boardSnapshot() (*BoardSnapshot, error) {
 		Counts:    make(map[string]SubtaskCount),
 		Phases:    make(map[string]Phase),
 		PhaseInfo: make(map[string]PhaseSummary),
-		TakenAt:   time.Now().UTC(),
+		Stats:     computeStats(all, s.config.DoneStatsCards(), s.validTypes, now),
+		TakenAt:   now.UTC(),
 	}
 
 	ids := make([]string, 0, len(all))
