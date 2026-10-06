@@ -1,5 +1,6 @@
 ---
 id: done-stats-bars-legend
+orphaned_id: done-column-stats
 title: 'Web: tooltip explaining the bar colours on Done statistics cards'
 status: todo
 priority: low
@@ -7,8 +8,6 @@ type: feature
 relations:
   - type: relates_to
     task: done-stats-bars
-  - type: relates_to
-    task: done-column-stats
 created_at: "2026-10-06T19:25:55Z"
 created_by: igor.cwer
 updated_at: "2026-10-06T20:18:36Z"
