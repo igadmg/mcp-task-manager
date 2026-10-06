@@ -238,13 +238,17 @@ A read-only kanban dashboard, served by `internal/web` (`net/http` +
 - **Ways to start it:** `web.enabled` in the config (or `MCP_WEB_ENABLED`) brings it up with the MCP server; the `start_web_ui` tool starts it on demand; `mcp-task-manager serve web` runs it in the foreground.
 - **Read-only is structural.** Only `GET` patterns are registered, so `ServeMux` answers everything else with 405, and no handler can reach a mutating service method.
 - **Handlers never resolve.** They read `Resolver.Current()`, never `Get()`: resolution runs `Service.Initialize()`, which migrates the layout and may auto-archive, and a plain GET must not move files. Before the first tool call the board renders a placeholder that polls itself back to life.
-- **Assets are embedded.** Tailwind output and htmx are vendored under `internal/web/static/` and compiled in with `go:embed`; the page renders offline. Regenerate the CSS with `scripts/build-css.sh` (on Windows x64, run it from Git Bash) after editing templates — a maintainer step, never part of `go build`. `/static/app.css` is served as immutable, so an already-open browser needs a hard reload after the CSS changes.
+- **Assets are embedded.** Tailwind output and htmx are vendored under `internal/web/static/` and compiled in with `go:embed`; the page renders offline. Regenerate the CSS with `scripts/build-css.sh` (on Windows x64, run it from Git Bash) after editing templates or `input.css` — a maintainer step, never part of `go build`. `input.css` imports Tailwind with `source(none)`, so only `@source "../templates"` is scanned and the output does not depend on the directory the script runs from. `/static/app.css` is served as immutable, so an already-open browser needs a hard reload after the CSS changes.
 - **Danger zone.** In-progress tasks are highlighted and named in a banner, so a human reading the board knows an agent may be editing those areas. Presentation only; the UI stays read-only.
 - **Phase lanes.** The In progress column groups its cards into four virtual, overlapping lanes: Research, Design, Planning and Implementation. Cards stay in one vertical stack, and each later lane is shifted right by half a card: `.lane-<phase>` sets `--lane` and `.lanes` sets the step in `assets/input.css`. Cards keep a minimum width of 11rem, so the step compresses in narrow columns, and the indent collapses below 14rem. A task's lane is the phase of its latest started run in its `<phase>.phase` records (ties go to the later phase; see Phase records). A task without readable records falls back to its attached workflow files (names from the `begin_task` skill): `research` → Design, `design` → Planning, `plan` (or `implementation`) → Implementation, only `task` or nothing → Research. The furthest artifact wins, case is ignored and an optional `.md` suffix counts. A card holding nested in-progress subtasks sits in the furthest phase of its group. `task.Service.BoardSnapshot` computes it (`Phases`, plus `PhaseInfo` for tasks with records; in-progress tasks only, at most four small file reads each per poll; a failed listing reads as Research). The column header counts every in-progress task; each lane counts the tasks on its cards, so the lane counts add up to the total. Empty lanes show a header-only stub. In progress takes half the board from `xl`.
 - **Card and detail content.** Every card shows its creator and creation time. An in-progress card with phase records also shows the current phase, who started its latest run and when (or when it finished), and the tokens of all finished runs (`81.2k tok`). Todo and done cards never read phase records. The detail view lists every run of every phase (`.phase-runs` grid) with the total tokens, and leaves `*.phase` files out of "Attached files".
 - **Archived tasks are not on the board** (the snapshot is the active index); the detail route still serves them, read-only.
 - **Logging goes to stderr.** Nothing in `internal/web` writes to stdout — in stdio mode stdout is the JSON-RPC channel.
-- **Branch chip.** A card shows the task's branch (final once delivered, wip before) with a copy button; the detail view has a Git block. Copying is `static/app.js`, one delegated click listener with no request and no htmx attribute.
+- **Branch chip.** A card shows the task's branch (final once delivered, wip before) with a copy button; the detail view has a Git block. Done tasks have no board card, so a delivered task's final branch is visible only in its detail view. Copying is `static/app.js`, one delegated click listener with no request and no htmx attribute.
+- **Done column.** Done renders statistics cards, not task cards; its header still counts the done tasks, and `/tasks/{id}` still serves them. `ColumnView.Stats` (set only for Done, like `Lanes` only for In progress) holds the cards of `BoardSnapshot.Stats` in config order (`StatsCardView.Kind` picks `_stats_bars.html` or `_stats_lines.html`; unknown kinds are dropped). `_board.html` branches `.Lanes` → `.Stats` → cards, so a Done column with no drawable cards (`cards: []`) shows the `empty` stub. `_stats_bars.html` draws one row per value: the value, the label `done/total · N open · +M` (`N open` and `+M` left out at 0), and a stacked bar that is an inline SVG with `viewBox="0 0 <total> 1"` and one `<rect>` per non-empty segment, `x`/`width` in task counts (`StatsBarView.RecentX`, `TodoX`). The browser scales it, so there is no geometry in Go and no `style` attribute. Segments reuse the column dot colours (`.bar-done`, `.bar-in_progress`, `.bar-todo`); the last 24 h closures are `.bar-recent` (emerald-200) over the end of done. Each card carries `data-stats-card="<card id>"`, each row `data-value`.
+- **Lines charts.** `_stats_lines.html` draws a lines card as an inline SVG whose `viewBox` is the data range, like the bars: day `i` spans x `2i..2i+2` with its points at `2i+1` (`StatsChartView.Width` = 2 × days), y is `Max - count`. Go prints integers only (`newStatsChart`), the browser stretches them (`preserveAspectRatio="none"`), and `vector-effect: non-scaling-stroke` keeps the lines 1.5px. Per-day lines and running totals (`task.StatsLine.Cumulative`: a `*_cumulative` line, or every line of a split card with a cumulative metric) get one nested `<svg>` each with its own `Max`, so neither flattens the other; `Max` is the group's peak over all its lines, hidden ones included (a toggle never rescales), floored at 1, so an all-zero group is a flat baseline. A one-day window draws a flat segment `0,y 2,y` (a one-point polyline paints nothing). Day labels (first, last) and the scales (`5/day · 25 total`) are HTML under the chart, never SVG text. Each day is a transparent `<rect class="stats-day">` with a `<title>` listing every line (`Oct 5 · created 3 · closed 1`); there are no per-point markers. Colours are named classes for both the polyline and its legend swatch: `series-created` (sky-400), `series-closed` (emerald-400), `series-created_cumulative` (violet-400), `series-closed_cumulative` (lime-400), and `series-<i mod 8>` by position for split values, so a key never becomes a class. Hooks for the toggles: the card has `data-stats-card`, every polyline and legend `<button>` has `data-stats-line="<key>"`; a line listed in `hidden` renders with `stats-off` (`display: none`) and its button `aria-pressed="false"` (dimmed, struck through). A card without lines (unknown metric, no split value in the window) says `no data`.
+- **Line toggles.** `static/app.js` has a delegated click on `.stats-legend-item[data-stats-line]`: it flips the button's `aria-pressed` and `stats-off` on the card's polylines with the same `data-stats-line`, and records the choice as `"on"`/`"off"` under `mcp-task-manager.stats-line:` + `JSON.stringify([cardId, lineKey])` (never htmx's `htmx-history-cache`). Only clicked lines are stored, so a line without an entry keeps the server's config default and a config change never breaks a key. An in-memory map mirrors every choice and every `localStorage` access is in try/catch, so without storage the toggles still survive polls until a reload. The poll swaps in fresh server markup, so `applyAll()` re-applies the recorded choices to the whole document on start and on `htmx:afterSettle`, `htmx:load` and `htmx:historyRestore`. No request, no `hx-*` (`TestStatsLegendHasNoHtmxAttributes`, `TestAppJSStatsToggles`); like `app.css`, `app.js` is immutable-cached, so an open browser needs a hard reload after it changes.
+- **Done statistics (data).** `BoardSnapshot.Stats` holds one `task.StatsCard` per configured `web.done_stats` card, in config order, computed by `computeStats` (`internal/task/stats.go`) from the snapshot's own `index.All()` read under the same lock, so no second index sync and no archive scan. Bars: per value of `priority`, `type`, `status`, `resolution` or `created_by`, the total, the done / in progress / todo split, and `ClosedRecently` (done tasks whose close time is in the last 24 h, future excluded). The close time is `closed_at`, else `updated_at`. Every task counts once, subtasks included; empty values are dropped; resolution is a done task's `EffectiveResolution`. Values come in domain order (priority `Priorities()`, `task_types` order, status `Statuses()`, `Resolutions()`), then unknown values alphabetically; each field's value and order live in one table, `statsFields`. Lines: one value per calendar day over `days` days, today last, bucketed by civil date in the clock's location (DST-safe). `created` / `closed` count per day; the `_cumulative` variants are running totals that start at 0 at the window start, flagged `Cumulative` so the web layer never parses line names. A split card draws its metric per value, only for values with a count in the window. `Hidden` marks the lines the card lists as hidden. An unknown kind, field, line name or metric yields no data, never an error. The clock is `task.WithClock` (default `time.Now`); its `Location()` sets the day zone, so tests pin both.
 
 ### Git branching
 
@@ -411,6 +415,21 @@ web:                  # optional
   enabled: false      # start the dashboard with the MCP server; default: false
   addr: 127.0.0.1:7777  # default
   with_mcp: false     # `serve web` also serves MCP over stdio; default: false
+  done_stats:         # Done-column statistics cards; default: the four below
+    cards:            # board order; `cards: []` = no cards
+      - kind: bars    # bars | lines; blank: bars with a field, else lines
+        field: priority
+      - {kind: bars, field: type}
+      - {kind: bars, field: resolution}
+      - kind: lines
+        id: recent    # optional stable key (line toggles); derived when blank
+        title: Last 14 days  # optional, derived when blank
+        days: 14      # default 14; <= 0 also means 14
+        lines: [created, closed]  # + created_cumulative, closed_cumulative; default created, closed
+        hidden: []    # lines (or split values) that start switched off
+      - kind: lines
+        split_by: priority  # one line per value of this field
+        metric: closed      # line name drawn per value; default closed
 git:                  # optional
   branching: false    # git branch per task; default: false
   base_branches:      # first existing one is the base; default: these four
@@ -424,6 +443,18 @@ A partially written section keeps the defaults for the keys it omits
 (`config.applyDefaults`), so `web: {enabled: true}` still listens on the
 default address, `auto_archive: {enabled: true}` still waits 30 days, and a
 `base_branches` list that is empty after trimming falls back to the defaults.
+
+`web.done_stats.cards` (`internal/config/stats.go`): an absent or null list
+means the defaults (bars for priority, type and resolution, plus a 14-day
+lines card with created and closed); `cards: []` means no cards. yaml decodes
+every card from zero, so per-card defaults are filled after decoding: kind,
+`days`, `lines`, `metric`, a title, and an `id` derived from the content
+(`bars-<field>`, `lines-<days>d`, `lines-<split_by>-<metric>-<days>d`), made
+unique in list order with `-2`, `-3`. Consumers read
+`Config.DoneStatsCards()`, which is nil-safe, fills the same defaults for a
+config that skipped `applyDefaults`, and returns a copy. Invalid entries are
+not rejected yet (task `done-stats-config-errors`); a YAML type error such as
+`days: abc` fails the load like any other.
 
 Environment overrides:
 
@@ -465,6 +496,7 @@ mcp-task-manager/
 │   │   └── output_test.go       # Output formatter tests
 │   ├── config/
 │   │   ├── config.go            # Project root / tasks dir resolution + config loading
+│   │   ├── stats.go             # web.done_stats cards: defaults, per-card defaults, DoneStatsCards
 │   │   └── resolve_test.go      # Resolution order tests
 │   ├── project/
 │   │   ├── resolver.go          # Lazy, cached project resolution (used by tool handlers)
@@ -489,6 +521,7 @@ mcp-task-manager/
 │   │   ├── phase.go             # Phase names, order, reserved *.phase names; name-based fallback derivation
 │   │   ├── phaserecord.go       # PhaseRun, PhaseRecord, PhaseSummary
 │   │   ├── phaseflow.go         # StartPhase, FinishPhase, the one phase loader; open runs closed on completion
+│   │   ├── stats.go             # Done-column statistics (bars, per-day lines) for BoardSnapshot
 │   │   └── view.go              # Board/detail composites for read-only consumers
 │   ├── testsupport/
 │   │   ├── testsupport.go       # Shared test backlog helpers (NewBacklog, Seed, IsolateEnv)
@@ -542,7 +575,7 @@ mcp-task-manager/
 ### Concurrency
 - A single `sync.Mutex` on `task.Service` serializes every task operation. It is the only lock over the index and the markdown storage, both of which are reachable solely through that type.
 - **Twin discipline:** exported methods lock once on entry and delegate to an unexported, unlocked twin (`Get`/`get`, `Update`/`update`, …). Service methods never call each other's exported forms — Go mutexes are not reentrant. `TestServiceNoSelfDeadlock` fails if a new method breaks the shape.
-- `EnsureProjectExists`, `ProjectFound`, `Config` and `BranchingEnabled` are deliberately unlocked: they read only write-once fields.
+- `EnsureProjectExists`, `ProjectFound`, `Config` and `BranchingEnabled` are deliberately unlocked: they read only write-once fields (as is the stats clock `now`, set by `WithClock`).
 - Git runs inside `StartTask` / `StartPhase` / `CompleteTask` while the lock is held, so a flow's ref, record, pointer and phase-record changes are atomic to every other call; web reads wait for it (each git command has a 60 s timeout). `StartPhase` and `FinishPhase` follow the twin discipline and are in `TestServiceNoSelfDeadlock` and `TestServiceRace`.
 - The lock matters because mcp-go's stdio server dispatches tool calls across a worker pool, and because the web dashboard reads the same service concurrently. `go test -race` covers both (`internal/task/concurrency_test.go`, `internal/web/race_test.go`).
 - File writes are atomic (write to temp file, then rename)
@@ -557,7 +590,7 @@ mcp-task-manager/
 - Resolution: `completed` | `obsolete` | `superseded` | `duplicate` | `wontfix`; only valid on a `done` task
 - Phase: `research` | `design` | `planning` | `implementation`; tokens a non-negative integer (at most 1e15)
 - Attached filenames: `{id}.md` and anything ending in `.phase` are reserved for writes
-- Config: `applyDefaults` fills in what a partially written YAML section left out, so a half-specified `web:` or `auto_archive:` block cannot silently zero the rest
+- Config: `applyDefaults` fills in what a partially written YAML section left out, so a half-specified `web:` or `auto_archive:` block cannot silently zero the rest; it also fills each `web.done_stats` card's defaults (nothing in a card is validated yet)
 
 ## Future Considerations (Post-MVP)
 - Comments/history

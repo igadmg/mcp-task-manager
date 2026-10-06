@@ -1,0 +1,20 @@
+<section class="stats-card" data-stats-card="{{ .ID }}">
+  <h3 class="stats-title">{{ .Title }}</h3>
+  {{ range .Bars }}
+  <div class="stats-row" data-value="{{ .Value }}">
+    <div class="flex flex-wrap items-baseline gap-x-2">
+      <span class="min-w-0 truncate text-xs text-neutral-300" title="{{ .Value }}">{{ .Value }}</span>
+      <span class="meta ml-auto min-w-0 truncate">{{ .Done }}/{{ .Total }}{{ if .Open }} &middot; {{ .Open }} open{{ end }}{{ if .Recent }} &middot; <span class="stats-recent">+{{ .Recent }}</span>{{ end }}</span>
+    </div>
+    <svg class="stats-bar" viewBox="0 0 {{ .Total }} 1" preserveAspectRatio="none" role="img"
+         aria-label="{{ .Value }}: {{ .Done }} done ({{ .Recent }} in the last 24 h), {{ .InProgress }} in progress, {{ .Todo }} to do">
+      {{ if .Done }}<rect class="bar-done" x="0" width="{{ .Done }}" height="1"/>{{ end }}
+      {{ if .Recent }}<rect class="bar-recent" x="{{ .RecentX }}" width="{{ .Recent }}" height="1"/>{{ end }}
+      {{ if .InProgress }}<rect class="bar-in_progress" x="{{ .Done }}" width="{{ .InProgress }}" height="1"/>{{ end }}
+      {{ if .Todo }}<rect class="bar-todo" x="{{ .TodoX }}" width="{{ .Todo }}" height="1"/>{{ end }}
+    </svg>
+  </div>
+  {{ else }}
+  <p class="meta mt-2">no tasks</p>
+  {{ end }}
+</section>

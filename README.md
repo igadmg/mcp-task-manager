@@ -96,6 +96,7 @@ call shows up on the board on the next refresh (every 5 seconds).
 - `serve web --mcp` additionally serves MCP over stdio in the same process. It is off by default: a terminal has a TTY on stdin, and a JSON-RPC reader there would eat your keystrokes.
 - Tailwind CSS and htmx are compiled into the binary, so the page renders with no network access.
 - In progress groups its cards into Research / Design / Planning / Implementation lanes, each shifted right by half a card. A task's lane is the phase of its latest started run in its `<phase>.phase` records; a task without records falls back to the workflow files (`research`, `design`, `plan`) attached to it.
+- Done shows statistics instead of task cards: per configured field (by default `priority`, `type`, `resolution`) one stacked bar per value with the done / in progress / todo split, the closures of the last 24 h highlighted, and a label like `7/12 · 5 open · +2`; and line charts of tasks created and closed per day (plain, cumulative, or one line per value of a field), drawn as inline SVG on the server with a legend, day tooltips and the lines listed in `hidden` switched off. Clicking a legend entry shows or hides its line; the choice is kept per browser (in `localStorage`, per card `id` and line) and survives the board refresh, and the toggle sends no request. A done task stays reachable at `/tasks/{id}`. See `web.done_stats` under Configuration.
 - Every card shows who created the task and when; in-progress cards with phase records also show the current phase, who started it and when, and the tokens spent so far. The detail view lists every phase run.
 
 **The HTTP surface is read-only and unauthenticated.** No route mutates a task,
@@ -478,6 +479,19 @@ web:
   enabled: false          # start the dashboard alongside the MCP server
   addr: 127.0.0.1:7777    # listen address
   with_mcp: false         # `serve web` also serves MCP over stdio
+  done_stats:             # statistics cards of the Done column, in order
+    cards:
+      - kind: bars        # one bar per value of a task field
+        field: priority
+      - kind: lines       # per-day chart over the last `days` days
+        title: Last 2 weeks
+        days: 14
+        lines: [created, closed, created_cumulative, closed_cumulative]
+        hidden: [created_cumulative, closed_cumulative]  # off until toggled
+      - kind: lines
+        days: 30
+        split_by: priority  # one line per priority...
+        metric: closed      # ...counting closures
 git:
   branching: false        # git branch per task, see below
   base_branches: [main_patched, master_patched, main, master]
@@ -487,6 +501,16 @@ A partially written section keeps the defaults for the keys it does not
 mention, so `web: {enabled: true}` still listens on `127.0.0.1:7777`,
 `auto_archive: {enabled: true}` still waits 30 days, and
 `git: {branching: true}` still uses the default base branches.
+
+Without `done_stats.cards` the Done column shows bars for `priority`, `type`
+and `resolution` and a 14-day `lines` card with `created` and `closed`;
+`cards: []` shows none. Within a card, everything but the field is optional:
+a card with a `field` and no `kind` is `bars`, otherwise `lines`; `days`
+defaults to 14, `lines` to `[created, closed]`, `metric` to `closed`, and a
+missing `title` is derived. The optional `id` is the key the viewer's line
+toggles are stored under; when omitted it is derived from the card's content
+(for example `bars-priority`, `lines-14d`), so reordering cards or renaming a
+title keeps the toggles.
 
 The `task_types` list defines the allowed values for every task `type` field in the CLI, MCP tools, and task frontmatter. If omitted, the default allowed values are `feature` and `bug`.
 The `relation_types` list defines the allowed values for every relation `type` field in MCP tools and task metadata. If omitted, the default allowed values are `blocked_by`, `relates_to`, and `duplicate_of`.

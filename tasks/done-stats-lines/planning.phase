@@ -1,0 +1,9 @@
+version: 1
+phase: planning
+runs:
+  - started_at: "2026-10-06T19:37:14Z"
+    started_by: igor.cwer
+    finished_at: "2026-10-06T19:37:33Z"
+    finished_by: igor.cwer
+    tokens: 8000
+    note: P1 feature slice, P2 docs

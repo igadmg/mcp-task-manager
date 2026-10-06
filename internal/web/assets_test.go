@@ -43,3 +43,52 @@ func TestAppCSSDefinesPhaseRuns(t *testing.T) {
 		}
 	}
 }
+
+// TestAppCSSDefinesStatsClasses ties the Done column's statistics markup to
+// the compiled CSS: the bar segment classes, the chart and legend classes,
+// and the colours Tailwind emits only because a component references them.
+func TestAppCSSDefinesStatsClasses(t *testing.T) {
+	data, err := staticFS.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatalf("read embedded app.css: %v", err)
+	}
+	for _, w := range []string{
+		".stats-card{", ".stats-title{", ".stats-row{", ".stats-bar{", ".stats-recent{",
+		".bar-done{", ".bar-recent{", ".bar-in_progress{", ".bar-todo{",
+		"--color-emerald-200:",
+		".stats-chart{", ".stats-chart svg{", ".stats-line{", ".stats-off{", ".stats-day{",
+		".stats-legend{", ".stats-legend-item{", ".stats-legend-item[aria-pressed=false]{", ".stats-swatch{",
+		".series-created{", ".series-closed{", ".series-created_cumulative{", ".series-closed_cumulative{",
+		".series-0{", ".series-7{",
+		"--color-sky-400:", "--color-violet-400:", "--color-lime-400:", "--color-fuchsia-400:",
+	} {
+		if !strings.Contains(string(data), w) {
+			t.Errorf("app.css lacks %q - rerun scripts/build-css.sh", w)
+		}
+	}
+}
+
+// TestAppJSStatsToggles pins the legend toggles' contract without a JS
+// runtime: their own storage prefix, re-applied after every htmx swap, and no
+// request API, so the board stays read-only.
+func TestAppJSStatsToggles(t *testing.T) {
+	data, err := staticFS.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatalf("read embedded app.js: %v", err)
+	}
+	js := string(data)
+	for _, w := range []string{
+		`"mcp-task-manager.stats-line:"`, "localStorage",
+		`"htmx:afterSettle"`, `"htmx:load"`, `"htmx:historyRestore"`,
+		"data-stats-card", "data-stats-line", "stats-off", "aria-pressed",
+	} {
+		if !strings.Contains(js, w) {
+			t.Errorf("app.js lacks %s", w)
+		}
+	}
+	for _, bad := range []string{"fetch(", "XMLHttpRequest", "htmx.ajax", "hx-", "htmx-history-cache"} {
+		if strings.Contains(js, bad) {
+			t.Errorf("app.js uses %s", bad)
+		}
+	}
+}

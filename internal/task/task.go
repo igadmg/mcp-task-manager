@@ -1,6 +1,9 @@
 package task
 
-import "time"
+import (
+	"slices"
+	"time"
+)
 
 // Status represents the current state of a task
 type Status string
@@ -10,6 +13,11 @@ const (
 	StatusInProgress Status = "in_progress"
 	StatusDone       Status = "done"
 )
+
+// Statuses lists every status in workflow order.
+func Statuses() []Status {
+	return []Status{StatusTodo, StatusInProgress, StatusDone}
+}
 
 // Priority represents task priority level
 type Priority string
@@ -21,20 +29,18 @@ const (
 	PriorityLow      Priority = "low"
 )
 
-// PriorityOrder returns numeric order for sorting (lower = higher priority)
+// Priorities lists every priority, highest first.
+func Priorities() []Priority {
+	return []Priority{PriorityCritical, PriorityHigh, PriorityMedium, PriorityLow}
+}
+
+// Order returns numeric order for sorting (lower = higher priority); 99 for
+// an unknown priority.
 func (p Priority) Order() int {
-	switch p {
-	case PriorityCritical:
-		return 0
-	case PriorityHigh:
-		return 1
-	case PriorityMedium:
-		return 2
-	case PriorityLow:
-		return 3
-	default:
-		return 99
+	if i := slices.Index(Priorities(), p); i >= 0 {
+		return i
 	}
+	return 99
 }
 
 // Relation represents a link between tasks
@@ -115,20 +121,12 @@ func (t *Task) EffectiveResolution() Resolution {
 
 // IsValidStatus checks if status is valid
 func IsValidStatus(s string) bool {
-	switch Status(s) {
-	case StatusTodo, StatusInProgress, StatusDone:
-		return true
-	}
-	return false
+	return slices.Contains(Statuses(), Status(s))
 }
 
 // IsValidPriority checks if priority is valid
 func IsValidPriority(p string) bool {
-	switch Priority(p) {
-	case PriorityCritical, PriorityHigh, PriorityMedium, PriorityLow:
-		return true
-	}
-	return false
+	return slices.Contains(Priorities(), Priority(p))
 }
 
 // Resolution records how a task left the active flow. Status says a task is
@@ -173,12 +171,7 @@ func Resolutions() []Resolution {
 
 // IsValidResolution checks if resolution is valid
 func IsValidResolution(r string) bool {
-	for _, valid := range Resolutions() {
-		if Resolution(r) == valid {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(Resolutions(), Resolution(r))
 }
 
 // Delivered reports whether the resolution means the work actually landed.
@@ -190,9 +183,14 @@ func (r Resolution) Delivered() bool {
 
 // ResolutionStrings renders the valid resolutions for enums and error text.
 func ResolutionStrings() []string {
-	out := make([]string, 0, len(Resolutions()))
-	for _, r := range Resolutions() {
-		out = append(out, string(r))
+	return strs(Resolutions())
+}
+
+// strs renders a list of string-typed values as plain strings.
+func strs[T ~string](values []T) []string {
+	out := make([]string, len(values))
+	for i, v := range values {
+		out[i] = string(v)
 	}
 	return out
 }

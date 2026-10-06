@@ -5,9 +5,9 @@
 # `go test`: app.css and htmx.min.js are committed, so a clean checkout builds
 # and tests with zero network access.
 #
-# Run it after changing anything under internal/web/templates/ - Tailwind scans
-# those files (@source) plus every non-gitignored file under the directory it
-# runs from (automatic source detection), so build from a clean checkout.
+# Run it after changing anything under internal/web/templates/ or input.css.
+# Tailwind scans only those templates (@source; input.css turns automatic
+# source detection off), so the output does not depend on where it runs from.
 #
 # Runs on macOS and Linux, and on Windows x64 from Git Bash (MSYS converts
 # the /d/... paths for the native .exe).

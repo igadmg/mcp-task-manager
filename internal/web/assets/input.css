@@ -6,8 +6,11 @@
  * The component classes below exist so Go can name a style (chip-critical)
  * without Tailwind having to find that string in a template: the scanner only
  * reads ../templates, and class names assembled in Go would be missed.
+ * source(none) turns off automatic source detection, so the output does not
+ * depend on the directory the build runs from (from the repo root it would
+ * also scan Go files and task notes).
  */
-@import "tailwindcss";
+@import "tailwindcss" source(none);
 
 @source "../templates";
 
@@ -74,6 +77,57 @@
     @apply grid grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)_auto] items-baseline gap-x-3 gap-y-1;
   }
   .phase-runs .phase-note { grid-column: 1 / -1; }
+  /* Done-column statistics. A bar is an inline SVG whose viewBox is the
+   * row's total, so segment widths are task counts and the browser scales
+   * them: Go never computes geometry and no style attribute is needed.
+   * Segments use the column dot colours; the part closed in the last 24 h
+   * is a light emerald over the end of done. */
+  .stats-card { @apply rounded-lg border border-white/10 bg-neutral-900/60 p-3; }
+  .stats-title { @apply text-[11px] font-medium uppercase tracking-wider text-neutral-400; }
+  .stats-row  { @apply mt-2; }
+  .stats-bar  { @apply mt-1 block h-1.5 w-full overflow-hidden rounded-full bg-white/5; }
+  .bar-done        { fill: var(--color-emerald-500); }
+  .bar-recent      { fill: var(--color-emerald-200); }
+  .bar-in_progress { fill: var(--color-amber-400); }
+  .bar-todo        { fill: var(--color-neutral-500); }
+  .stats-recent    { color: var(--color-emerald-300); }
+  /* Lines cards. The viewBox is the data range - 2 units per day, counts
+   * high, one nested svg per scale (per day, running total) - so Go prints
+   * integers and the browser stretches them; non-scaling-stroke keeps the
+   * lines 1.5px wide. A series-<name> class names a line's colour for both
+   * the polyline and its legend swatch. A switched-off line has stats-off
+   * and its legend button aria-pressed="false". */
+  .stats-chart  { @apply mt-2 block h-16 w-full overflow-visible; }
+  .stats-chart svg { overflow: visible; }
+  .stats-line {
+    fill: none;
+    stroke: var(--series);
+    stroke-width: 1.5;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+    vector-effect: non-scaling-stroke;
+  }
+  .stats-off    { display: none; }
+  .stats-day    { fill: transparent; }
+  .stats-day:hover { fill: rgb(255 255 255 / 0.06); }
+  .stats-legend { @apply mt-1 flex flex-wrap gap-x-2.5 gap-y-0.5; }
+  .stats-legend-item {
+    @apply inline-flex max-w-full cursor-pointer items-center gap-1 font-mono text-[11px] text-neutral-400 hover:text-neutral-200;
+  }
+  .stats-legend-item[aria-pressed="false"] { @apply text-neutral-600 line-through; }
+  .stats-swatch { @apply inline-block h-0.5 w-2.5 shrink-0 rounded-full; background: var(--series); }
+  .series-created           { --series: var(--color-sky-400); }
+  .series-closed            { --series: var(--color-emerald-400); }
+  .series-created_cumulative{ --series: var(--color-violet-400); }
+  .series-closed_cumulative { --series: var(--color-lime-400); }
+  .series-0 { --series: var(--color-sky-400); }
+  .series-1 { --series: var(--color-amber-400); }
+  .series-2 { --series: var(--color-emerald-400); }
+  .series-3 { --series: var(--color-rose-400); }
+  .series-4 { --series: var(--color-violet-400); }
+  .series-5 { --series: var(--color-lime-400); }
+  .series-6 { --series: var(--color-orange-400); }
+  .series-7 { --series: var(--color-fuchsia-400); }
   .meta { @apply font-mono text-[11px] text-neutral-500; }
 
   .copy-btn {

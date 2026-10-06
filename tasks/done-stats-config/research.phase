@@ -1,0 +1,8 @@
+version: 1
+phase: research
+runs:
+  - started_at: "2026-10-06T18:05:20Z"
+    started_by: igor.cwer
+    finished_at: "2026-10-06T18:05:46Z"
+    finished_by: igor.cwer
+    note: 'gap closure: defaults placement, yaml null/empty, no serialization, card key'

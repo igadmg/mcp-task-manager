@@ -1,0 +1,8 @@
+version: 1
+phase: research
+runs:
+  - started_at: "2026-10-06T17:27:56Z"
+    started_by: igor.cwer
+    finished_at: "2026-10-06T17:43:04Z"
+    finished_by: igor.cwer
+    tokens: 228081

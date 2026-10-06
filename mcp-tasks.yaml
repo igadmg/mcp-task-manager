@@ -9,6 +9,24 @@ auto_archive:
 web:
   enabled: false
   addr: 127.0.0.1:7777
+  # Statistics cards of the board's Done column, in board order. These four
+  # are the defaults; `cards: []` shows none.
+  done_stats:
+    cards:
+      - kind: bars
+        field: priority
+      - kind: bars
+        field: type
+      - kind: bars
+        field: resolution
+      - kind: lines
+        days: 14
+        lines: [created, closed]
+      # One line per priority, closures per day over 30 days:
+      # - kind: lines
+      #   days: 30
+      #   split_by: priority
+      #   metric: closed
 # Git branch per task. The server never commits tasks/ (it is excluded from
 # its snapshots), so this repository keeps committing it by hand. Tasks
 # started before this was enabled have no branch and stay record-only.

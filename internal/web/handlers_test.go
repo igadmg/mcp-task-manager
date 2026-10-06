@@ -9,12 +9,14 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/gpayer/mcp-task-manager/internal/config"
 	"github.com/gpayer/mcp-task-manager/internal/project"
 	"github.com/gpayer/mcp-task-manager/internal/task"
 	"github.com/gpayer/mcp-task-manager/internal/testsupport"
@@ -67,10 +69,13 @@ func TestBoardRendersThreeColumns(t *testing.T) {
 			t.Errorf("board is missing the %q column", want)
 		}
 	}
-	for _, want := range []string{"Ship the board", "Fix the index", "Old chore", "Blocked work"} {
+	for _, want := range []string{"Ship the board", "Fix the index", "Blocked work"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("board is missing card %q", want)
 		}
+	}
+	if strings.Contains(body, "Old chore") {
+		t.Error("the Done column renders a task card, want statistics only")
 	}
 	if !strings.Contains(body, "<html") {
 		t.Error("GET / did not return a full page")
@@ -386,20 +391,26 @@ func TestCardIDTruncates(t *testing.T) {
 	}
 }
 
-// laneSection returns the markup of one In progress phase lane: from its
-// data-phase attribute to the first closing section tag after it. Lanes
-// hold only card articles, so that tag closes the lane itself.
-func laneSection(t *testing.T, body, phase string) string {
+// sectionAfter returns the body from marker to the first closing section
+// tag after it. Lanes hold only card articles and statistics cards hold no
+// sections, so for either that tag closes the section the marker opens.
+func sectionAfter(t *testing.T, body, marker string) string {
 	t.Helper()
-	_, rest, ok := strings.Cut(body, `data-phase="`+phase+`"`)
+	_, rest, ok := strings.Cut(body, marker)
 	if !ok {
-		t.Fatalf("board has no %s lane", phase)
+		t.Fatalf("body has no %s", marker)
 	}
 	section, _, ok := strings.Cut(rest, "</section>")
 	if !ok {
-		t.Fatalf("the %s lane is never closed", phase)
+		t.Fatalf("%s is never closed", marker)
 	}
 	return section
+}
+
+// laneSection returns the In progress lane of phase.
+func laneSection(t *testing.T, body, phase string) string {
+	t.Helper()
+	return sectionAfter(t, body, `data-phase="`+phase+`"`)
 }
 
 func TestBoardRendersPhaseLanes(t *testing.T) {
@@ -477,8 +488,11 @@ func TestBoardEmptyInProgressShowsFourStubs(t *testing.T) {
 			t.Errorf("%s lane holds a card, want none", phase)
 		}
 	}
-	if n := strings.Count(body, ">empty</p>"); n != 1 {
-		t.Errorf("board shows %d empty placeholders, want 1 (Done only)", n)
+	if n := strings.Count(body, ">empty</p>"); n != 0 {
+		t.Errorf("board shows %d empty placeholders, want 0 (Done holds the statistics cards)", n)
+	}
+	if !strings.Contains(body, `data-stats-card="`) {
+		t.Error("the Done column shows no statistics card")
 	}
 }
 
@@ -538,5 +552,178 @@ func TestPhaseNoteEscaped(t *testing.T) {
 	}
 	if !strings.Contains(body, "&lt;script&gt;alert(1)&lt;/script&gt;") {
 		t.Error("the escaped note is missing")
+	}
+}
+
+func TestBoardDoneColumnRendersStats(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedBoard(t, svc)
+
+	body := get(t, h, "/board").Body.String()
+	for _, id := range []string{"bars-priority", "bars-type", "bars-resolution"} {
+		if !strings.Contains(body, `data-stats-card="`+id+`"`) {
+			t.Errorf("Done column lacks the %s card", id)
+		}
+	}
+	if a, b := strings.Index(body, `data-stats-card="bars-priority"`), strings.Index(body, `data-stats-card="bars-type"`); a > b {
+		t.Error("stats cards are not in config order")
+	}
+	// Task 4 (medium bug) is the only done task, closed just now; task 5
+	// is the other medium one, still todo.
+	for _, want := range []string{
+		`data-value="medium"`,
+		`1/2 &middot; 1 open &middot; <span class="stats-recent">+1</span>`,
+		`viewBox="0 0 2 1"`,
+		`<rect class="bar-done" x="0" width="1" height="1"/>`,
+		`<rect class="bar-recent" x="0" width="1" height="1"/>`,
+		`<rect class="bar-todo" x="1" width="1" height="1"/>`,
+		`data-value="completed"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("Done column lacks %s", want)
+		}
+	}
+	if strings.Contains(body, "Old chore") || strings.Contains(body, `hx-get="/tasks/4/panel"`) {
+		t.Error("the Done column renders task 4 as a card")
+	}
+	if strings.Contains(body, "style=") {
+		t.Error("the board carries an inline style")
+	}
+}
+
+func TestBoardDoneColumnEmptyWithoutCards(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedBoard(t, svc)
+	svc.Config().Web.DoneStats.Cards = []config.StatsCard{}
+
+	body := get(t, h, "/board").Body.String()
+	if strings.Contains(body, "data-stats-card") {
+		t.Error("cards: [] still renders statistics cards")
+	}
+	if n := strings.Count(body, ">empty</p>"); n != 1 {
+		t.Errorf("board shows %d empty placeholders, want 1 (Done)", n)
+	}
+	if strings.Contains(body, "Old chore") {
+		t.Error("an empty Done column falls back to task cards")
+	}
+}
+
+func TestStatsBarsEscaping(t *testing.T) {
+	const payload = `<script>alert(1)</script>`
+	card := StatsCardView{ID: `x" onmouseover="y`, Title: payload,
+		Bars: []StatsBarView{{Value: payload, Total: 1, Done: 1}}}
+
+	var b strings.Builder
+	if err := fragments.ExecuteTemplate(&b, "_stats_bars.html", card); err != nil {
+		t.Fatalf("execute _stats_bars.html: %v", err)
+	}
+	out := b.String()
+	if strings.Contains(out, "<script>") || strings.Contains(out, `" onmouseover="`) {
+		t.Errorf("stats card output is not escaped:\n%s", out)
+	}
+	if !strings.Contains(out, "&lt;script&gt;") {
+		t.Errorf("escaped payload missing:\n%s", out)
+	}
+}
+
+func TestBoardDoneColumnRendersLines(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedBoard(t, svc)
+
+	body := get(t, h, "/board").Body.String()
+	if strings.Index(body, `data-stats-card="lines-14d"`) < strings.Index(body, `data-stats-card="bars-resolution"`) {
+		t.Error("the lines card is not after the bars cards (config order)")
+	}
+	card := sectionAfter(t, body, `data-stats-card="lines-14d"`)
+	// All five seeded tasks were created today and task 4 closed today, so
+	// the per-day scale is 5 and today's points are created 5, closed 1,
+	// whatever the date.
+	for _, want := range []string{
+		`viewBox="0 0 28 1"`,
+		`viewBox="0 0 28 5"`,
+		`<polyline class="stats-line series-created" data-stats-line="created" points="1,5 `,
+		` 27,0"/>`,
+		`<polyline class="stats-line series-closed" data-stats-line="closed" points="1,5 `,
+		` 27,4"/>`,
+		`<button type="button" class="stats-legend-item" data-stats-line="created" aria-pressed="true"`,
+		`<button type="button" class="stats-legend-item" data-stats-line="closed" aria-pressed="true"`,
+		`>5/day<`,
+		` · created 5 · closed 1</title>`,
+	} {
+		if !strings.Contains(card, want) {
+			t.Errorf("lines card lacks %s", want)
+		}
+	}
+	if n := strings.Count(card, `<rect class="stats-day"`); n != 14 {
+		t.Errorf("lines card has %d day columns, want 14", n)
+	}
+	for _, bad := range []string{"style=", "hx-", "stats-off"} {
+		if strings.Contains(card, bad) {
+			t.Errorf("lines card carries %q", bad)
+		}
+	}
+}
+
+func TestBoardHiddenLineRendersOff(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedBoard(t, svc)
+	svc.Config().Web.DoneStats.Cards = []config.StatsCard{{
+		ID: "recent", Kind: config.StatsKindLines, Title: "Recent", Days: 7,
+		Lines: []string{"created", "closed_cumulative"}, Hidden: []string{"closed_cumulative"},
+	}}
+
+	body := get(t, h, "/board").Body.String()
+	for _, want := range []string{
+		`<polyline class="stats-line series-created" data-stats-line="created"`,
+		`<polyline class="stats-line series-closed_cumulative stats-off" data-stats-line="closed_cumulative"`,
+		`data-stats-line="closed_cumulative" aria-pressed="false"`,
+		`data-stats-line="created" aria-pressed="true"`,
+		`5/day &middot; 1 total`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("board lacks %s", want)
+		}
+	}
+}
+
+// TestStatsLegendHasNoHtmxAttributes keeps the line toggles client-side: the
+// legend entries and the lines they switch must never be wired to a request.
+func TestStatsLegendHasNoHtmxAttributes(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedBoard(t, svc)
+
+	tag := regexp.MustCompile(`<(?:button[^>]*stats-legend-item|polyline)[^>]*>`)
+	for _, path := range []string{"/", "/board"} {
+		tags := tag.FindAllString(get(t, h, path).Body.String(), -1)
+		if len(tags) == 0 {
+			t.Errorf("%s has no legend entries or lines", path)
+		}
+		for _, tag := range tags {
+			if strings.Contains(tag, "hx-") {
+				t.Errorf("%s: legend or line carries an htmx attribute: %s", path, tag)
+			}
+		}
+	}
+}
+
+func TestStatsLinesEscaping(t *testing.T) {
+	const payload = `<script>alert(1)</script>`
+	line := StatsSeriesView{Key: `x" onmouseover="y` + payload, Color: "series-0", Points: "1,0"}
+	card := StatsCardView{ID: `x" onmouseover="y`, Kind: config.StatsKindLines, Title: payload,
+		Chart: &StatsChartView{Width: 2, First: payload, Last: payload,
+			Groups: []StatsLineGroupView{{Width: 2, Max: 1, Lines: []StatsSeriesView{line}}},
+			Legend: []StatsSeriesView{line},
+			Days:   []StatsDayView{{X: 0, Title: payload}}}}
+
+	var b strings.Builder
+	if err := fragments.ExecuteTemplate(&b, "_stats_lines.html", card); err != nil {
+		t.Fatalf("execute _stats_lines.html: %v", err)
+	}
+	out := b.String()
+	if strings.Contains(out, "<script>") || strings.Contains(out, `" onmouseover="`) || strings.Contains(out, "ZgotmplZ") {
+		t.Errorf("lines card output is not escaped:\n%s", out)
+	}
+	if !strings.Contains(out, "<title>&lt;script&gt;") {
+		t.Errorf("escaped day title missing:\n%s", out)
 	}
 }

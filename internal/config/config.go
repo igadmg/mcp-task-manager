@@ -108,6 +108,8 @@ type WebConfig struct {
 	// default: a human running it in a terminal has a TTY on stdin, and a
 	// JSON-RPC reader there would eat their keystrokes as garbage frames.
 	WithMCP bool `yaml:"with_mcp"`
+	// DoneStats defines the statistics cards of the board's Done column.
+	DoneStats DoneStatsConfig `yaml:"done_stats"`
 }
 
 // GitConfig holds the opt-in git branch-per-task workflow.
@@ -158,6 +160,8 @@ func DefaultConfig() *Config {
 			Enabled: false,
 			Addr:    DefaultWebAddr,
 			WithMCP: false,
+			// A fresh list, like BaseBranches below.
+			DoneStats: DoneStatsConfig{Cards: DefaultStatsCards()},
 		},
 		Git: GitConfig{
 			Branching: false,
@@ -240,6 +244,8 @@ func Resolve(roots RootsProvider) (*Config, error) {
 // after_days, and `web: {enabled: true}` zeroes the address.
 //
 // Booleans are deliberately left as written - false is a real value there.
+// The Done-column cards are refilled when `cards:` reset them to nil, and
+// each written card gets its per-card defaults (see normalizeStatsCards).
 func (c *Config) applyDefaults() {
 	d := DefaultConfig()
 	if len(c.TaskTypes) == 0 {
@@ -254,12 +260,8 @@ func (c *Config) applyDefaults() {
 	if strings.TrimSpace(c.Web.Addr) == "" {
 		c.Web.Addr = d.Web.Addr
 	}
-	var bases []string
-	for _, b := range c.Git.BaseBranches {
-		if b = strings.TrimSpace(b); b != "" {
-			bases = append(bases, b)
-		}
-	}
+	c.Web.DoneStats.Cards = normalizeStatsCards(c.Web.DoneStats.Cards)
+	bases := trimList(c.Git.BaseBranches)
 	if len(bases) == 0 {
 		bases = d.Git.BaseBranches
 	}
