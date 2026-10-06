@@ -51,8 +51,12 @@ type Relation struct {
 
 // Task represents a single task
 type Task struct {
-	ID          string     `yaml:"id" json:"id"`
-	ParentID    string     `yaml:"parent_id,omitempty" json:"parent_id,omitempty"` // "" = no parent
+	ID       string `yaml:"id" json:"id"`
+	ParentID string `yaml:"parent_id,omitempty" json:"parent_id,omitempty"` // "" = no parent
+	// OrphanedID names the task this one was a subtask of before it was
+	// moved out to the top level. Provenance only: set by hand, never by
+	// the server, and it has no behavioural effect.
+	OrphanedID  string     `yaml:"orphaned_id,omitempty" json:"orphaned_id,omitempty"`
 	Title       string     `yaml:"title" json:"title"`
 	Description string     `yaml:"-" json:"description"` // Stored in markdown body
 	Status      Status     `yaml:"status" json:"status"`

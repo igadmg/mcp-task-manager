@@ -1127,6 +1127,39 @@ func TestMarkdownStorage_SaveLoad_WithoutParentID(t *testing.T) {
 	}
 }
 
+func TestMarkdownStorage_SaveLoad_OrphanedID(t *testing.T) {
+	dir := t.TempDir()
+	storage := NewMarkdownStorage(dir)
+
+	now := time.Now().UTC()
+	orphan := &task.Task{ID: "2", OrphanedID: "1", Title: "Moved out", Status: task.StatusTodo, Priority: task.PriorityLow, Type: "feature", CreatedAt: now, UpdatedAt: now}
+	plain := &task.Task{ID: "3", Title: "Plain", Status: task.StatusTodo, Priority: task.PriorityLow, Type: "feature", CreatedAt: now, UpdatedAt: now}
+	for _, tk := range []*task.Task{orphan, plain} {
+		if err := storage.Save(tk); err != nil {
+			t.Fatalf("Save(%s) error = %v", tk.ID, err)
+		}
+	}
+
+	loaded, err := storage.Load("2")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded.OrphanedID != "1" {
+		t.Errorf("OrphanedID = %q, want 1", loaded.OrphanedID)
+	}
+	if loaded.ParentID != "" {
+		t.Errorf("ParentID = %q, want empty", loaded.ParentID)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(dir, "3", "3.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "orphaned_id") {
+		t.Errorf("empty OrphanedID written to frontmatter:\n%s", raw)
+	}
+}
+
 func TestIndex_RebuildFromFiles(t *testing.T) {
 	dir := t.TempDir()
 	storage := NewMarkdownStorage(dir)

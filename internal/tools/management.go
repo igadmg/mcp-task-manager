@@ -173,6 +173,7 @@ func createTaskHandler(rs *project.Resolver) server.ToolHandlerFunc {
 type taskWithSubtasksResponse struct {
 	ID          string              `json:"id"`
 	ParentID    string              `json:"parent_id,omitempty"`
+	OrphanedID  string              `json:"orphaned_id,omitempty"`
 	Title       string              `json:"title"`
 	Description string              `json:"description"`
 	Status      task.Status         `json:"status"`
@@ -221,6 +222,7 @@ func getTaskHandler(rs *project.Resolver) server.ToolHandlerFunc {
 		response := taskWithSubtasksResponse{
 			ID:          t.ID,
 			ParentID:    t.ParentID,
+			OrphanedID:  t.OrphanedID,
 			Title:       t.Title,
 			Description: t.Description,
 			Status:      t.Status,

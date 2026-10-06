@@ -47,6 +47,7 @@ func (s *MarkdownStorage) Save(t *task.Task) error {
 	frontmatter := struct {
 		ID             string          `yaml:"id"`
 		ParentID       string          `yaml:"parent_id,omitempty"`
+		OrphanedID     string          `yaml:"orphaned_id,omitempty"`
 		Title          string          `yaml:"title"`
 		Status         task.Status     `yaml:"status"`
 		Priority       task.Priority   `yaml:"priority"`
@@ -67,6 +68,7 @@ func (s *MarkdownStorage) Save(t *task.Task) error {
 	}{
 		ID:             t.ID,
 		ParentID:       t.ParentID,
+		OrphanedID:     t.OrphanedID,
 		Title:          t.Title,
 		Status:         t.Status,
 		Priority:       t.Priority,
@@ -183,6 +185,7 @@ func (s *MarkdownStorage) parse(data []byte) (*task.Task, error) {
 	var fm struct {
 		ID             string          `yaml:"id"`
 		ParentID       string          `yaml:"parent_id"`
+		OrphanedID     string          `yaml:"orphaned_id"`
 		Title          string          `yaml:"title"`
 		Status         string          `yaml:"status"`
 		Priority       string          `yaml:"priority"`
@@ -221,6 +224,7 @@ func (s *MarkdownStorage) parse(data []byte) (*task.Task, error) {
 	return &task.Task{
 		ID:             fm.ID,
 		ParentID:       fm.ParentID,
+		OrphanedID:     fm.OrphanedID,
 		Title:          fm.Title,
 		Description:    strings.TrimSpace(bodyBuf.String()),
 		Status:         task.Status(fm.Status),

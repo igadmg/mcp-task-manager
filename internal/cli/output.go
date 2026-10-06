@@ -37,6 +37,9 @@ func FormatTaskDetail(t *task.Task, opts *TaskDetailOptions) string {
 	if t.ParentID != "" {
 		sb.WriteString(fmt.Sprintf("Parent:      #%s\n", t.ParentID))
 	}
+	if t.OrphanedID != "" {
+		sb.WriteString(fmt.Sprintf("Orphaned of: #%s\n", t.OrphanedID))
+	}
 	sb.WriteString(fmt.Sprintf("Created:     %s\n", t.CreatedAt.Format("2006-01-02 15:04:05")))
 	if t.CreatedBy != "" {
 		sb.WriteString(fmt.Sprintf("Created by:  %s\n", t.CreatedBy))

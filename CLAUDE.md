@@ -83,6 +83,7 @@ status: todo          # todo | in_progress | done
 priority: high        # critical | high | medium | low
 type: feature         # configurable, defaults: feature, bug
 parent_id: 0          # optional, 0 or omitted = top-level task
+orphaned_id: 12       # optional, hand-set: the former parent of a subtask moved to the top level (provenance only)
 relations:            # optional, omitted when empty
   - type: blocked_by
     task: 3
@@ -141,6 +142,9 @@ Tasks support single-level nesting via the `parent_id` field.
 **Constraints:**
 - Only one level of nesting allowed (subtasks cannot have subtasks)
 - Parent task must exist when creating a subtask
+- A subtask moved out to the top level by hand (no tool changes `parent_id`)
+  keeps its former parent in `orphaned_id`. Provenance only: no behaviour
+  reads it, no tool sets it, `get_task` and the CLI show it
 
 **Automatic Behaviors:**
 - **Auto-start parent:** Starting a subtask automatically starts its parent (if parent is `todo`)
