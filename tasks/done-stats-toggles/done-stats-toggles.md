@@ -2,7 +2,7 @@
 id: done-stats-toggles
 parent_id: done-column-stats
 title: 'Web: legend toggles for chart lines, kept in localStorage across htmx polls'
-status: todo
+status: done
 priority: medium
 type: feature
 relations:
@@ -10,7 +10,13 @@ relations:
     task: done-stats-lines
 created_at: "2026-10-06T17:56:10Z"
 created_by: igor.cwer
-updated_at: "2026-10-06T17:56:18Z"
+updated_at: "2026-10-06T19:59:50Z"
+resolution: completed
+closed_at: "2026-10-06T19:59:50Z"
+branch: igor.cwer/wip/done-column-stats--done-stats-toggles
+base_branch: igor.cwer/wip/done-column-stats
+start_commit: 8a0357244164a759b3dab5c14aa5b8f305a8c26c
+squash_commit: 4340e21cc84524f836ea2004e2841173ffa5495c
 ---
 
 In `static/app.js`, add a delegated click on a legend entry that toggles its line.
