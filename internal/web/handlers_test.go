@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -680,6 +681,26 @@ func TestBoardHiddenLineRendersOff(t *testing.T) {
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("board lacks %s", want)
+		}
+	}
+}
+
+// TestStatsLegendHasNoHtmxAttributes keeps the line toggles client-side: the
+// legend entries and the lines they switch must never be wired to a request.
+func TestStatsLegendHasNoHtmxAttributes(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedBoard(t, svc)
+
+	tag := regexp.MustCompile(`<(?:button[^>]*stats-legend-item|polyline)[^>]*>`)
+	for _, path := range []string{"/", "/board"} {
+		tags := tag.FindAllString(get(t, h, path).Body.String(), -1)
+		if len(tags) == 0 {
+			t.Errorf("%s has no legend entries or lines", path)
+		}
+		for _, tag := range tags {
+			if strings.Contains(tag, "hx-") {
+				t.Errorf("%s: legend or line carries an htmx attribute: %s", path, tag)
+			}
 		}
 	}
 }

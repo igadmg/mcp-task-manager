@@ -67,3 +67,28 @@ func TestAppCSSDefinesStatsClasses(t *testing.T) {
 		}
 	}
 }
+
+// TestAppJSStatsToggles pins the legend toggles' contract without a JS
+// runtime: their own storage prefix, re-applied after every htmx swap, and no
+// request API, so the board stays read-only.
+func TestAppJSStatsToggles(t *testing.T) {
+	data, err := staticFS.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatalf("read embedded app.js: %v", err)
+	}
+	js := string(data)
+	for _, w := range []string{
+		`"mcp-task-manager.stats-line:"`, "localStorage",
+		`"htmx:afterSettle"`, `"htmx:load"`, `"htmx:historyRestore"`,
+		"data-stats-card", "data-stats-line", "stats-off", "aria-pressed",
+	} {
+		if !strings.Contains(js, w) {
+			t.Errorf("app.js lacks %s", w)
+		}
+	}
+	for _, bad := range []string{"fetch(", "XMLHttpRequest", "htmx.ajax", "hx-", "htmx-history-cache"} {
+		if strings.Contains(js, bad) {
+			t.Errorf("app.js uses %s", bad)
+		}
+	}
+}
