@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/gpayer/mcp-task-manager/internal/task"
 )
 
 // Per-user state lives under the tasks directory, outside any task.
@@ -23,7 +25,7 @@ func (s *MarkdownStorage) CurrentTaskPath(user string) string {
 // ReadCurrentTask returns the id held in user's pointer: its trimmed first
 // line. A missing or empty pointer reads as ok=false with no error.
 func (s *MarkdownStorage) ReadCurrentTask(user string) (id string, ok bool, err error) {
-	if err := validatePathSegment("user", user); err != nil {
+	if err := task.ValidateNameSegment("user", user); err != nil {
 		return "", false, err
 	}
 	data, err := os.ReadFile(s.CurrentTaskPath(user))
@@ -40,7 +42,7 @@ func (s *MarkdownStorage) ReadCurrentTask(user string) (id string, ok bool, err 
 
 // WriteCurrentTask points user's pointer at id, atomically.
 func (s *MarkdownStorage) WriteCurrentTask(user, id string) error {
-	if err := validatePathSegment("user", user); err != nil {
+	if err := task.ValidateNameSegment("user", user); err != nil {
 		return err
 	}
 	return writeFileAtomic(s.CurrentTaskPath(user), []byte(id+"\n"))
@@ -49,7 +51,7 @@ func (s *MarkdownStorage) WriteCurrentTask(user, id string) error {
 // RemoveCurrentTask clears user's pointer. Removing an absent pointer is not
 // an error.
 func (s *MarkdownStorage) RemoveCurrentTask(user string) error {
-	if err := validatePathSegment("user", user); err != nil {
+	if err := task.ValidateNameSegment("user", user); err != nil {
 		return err
 	}
 	if err := os.Remove(s.CurrentTaskPath(user)); err != nil && !os.IsNotExist(err) {

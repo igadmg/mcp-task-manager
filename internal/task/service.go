@@ -328,10 +328,26 @@ func (s *Service) WriteTaskFile(taskID string, filename, content string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	files, err := s.files()
+	if err != nil {
+		return err
+	}
 	if _, err := s.activeTask(taskID, "files"); err != nil {
 		return err
 	}
-	return s.fileStorage.WriteFile(taskID, filename, content)
+	return files.WriteFile(taskID, filename, content)
+}
+
+// files returns the attached-file store, or an error when the service was
+// built without one. The read-only view paths tolerate a missing store
+// (view.go: no store lists no files, so a board render never fails over it);
+// the tool paths report it instead of dereferencing nil.
+// Needs no lock of its own: fileStorage is write-once.
+func (s *Service) files() (FileStorage, error) {
+	if s.fileStorage == nil {
+		return nil, fmt.Errorf("attached files are not available: no file storage configured")
+	}
+	return s.fileStorage, nil
 }
 
 // activeTask returns task id from the active index, refusing an archived
@@ -353,10 +369,14 @@ func (s *Service) ReadTaskFile(taskID string, filename string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	files, err := s.files()
+	if err != nil {
+		return "", err
+	}
 	if _, err := s.get(taskID); err != nil {
 		return "", err
 	}
-	return s.fileStorage.ReadFile(taskID, filename)
+	return files.ReadFile(taskID, filename)
 }
 
 // ListTaskFiles returns the names of all files attached to the given task.
@@ -365,10 +385,14 @@ func (s *Service) ListTaskFiles(taskID string) ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	files, err := s.files()
+	if err != nil {
+		return nil, err
+	}
 	if _, err := s.get(taskID); err != nil {
 		return nil, err
 	}
-	return s.fileStorage.ListFiles(taskID)
+	return files.ListFiles(taskID)
 }
 
 // GetSubtaskCounts returns the count of subtasks for a task

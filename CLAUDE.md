@@ -109,7 +109,7 @@ Markdown description here.
 ### Task Identification
 - Ids are strings. By default `create_task` still allocates an auto-incrementing numeric-looking id, now unpadded (e.g. `"8"`, not `"008"`).
 - Optionally, `create_task` accepts a caller-supplied custom text id via its `id` parameter; it is used verbatim as the id and never advances or collides with the numeric auto-increment counter (a numeric-looking custom id like `"5"` still participates correctly in future auto-increment collision avoidance).
-- Custom ids are validated the same way attached filenames are: non-empty, no `/` or `\`, not `..`; additionally `"0"`, `"archive"`, `".index.json"` and `".users"` are reserved (they collide with this package's own on-disk sentinels: the retired index cache filename, and the per-user state directory) and rejected.
+- Custom ids are validated the same way attached filenames are (`task.ValidateNameSegment`): non-empty, no `/` or `\`, and not a name made only of dots and whitespace (`.`, `..`, `. `); additionally `"0"`, `"archive"`, `".index.json"` and `".users"` are reserved (they collide with this package's own on-disk sentinels: the retired index cache filename, and the per-user state directory) and rejected.
 - Creating a task with an id that already exists (active or archived) is rejected with a clear error, never silently overwritten or disambiguated.
 - Per-task directory is always named after the exact id string used: `7/`, `my-feature/`, etc., each containing `{id}.md` (e.g. `7/7.md`) plus any attached files
 
@@ -228,7 +228,8 @@ A task can have zero or more free-form named text files attached to it (e.g. res
 - Because attached files share the task's directory, `archive_task` and `delete_task` already move/remove them as a side effect of moving/removing that directory — no separate cascade step is needed
 
 **Rules:**
-- Filenames must be non-empty, must not contain a path separator (`/` or `\`) or a `..` segment, and must not collide with the task's own `{id}.md` record file
+- Filenames must be non-empty, must not contain a path separator (`/` or `\`), must not be made only of dots and whitespace (`.`, `..`, `. `, `. . .` — they resolve to a directory, or on Windows to nothing), and must not collide with the task's own `{id}.md` record file
+- The rules are one exported function, `task.ValidateAttachedName` (`internal/task/name.go`), which `internal/storage`'s write *and* read paths call — so a consumer can tell a malformed name from a missing file before it reads one, and a bad name never reaches `os.ReadFile`. `task.ValidateNameSegment` is the same code with the subject's noun as a parameter; the task id and the pointer user go through it too. A leading or trailing space is deliberately left alone: `" x "` is a legal, if odd, name
 - Names ending in `.phase` (case and trailing dots/spaces ignored) are reserved for the server's phase records: `write_task_file` refuses them, `read_task_file` and `list_task_files` show them
 - `write_task_file` is rejected for archived tasks (archived tasks are read-only, consistent with the rest of this project's archived-task semantics)
 - `read_task_file` and `list_task_files` work for both active and archived tasks
@@ -528,6 +529,7 @@ mcp-task-manager/
 │   │   ├── branching_complete.go # Delivered / subtask / abandoned completion, parent gate
 │   │   ├── branching_restart.go # Restart: replay the wip onto its parent line
 │   │   ├── current.go           # CurrentTask and the pointer rules
+│   │   ├── name.go              # ValidateAttachedName / ValidateNameSegment: the one name-shape rule set
 │   │   ├── phase.go             # Phase names, order, reserved *.phase names; name-based fallback derivation
 │   │   ├── phaserecord.go       # PhaseRun, PhaseRecord, PhaseSummary
 │   │   ├── phaseflow.go         # StartPhase, FinishPhase, the one phase loader; open runs closed on completion
@@ -592,14 +594,15 @@ mcp-task-manager/
 - Cross-process coordination (file locks, PID files) stays out of scope: whichever transport the process runs, the other comes up inside it.
 
 ### Validation
-- Task IDs: strings, format-validated the same way attached filenames are (non-empty, no `/` or `\`, not `..`), plus four reserved names (`"0"`, `"archive"`, `".index.json"` - a retired cache filename - and `".users"`, the per-user state directory) rejected for a caller-supplied custom id
+- Task IDs: strings, format-validated the same way attached filenames are (`task.ValidateNameSegment`: non-empty, no `/` or `\`, not only dots and whitespace), plus four reserved names (`"0"`, `"archive"`, `".index.json"` - a retired cache filename - and `".users"`, the per-user state directory) rejected for a caller-supplied custom id
 - Status: `todo` | `in_progress` | `done`
 - Priority: `critical` | `high` | `medium` | `low`
 - Type: must be in configured list (default: `feature`, `bug`)
 - Relation type: must be in configured list (default: `blocked_by`, `relates_to`, `duplicate_of`, `superseded_by`)
 - Resolution: `completed` | `obsolete` | `superseded` | `duplicate` | `wontfix`; only valid on a `done` task
 - Phase: `research` | `design` | `planning` | `implementation`; tokens a non-negative integer (at most 1e15)
-- Attached filenames: `{id}.md` and anything ending in `.phase` are reserved for writes
+- Attached filenames: `task.ValidateAttachedName` is the one definition of the shape rules (shared with ids and pointer users through `task.ValidateNameSegment`); `{id}.md` and anything ending in `.phase` are reserved for writes only — a read serves both
+- No file store: `WriteTaskFile` / `ReadTaskFile` / `ListTaskFiles` return an error when the service was built without one. The read-only view paths stay tolerant (no store lists no files), so a board render never fails over it
 - Config: `applyDefaults` fills in what a partially written YAML section left out, so a half-specified `web:` or `auto_archive:` block cannot silently zero the rest; it also fills each `web.done_stats` card's defaults (nothing in a card is validated yet)
 
 ## Future Considerations (Post-MVP)
