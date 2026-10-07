@@ -118,7 +118,8 @@
   <section class="mt-5">
     <h2 class="text-xs font-semibold uppercase tracking-wider text-neutral-400">Attached files</h2>
     <ul class="mt-2 flex flex-wrap gap-1.5">
-      {{ range .Files }}<li class="chip chip-muted">{{ . }}</li>{{ end }}
+      {{ $id := .Card.ID }}
+      {{ range .Files }}<li><a class="chip chip-muted" href="/tasks/{{ $id }}/files/{{ . }}" target="_blank" rel="noopener">{{ . }}</a></li>{{ end }}
     </ul>
   </section>
   {{ end }}

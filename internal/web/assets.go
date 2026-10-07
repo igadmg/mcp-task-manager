@@ -1,7 +1,9 @@
 package web
 
 import (
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"io/fs"
 	"net/http"
 )
@@ -24,4 +26,16 @@ func staticHandler() http.Handler {
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		files.ServeHTTP(w, r)
 	})
+}
+
+// assetURL is the URL a page links an embedded asset by. The handler marks
+// assets immutable for a year, so the URL carries a content hash: a changed
+// asset is a new URL and an already-open browser never keeps a stale app.css.
+func assetURL(name string) string {
+	data, err := staticFS.ReadFile("static/" + name)
+	if err != nil {
+		panic("web: embedded static asset missing: " + err.Error())
+	}
+	sum := sha256.Sum256(data)
+	return "/static/" + name + "?v=" + hex.EncodeToString(sum[:4])
 }

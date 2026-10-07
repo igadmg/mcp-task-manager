@@ -47,6 +47,26 @@ func (h *handler) detailPanel(w http.ResponseWriter, r *http.Request) {
 	h.render(w, http.StatusOK, fragments, "_detail.html", view)
 }
 
+// taskFile serves one attached file as plain text, so the detail view can
+// link it into a new tab. Reading is the only thing it can do: the service
+// method is a read, and the filename is one path segment that the file
+// storage validates.
+func (h *handler) taskFile(w http.ResponseWriter, r *http.Request) {
+	resolved, ok := h.Project()
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	content, err := resolved.Service.ReadTaskFile(r.PathValue("id"), r.PathValue("name"))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	_, _ = w.Write([]byte(content))
+}
+
 func (h *handler) health(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = w.Write([]byte("ok"))

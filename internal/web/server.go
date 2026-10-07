@@ -59,6 +59,7 @@ func NewHandler(d Deps) http.Handler {
 	mux.HandleFunc("GET /board", h.boardFragment)
 	mux.HandleFunc("GET /tasks/{id}", h.detail)
 	mux.HandleFunc("GET /tasks/{id}/panel", h.detailPanel)
+	mux.HandleFunc("GET /tasks/{id}/files/{name}", h.taskFile)
 	mux.Handle("GET /static/", http.StripPrefix("/static/", staticHandler()))
 	mux.HandleFunc("GET /healthz", h.health)
 	return mux

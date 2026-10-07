@@ -786,3 +786,32 @@ func TestStatsChartNoLines(t *testing.T) {
 		t.Errorf("cards = %+v, want the card without a chart", got)
 	}
 }
+
+// TestTodoSubtaskNestsUnderInProgressParent pins the one case that renders
+// twice: the parent's card lists the work still ahead of it, and the
+// subtask keeps its own card in the To do queue.
+func TestTodoSubtaskNestsUnderInProgressParent(t *testing.T) {
+	snap := boardOf(
+		tk("p", "", task.StatusInProgress, task.PriorityHigh, fixedNow),
+		tk("s", "p", task.StatusTodo, task.PriorityHigh, fixedNow),
+	)
+	snap.Phases["p"] = task.PhaseImplementation
+	v := newBoardView(snap, nil, fixedNow, 5)
+
+	inProgress := column(v, "in_progress")
+	if got := cardIDs(inProgress.Cards); !slices.Equal(got, []string{"p"}) {
+		t.Fatalf("in progress = %v, want [p]", got)
+	}
+	if got := cardIDs(inProgress.Cards[0].Subtasks); !slices.Equal(got, []string{"s"}) {
+		t.Errorf("p nests %v, want [s]: a todo subtask shows on its parent's card", got)
+	}
+	if got := cardIDs(column(v, "todo").Cards); !slices.Equal(got, []string{"s"}) {
+		t.Errorf("todo = %v, want [s]: the subtask keeps its own card", got)
+	}
+	if impl := lane(v, task.PhaseImplementation); impl.Count != 1 {
+		t.Errorf("implementation lane Count = %d, want 1: a todo subtask counts in To do", impl.Count)
+	}
+	if inProgress.Count != 1 {
+		t.Errorf("in progress Count = %d, want 1", inProgress.Count)
+	}
+}

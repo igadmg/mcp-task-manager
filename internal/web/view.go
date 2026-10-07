@@ -170,8 +170,9 @@ type CardView struct {
 	// Branch is the git branch to show on the card: the final branch once
 	// the task has been delivered, its wip branch before that.
 	Branch string
-	// Subtasks are nested only when they sit in the same column as this
-	// card; otherwise they render standalone in their own column.
+	// Subtasks are nested when they sit in the same column as this card,
+	// plus the todo subtasks of an in-progress card, which also keep their
+	// own card in To do; otherwise they render standalone in their column.
 	Subtasks []CardView
 
 	createdAt time.Time // sorting only
@@ -279,18 +280,27 @@ func newBoardView(snap *task.BoardSnapshot, cfg *config.Config, now time.Time, p
 		byID[t.ID] = &card
 	}
 
-	// A card lives in the column of its own status. It nests inside its
-	// parent only when the parent sits in that same column - otherwise the
-	// same task would appear twice, or in a column it is not in.
+	// A card lives in the column of its own status, and nests inside its
+	// parent when the parent sits in that same column - otherwise the same
+	// task would show up in a column it is not in.
+	//
+	// One case nests and keeps its own card: a todo subtask of an
+	// in-progress parent. The parent's card then lists the work still
+	// ahead of it, while the subtask stays in the To do queue, which is
+	// what every column count and lane count is computed from.
 	roots := make(map[string][]*CardView, len(columns))
 	nested := make(map[string][]*CardView)
 	for _, t := range snap.Tasks {
 		card := byID[t.ID]
-		if parent, ok := byID[t.ParentID]; ok && parent.Status == card.Status {
+		parent, hasParent := byID[t.ParentID]
+		if hasParent && parent.Status == card.Status {
 			nested[t.ParentID] = append(nested[t.ParentID], card)
 			continue
 		}
 		roots[card.Status] = append(roots[card.Status], card)
+		if hasParent && parent.InProgress && card.Status == string(task.StatusTodo) {
+			nested[t.ParentID] = append(nested[t.ParentID], card)
+		}
 	}
 	for parentID, kids := range nested {
 		sortCards(kids)
@@ -342,8 +352,8 @@ func newBoardView(snap *task.BoardSnapshot, cfg *config.Config, now time.Time, p
 
 // newPhaseLanes buckets the In progress root cards, already sorted, into
 // one lane per task.Phases entry; lane i holds phase Order() i. A card goes
-// to the furthest phase of its group: itself plus its nested subtasks,
-// which in this column are exactly its in-progress subtasks. Bucketing is
+// to the furthest phase of its group: itself plus its nested in-progress
+// subtasks (nested todo subtasks belong to To do). Bucketing is
 // stable, so each lane keeps the column's priority, age, id order.
 func newPhaseLanes(roots []*CardView, snap *task.BoardSnapshot) []PhaseLaneView {
 	var lanes []PhaseLaneView
@@ -351,12 +361,18 @@ func newPhaseLanes(roots []*CardView, snap *task.BoardSnapshot) []PhaseLaneView 
 		lanes = append(lanes, PhaseLaneView{Phase: string(p)})
 	}
 	for _, card := range roots {
-		rank := snap.Phases[card.ID].Order()
+		rank, count := snap.Phases[card.ID].Order(), 1
 		for _, kid := range card.Subtasks {
+			// A nested todo subtask has its own To do card and no phase
+			// of its own, so it counts and ranks there, not here.
+			if !kid.InProgress {
+				continue
+			}
 			rank = max(rank, snap.Phases[kid.ID].Order())
+			count++
 		}
 		lanes[rank].Cards = append(lanes[rank].Cards, *card)
-		lanes[rank].Count += 1 + len(card.Subtasks)
+		lanes[rank].Count += count
 	}
 	return lanes
 }
