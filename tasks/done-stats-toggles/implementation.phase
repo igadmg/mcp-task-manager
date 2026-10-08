@@ -1,8 +1,0 @@
-version: 1
-phase: implementation
-runs:
-  - started_at: "2026-10-06T19:58:15Z"
-    started_by: igor.cwer
-    finished_at: "2026-10-06T19:59:46Z"
-    finished_by: igor.cwer
-    note: app.js legend toggles + 2 tests + docs

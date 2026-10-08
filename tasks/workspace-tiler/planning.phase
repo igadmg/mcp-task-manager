@@ -1,8 +1,0 @@
-version: 1
-phase: planning
-runs:
-  - started_at: "2026-10-08T06:34:59Z"
-    started_by: igor.cwer
-    finished_at: "2026-10-08T06:37:08Z"
-    finished_by: igor.cwer
-    note: 'plan.md: 7 phases (T1 href fix, T2 chain, T3 /tasks/{id} migration, T4 routes+shell, T5 CSS regen, T6 docs, T7 browser pass)'

@@ -1,8 +1,0 @@
-version: 1
-phase: research
-runs:
-  - started_at: "2026-10-06T18:18:35Z"
-    started_by: igor.cwer
-    finished_at: "2026-10-06T18:18:53Z"
-    finished_by: igor.cwer
-    note: 'gap closure: clock option, tz from clock, snapshot extension cost, unknown values, cumulative baseline'

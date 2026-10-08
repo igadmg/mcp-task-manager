@@ -1,8 +1,0 @@
-version: 1
-phase: planning
-runs:
-  - started_at: "2026-10-06T18:06:45Z"
-    started_by: igor.cwer
-    finished_at: "2026-10-06T18:07:07Z"
-    finished_by: igor.cwer
-    note: P1 config code+tests, P2 reference yaml+docs

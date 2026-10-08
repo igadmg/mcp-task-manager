@@ -1,9 +1,0 @@
-version: 1
-phase: research
-runs:
-  - started_at: "2026-10-07T20:35:33Z"
-    started_by: igor.cwer
-    finished_at: "2026-10-07T20:36:13Z"
-    finished_by: igor.cwer
-    tokens: 42000
-    note: 'closed the four gaps in research_request.md: caller sweep, ValidateID sharing, whitespace semantics, Windows shapes'

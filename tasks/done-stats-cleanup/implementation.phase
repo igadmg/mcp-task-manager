@@ -1,8 +1,0 @@
-version: 1
-phase: implementation
-runs:
-  - started_at: "2026-10-06T20:08:06Z"
-    started_by: igor.cwer
-    finished_at: "2026-10-06T20:15:13Z"
-    finished_by: igor.cwer
-    note: refactor only; board HTML unchanged except h3 class

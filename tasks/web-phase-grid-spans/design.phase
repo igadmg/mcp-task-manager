@@ -1,9 +1,0 @@
-version: 1
-phase: design
-runs:
-  - started_at: "2026-10-08T19:36:46Z"
-    started_by: igor.cwer
-    finished_at: "2026-10-08T19:37:30Z"
-    finished_by: igor.cwer
-    tokens: 42000
-    note: 'design: seven-track overlapping-lane grid, span via lane-from/lane-to classes, lane count = tasks whose own phase it is'

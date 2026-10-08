@@ -1,8 +1,0 @@
-version: 1
-phase: research
-runs:
-  - started_at: "2026-10-06T20:07:13Z"
-    started_by: igor.cwer
-    finished_at: "2026-10-06T20:07:31Z"
-    finished_by: igor.cwer
-    note: '5b dropped: humanize changes the split title'

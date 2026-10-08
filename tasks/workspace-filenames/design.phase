@@ -1,9 +1,0 @@
-version: 1
-phase: design
-runs:
-  - started_at: "2026-10-07T20:36:16Z"
-    started_by: igor.cwer
-    finished_at: "2026-10-07T20:37:14Z"
-    finished_by: igor.cwer
-    tokens: 28000
-    note: task.ValidateNameSegment/ValidateAttachedName in internal/task/name.go, storage calls it at all six sites, Service.files() nil guard
