@@ -67,8 +67,23 @@ func RunMCP(ctx context.Context, opts Options) error {
 	// calling it would dereference nothing.
 	var srv *server.MCPServer
 	resolver := newLazyResolver(&srv)
-	controller := web.NewController(web.Deps{Project: resolver.Current, Logger: logger}, opts.Web.Addr)
+	sessions := newSessions(logger)
+	controller := web.NewController(web.Deps{Sessions: sessions, Logger: logger}, opts.Web.Addr)
 	srv = newServerFor(resolver, controller)
+
+	// Resolving the project is also what publishes it on the dashboard, so
+	// a board exists the moment the first tool call lands - and the URL the
+	// operator needs is logged there rather than guessed.
+	resolver.OnResolve(func(resolved *project.Resolved) {
+		sess, err := sessions.Adopt(resolved)
+		if err != nil {
+			logger.Printf("could not publish the project on the dashboard: %v", err)
+			return
+		}
+		if url, running := controller.URL(); running {
+			logger.Printf("dashboard: %s%s/", url, sess.Base())
+		}
+	})
 
 	if opts.Web.Enabled {
 		// The dashboard is an extra, not a dependency: if the port is taken,
@@ -76,7 +91,9 @@ func RunMCP(ctx context.Context, opts Options) error {
 		if url, _, err := controller.Start(""); err != nil {
 			logger.Printf("could not start the dashboard: %v", err)
 		} else {
-			logger.Printf("dashboard: %s", url)
+			// No project is resolved yet, so this is the workspace list.
+			// The board's own URL is logged by the OnResolve above.
+			logger.Printf("dashboard: %s/ (workspaces)", url)
 		}
 	}
 	defer shutdown(controller)
@@ -107,13 +124,23 @@ func RunWeb(ctx context.Context, opts Options) error {
 	}
 	resolver := project.NewStatic(resolved)
 
-	controller := web.NewController(web.Deps{Project: resolver.Current, Logger: logger}, opts.Web.Addr)
+	sessions := newSessions(logger)
+	controller := web.NewController(web.Deps{Sessions: sessions, Logger: logger}, opts.Web.Addr)
+
+	// Publish the project before the listener accepts anything, so the very
+	// first request already finds its board.
+	sess, err := sessions.Adopt(resolved)
+	if err != nil {
+		return fmt.Errorf("publish the project on the dashboard: %w", err)
+	}
+
 	url, _, err := controller.Start(opts.Web.Addr)
 	if err != nil {
 		return fmt.Errorf("start dashboard: %w", err)
 	}
 	logger.Printf("%s", resolved.Resolution().Explain())
-	logger.Printf("dashboard: %s", url)
+	logger.Printf("dashboard: %s%s/", url, sess.Base())
+	logger.Printf("workspaces: %s/", url)
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -156,6 +183,39 @@ func shutdown(c *web.Controller) {
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
 	defer cancel()
 	_ = c.Shutdown(ctx)
+}
+
+// newSessions builds the dashboard's workspace registry.
+//
+// The workspace list is the web server's own config file, not a project's:
+// it is cross-project, so it must not depend on which project this process
+// was started from. A failure to read it is logged and not fatal - the
+// dashboard is an extra, and a typo in a personal config file must not stop
+// the MCP server from serving tools.
+func newSessions(logger *log.Logger) *web.Sessions {
+	wf, err := config.LoadWebFile()
+	if err != nil {
+		logger.Printf("could not read the workspace list: %v", err)
+		wf = &config.WebFile{}
+	}
+	return web.NewSessions(web.SessionsConfig{
+		Workspaces: wf.Workspaces,
+		ConfigPath: wf.Path,
+		Problems:   wf.Problems,
+		Logger:     logger,
+		Open:       openWorkspace,
+	})
+}
+
+// openWorkspace is the one place a dashboard-picked workspace becomes a
+// project. It goes through BuildReadOnly on purpose: opening a backlog
+// nobody asked to write must not migrate its layout or auto-archive it.
+func openWorkspace(ws config.Workspace) (*project.Resolved, error) {
+	cfg, err := config.LoadForRoot(ws.Path, ws.TasksDir)
+	if err != nil {
+		return nil, err
+	}
+	return project.BuildReadOnly(cfg)
 }
 
 // newLazyResolver returns a resolver whose roots step asks the client through

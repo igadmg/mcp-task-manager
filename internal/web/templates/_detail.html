@@ -1,7 +1,7 @@
 {{ if .Missing }}
 <div class="rounded-xl border border-white/10 bg-white/[0.02] p-6">
   <p class="text-sm font-medium text-neutral-200">This task is gone</p>
-  <p class="mt-2 text-sm text-neutral-500">It was deleted after the board was drawn. <a class="underline underline-offset-2" href="/">Refresh the board</a>.</p>
+  <p class="mt-2 text-sm text-neutral-500">It was deleted after the board was drawn. <a class="underline underline-offset-2" href="{{ nav "/" }}">Refresh the board</a>.</p>
 </div>
 {{ else }}
 <div class="rounded-xl border border-white/10 bg-neutral-900/60 p-5">
@@ -13,7 +13,7 @@
 
   <div class="flex items-baseline gap-2">
     <span class="meta">#{{ .Card.ID }}</span>
-    {{ if .Card.IsSubtask }}<a class="meta hover:text-neutral-300" href="/tasks/{{ .Card.ParentID }}">&#8627; {{ .Card.ParentID }}</a>{{ end }}
+    {{ if .Card.IsSubtask }}<a class="meta hover:text-neutral-300" href="{{ nav "/tasks/" .Card.ParentID }}">&#8627; {{ .Card.ParentID }}</a>{{ end }}
     <span class="chip chip-{{ .Card.Priority }} ml-auto">{{ .Card.Priority }}</span>
   </div>
   <h1 class="mt-1.5 text-base font-semibold leading-snug text-neutral-100">{{ .Card.Title }}</h1>
@@ -36,7 +36,7 @@
     <h2 class="text-xs font-semibold uppercase tracking-wider text-neutral-400">Blocked by</h2>
     <ul class="mt-2 space-y-1">
       {{ range .Card.Blockers }}
-      <li><a class="flex items-center gap-2 rounded px-1 py-1 hover:bg-white/5" href="/tasks/{{ .ID }}">
+      <li><a class="flex items-center gap-2 rounded px-1 py-1 hover:bg-white/5" href="{{ nav "/tasks/" .ID }}">
         <span class="meta">#{{ .ID }}</span>
         <span class="truncate text-xs text-neutral-300">{{ .Title }}</span>
         <span class="chip chip-muted ml-auto">{{ .Status }}</span>
@@ -51,7 +51,7 @@
     <h2 class="text-xs font-semibold uppercase tracking-wider text-neutral-400">Subtasks {{ .Card.SubtaskDone }}/{{ .Card.SubtaskTotal }}</h2>
     <ul class="mt-2 space-y-1">
       {{ range .Card.Subtasks }}
-      <li><a class="flex items-center gap-2 rounded px-1 py-1 hover:bg-white/5" href="/tasks/{{ .ID }}">
+      <li><a class="flex items-center gap-2 rounded px-1 py-1 hover:bg-white/5" href="{{ nav "/tasks/" .ID }}">
         <span class="meta">#{{ .ID }}</span>
         <span class="truncate text-xs text-neutral-300">{{ .Title }}</span>
         <span class="chip chip-muted ml-auto">{{ .Status }}</span>
@@ -69,7 +69,7 @@
       <li class="flex items-center gap-2 px-1 py-1">
         <span class="chip chip-muted">{{ .Type }}</span>
         <span class="meta">{{ .Direction }}</span>
-        <a class="truncate text-xs text-neutral-300 hover:text-neutral-100" href="/tasks/{{ .OtherID }}">#{{ .OtherID }} {{ .OtherTitle }}</a>
+        <a class="truncate text-xs text-neutral-300 hover:text-neutral-100" href="{{ nav "/tasks/" .OtherID }}">#{{ .OtherID }} {{ .OtherTitle }}</a>
       </li>
       {{ end }}
     </ul>
@@ -119,7 +119,7 @@
     <h2 class="text-xs font-semibold uppercase tracking-wider text-neutral-400">Attached files</h2>
     <ul class="mt-2 flex flex-wrap gap-1.5">
       {{ $id := .Card.ID }}
-      {{ range .Files }}<li><a class="chip chip-muted" href="/tasks/{{ $id }}/files/{{ . }}" target="_blank" rel="noopener">{{ . }}</a></li>{{ end }}
+      {{ range .Files }}<li><a class="chip chip-muted" href="{{ nav "/tasks/" $id "/files/" . }}" target="_blank" rel="noopener">{{ . }}</a></li>{{ end }}
     </ul>
   </section>
   {{ end }}

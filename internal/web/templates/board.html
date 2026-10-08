@@ -1,7 +1,7 @@
 {{ define "content" }}
 <div class="grid gap-5 lg:grid-cols-[minmax(0,1fr)_22rem]">
   <div class="min-w-0">
-    {{ if .Project.Resolved }}{{ template "_board.html" . }}{{ else }}{{ template "_unresolved.html" . }}{{ end }}
+    {{ template "_board.html" . }}
   </div>
 
   <!-- The panel is the only scroller in its column: sticky and capped at the

@@ -18,6 +18,9 @@ type fakeStarter struct {
 	url     string
 	addrs   []string
 	running bool
+	// session is the path SessionPath reports; empty means no session.
+	session string
+	pathFor []string
 }
 
 func (f *fakeStarter) Start(addr string) (string, bool, error) {
@@ -36,6 +39,19 @@ func (f *fakeStarter) URL() (string, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.url, f.running
+}
+
+// SessionPath stands in for the registry: the real controller returns the
+// path of the session serving that backlog. sessions nil means "nothing
+// registered", which is how the fallback-to-root branch is exercised.
+func (f *fakeStarter) SessionPath(tasksDir string) (string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pathFor = append(f.pathFor, tasksDir)
+	if f.session == "" {
+		return "", false
+	}
+	return f.session, true
 }
 
 func toolNames(tools []server.ServerTool) map[string]bool {
@@ -78,6 +94,47 @@ func TestStartWebUIIdempotent(t *testing.T) {
 	}
 }
 
+// Every dashboard URL is token-prefixed, so the tool has to report the
+// session's own path: the bare listener address only reaches the workspace
+// list, which is one click short of the board the agent asked for.
+func TestStartWebUIReportsTheSessionURL(t *testing.T) {
+	rs := newTestService(t)
+	web := &fakeStarter{session: "/tok3n/"}
+	handler := startWebUIHandler(rs, web)
+
+	result, err := handler(context.Background(), mcp.CallToolRequest{})
+	if err != nil {
+		t.Fatalf("start_web_ui error = %v", err)
+	}
+	if got := textOf(t, result); !strings.Contains(got, "http://127.0.0.1:7777/tok3n/") {
+		t.Errorf("start_web_ui = %q, want the tokenized URL", got)
+	}
+	if len(web.pathFor) != 1 {
+		t.Fatalf("SessionPath was asked %d times, want once", len(web.pathFor))
+	}
+	if web.pathFor[0] == "" {
+		t.Error("SessionPath was asked for an empty tasks directory")
+	}
+}
+
+// A lookup miss must not fail the tool: the root serves the workspace list,
+// which is a worse answer than the board but a working one.
+func TestStartWebUIFallsBackToTheRoot(t *testing.T) {
+	rs := newTestService(t)
+	handler := startWebUIHandler(rs, &fakeStarter{})
+
+	result, err := handler(context.Background(), mcp.CallToolRequest{})
+	if err != nil {
+		t.Fatalf("start_web_ui error = %v", err)
+	}
+	if result.IsError {
+		t.Fatal("a missing session made the tool fail")
+	}
+	if got := textOf(t, result); !strings.Contains(got, "http://127.0.0.1:7777/") {
+		t.Errorf("start_web_ui = %q, want the server root", got)
+	}
+}
+
 func TestStartWebUIReportsStartFailure(t *testing.T) {
 	rs := newTestService(t)
 	handler := startWebUIHandler(rs, failingStarter{})
@@ -96,7 +153,8 @@ type failingStarter struct{}
 func (failingStarter) Start(string) (string, bool, error) {
 	return "", false, errors.New("address already in use")
 }
-func (failingStarter) URL() (string, bool) { return "", false }
+func (failingStarter) URL() (string, bool)               { return "", false }
+func (failingStarter) SessionPath(string) (string, bool) { return "", false }
 
 func TestBuildOmitsStartWebUIWhenNil(t *testing.T) {
 	names := toolNames(Build(nil, []string{"feature"}, []string{"blocked_by"}, nil))

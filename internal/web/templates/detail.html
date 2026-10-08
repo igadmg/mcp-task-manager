@@ -1,7 +1,7 @@
 {{ define "title" }}#{{ .Card.ID }} {{ .Card.Title }}{{ end }}
 {{ define "content" }}
 <div class="mx-auto max-w-3xl">
-  <a href="/" class="meta mb-3 inline-block hover:text-neutral-300">&larr; back to the board</a>
+  <a href="{{ nav "/" }}" class="meta mb-3 inline-block hover:text-neutral-300">&larr; back to the board</a>
   {{ template "_detail.html" . }}
 </div>
 {{ end }}

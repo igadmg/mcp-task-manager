@@ -16,9 +16,11 @@ import (
 func newTestController(t *testing.T) *Controller {
 	t.Helper()
 	rs, _, _ := testsupport.NewBacklog(t)
+	sessions := newTestSessions(t)
+	adoptBacklog(t, sessions, rs)
 	return NewController(Deps{
-		Project: rs.Current,
-		Logger:  log.New(io.Discard, "", 0),
+		Sessions: sessions,
+		Logger:   log.New(io.Discard, "", 0),
 	}, "127.0.0.1:0")
 }
 

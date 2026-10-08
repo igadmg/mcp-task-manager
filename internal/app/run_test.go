@@ -7,11 +7,13 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/gpayer/mcp-task-manager/internal/config"
+	"github.com/gpayer/mcp-task-manager/internal/project"
 	"github.com/gpayer/mcp-task-manager/internal/task"
 	"github.com/gpayer/mcp-task-manager/internal/testsupport"
 	"github.com/gpayer/mcp-task-manager/internal/web"
@@ -68,7 +70,14 @@ func TestRunWebStartsAndShutsDown(t *testing.T) {
 		done <- RunWeb(ctx, Options{Web: config.WebConfig{Enabled: true, Addr: addr}, Stderr: io.Discard})
 	}()
 
-	if body := waitForBoard(t, "http://"+addr+"/"); !strings.Contains(body, "Visible on the board") {
+	// The root is the workspace list; RunWeb publishes the project it
+	// resolved as a session, so the board is behind that session's token.
+	welcome := waitForBoard(t, "http://"+addr+"/")
+	m := sessionHref.FindStringSubmatch(welcome)
+	if m == nil {
+		t.Fatalf("the workspace list does not link the resolved project:\n%s", welcome)
+	}
+	if body := waitForBoard(t, "http://"+addr+m[1]); !strings.Contains(body, "Visible on the board") {
 		t.Errorf("board did not render the seeded task:\n%s", body)
 	}
 
@@ -145,10 +154,15 @@ func TestRunMCPStartsWebWhenEnabled(t *testing.T) {
 	stop := runMCP(t, Options{Web: config.WebConfig{Enabled: true, Addr: addr}, Stderr: io.Discard})
 	defer stop()
 
-	// No client has made a tool call yet, so the project is unresolved by
-	// design and the board serves its placeholder rather than resolving.
-	if body := waitForBoard(t, "http://"+addr+"/"); !strings.Contains(body, "No project resolved yet") {
-		t.Errorf("board did not serve the placeholder before the first tool call:\n%s", body)
+	// No client has made a tool call yet, so nothing is resolved by design
+	// and the root is the workspace list: there is no session to serve and
+	// a GET may not create one.
+	body := waitForBoard(t, "http://"+addr+"/")
+	if !strings.Contains(body, "No workspaces are configured") {
+		t.Errorf("the root is not the empty workspace list before the first tool call:\n%s", body)
+	}
+	if sessionHref.MatchString(body) {
+		t.Error("a session exists before any tool call resolved a project")
 	}
 }
 
@@ -175,13 +189,30 @@ func TestRunMCPStopsOnContextCancel(t *testing.T) {
 // TestRunMCPWebSharesResolution is the single-process claim: the dashboard and
 // the MCP tools read the same *task.Service, so a task created through a tool
 // call shows up on the board without anything being reloaded.
+//
+// It also pins the two halves of the read-only rule. Before a tool call there
+// is no session at all, because resolving is what publishes one and only a
+// tool call may resolve; afterwards the board is reachable, under a token.
 func TestRunMCPWebSharesResolution(t *testing.T) {
 	projectWithATask(t)
 
+	logger := log.New(io.Discard, "", 0)
 	var srv *server.MCPServer
 	resolver := newLazyResolver(&srv)
-	controller := web.NewController(web.Deps{Project: resolver.Current, Logger: log.New(io.Discard, "", 0)}, "127.0.0.1:0")
+	sessions := web.NewSessions(web.SessionsConfig{Logger: logger})
+	controller := web.NewController(web.Deps{Sessions: sessions, Logger: logger}, "127.0.0.1:0")
 	srv = newServerFor(resolver, controller)
+
+	// What RunMCP wires: resolving publishes the project on the dashboard.
+	var published *web.Session
+	resolver.OnResolve(func(resolved *project.Resolved) {
+		sess, err := sessions.Adopt(resolved)
+		if err != nil {
+			t.Errorf("Adopt() error = %v", err)
+			return
+		}
+		published = sess
+	})
 
 	url, _, err := controller.Start("")
 	if err != nil {
@@ -189,8 +220,12 @@ func TestRunMCPWebSharesResolution(t *testing.T) {
 	}
 	defer controller.Shutdown(context.Background())
 
-	if body := waitForBoard(t, url+"/"); !strings.Contains(body, "No project resolved yet") {
-		t.Fatal("board resolved the project on its own; only a tool call may do that")
+	body := waitForBoard(t, url+"/")
+	if !strings.Contains(body, "No workspaces are configured") {
+		t.Fatalf("the root is not the empty workspace list; a GET resolved the project:\n%s", body)
+	}
+	if len(sessions.Live()) != 0 {
+		t.Fatal("a session exists before any tool call resolved the project")
 	}
 
 	// What withService does on the first tool call.
@@ -198,14 +233,26 @@ func TestRunMCPWebSharesResolution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
+	if published == nil {
+		t.Fatal("resolving did not publish the project on the dashboard")
+	}
 	if _, err := resolved.Service.Create("Made through the service", "", task.PriorityCritical, "feature", "", "99"); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 
-	body := waitForBoard(t, url+"/board")
+	// start_web_ui reports exactly this path.
+	path, found := controller.SessionPath(resolved.Config.TasksDir())
+	if !found || path != published.Base()+"/" {
+		t.Errorf("SessionPath() = %q, %v; want %q", path, found, published.Base()+"/")
+	}
+
+	body = waitForBoard(t, url+published.Base()+"/board")
 	for _, want := range []string{"Visible on the board", "Made through the service"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("board is missing %q; the transports are not sharing one service", want)
 		}
 	}
 }
+
+// sessionHref matches the workspace list's link into a live session.
+var sessionHref = regexp.MustCompile(`href="(/[A-Za-z0-9_-]{16,}/)"`)

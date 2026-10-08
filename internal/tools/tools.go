@@ -18,6 +18,10 @@ import (
 type WebStarter interface {
 	Start(addr string) (url string, already bool, err error)
 	URL() (url string, running bool)
+	// SessionPath is the path, under the listener's base URL, that serves
+	// the backlog in tasksDir. Every dashboard URL is token-prefixed, so
+	// the base URL alone only reaches the workspace list.
+	SessionPath(tasksDir string) (path string, found bool)
 }
 
 // Build assembles the full tool set. The task types and relation types are

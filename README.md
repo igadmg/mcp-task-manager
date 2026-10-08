@@ -84,19 +84,35 @@ The same binary also serves a read-only kanban dashboard of the backlog:
 
 ```bash
 mcp-task-manager serve web --addr 127.0.0.1:7777
-# then open http://127.0.0.1:7777/
+# then open http://127.0.0.1:7777/ and pick a workspace
 ```
 
-One process, two transports: the dashboard and the MCP tools share a single
-resolved project and a single task service, so a task created through a tool
-call shows up on the board on the next refresh (every 5 seconds).
+`/` is a workspace list, not a board. Every URL that shows task data starts
+with a session token — `http://127.0.0.1:7777/<token>/` — so one server can
+show several backlogs at once: the project this process resolved, plus
+whatever you list in its [workspace file](#the-web-servers-own-config-file).
 
-- From an MCP client, set `web.enabled` in `mcp-tasks.yaml` (or `MCP_WEB_ENABLED=1`) to bring the board up with the server, or call the `start_web_ui` tool to start it on demand.
-- `serve web` resolves the project eagerly, so the board has data from the very first request. Started from inside the MCP server it comes up before the client has named a project and shows a placeholder until the first tool call.
+**The token is not a password.** It is a namespace that picks which backlog is
+shown. Tokens are random, so a URL is not guessable from a path, but there is
+no authentication here and nothing should be built as if there were: a token
+lands in the server log, in your browser history and in the `Referer` of any
+link you follow off the page. The listener is loopback-only unless you change
+its address, and that is the only thing here resembling a boundary. Sessions
+also live only as long as the process, so a restart invalidates every link
+(the page says so and offers the list again).
+
+The dashboard and the MCP tools still share one resolved project and one task
+service, so a task created through a tool call shows up on that project's
+board on the next refresh (every 5 seconds). Other workspaces are opened
+read-only, and see another process's writes when the index notices the
+directory changed.
+
+- From an MCP client, set `web.enabled` in `mcp-tasks.yaml` (or `MCP_WEB_ENABLED=1`) to bring the board up with the server, or call the `start_web_ui` tool to start it on demand. Either way the project is published as a session as soon as it is resolved, and `start_web_ui` reports the board's tokenized URL.
+- `serve web` resolves the project eagerly and publishes it before the listener accepts anything, so the first request already finds its board. Started from inside the MCP server, the list comes up before the client has named a project and that project's board appears there after the first tool call.
 - `serve web --mcp` additionally serves MCP over stdio in the same process. It is off by default: a terminal has a TTY on stdin, and a JSON-RPC reader there would eat your keystrokes.
 - Tailwind CSS and htmx are compiled into the binary, so the page renders with no network access.
 - In progress groups its cards into Research / Design / Planning / Implementation lanes, each shifted right by half a card. A task's lane is the phase of its latest started run in its `<phase>.phase` records; a task without records falls back to the workflow files (`research`, `design`, `plan`) attached to it.
-- Done shows statistics instead of task cards: per configured field (by default `priority`, `type`, `resolution`) one stacked bar per value with the done / in progress / todo split, the closures of the last 24 h highlighted, and a label like `7/12 · 5 open · +2`; and line charts of tasks created and closed per day (plain, cumulative, or one line per value of a field), drawn as inline SVG on the server with a legend, day tooltips and the lines listed in `hidden` switched off. Clicking a legend entry shows or hides its line; the choice is kept per browser (in `localStorage`, per card `id` and line) and survives the board refresh, and the toggle sends no request. A done task stays reachable at `/tasks/{id}`. See `web.done_stats` under Configuration.
+- Done shows statistics instead of task cards: per configured field (by default `priority`, `type`, `resolution`) one stacked bar per value with the done / in progress / todo split, the closures of the last 24 h highlighted, and a label like `7/12 · 5 open · +2`; and line charts of tasks created and closed per day (plain, cumulative, or one line per value of a field), drawn as inline SVG on the server with a legend, day tooltips and the lines listed in `hidden` switched off. Clicking a legend entry shows or hides its line; the choice is kept per browser (in `localStorage`, per card `id` and line) and survives the board refresh, and the toggle sends no request. A done task stays reachable at `/<token>/tasks/{id}`. See `web.done_stats` under Configuration.
 - Every card shows who created the task and when; in-progress cards with phase records also show the current phase, who started it and when, and the tokens spent so far. The detail view lists every phase run.
 
 **The HTTP surface is read-only and unauthenticated.** No route mutates a task,
@@ -450,7 +466,7 @@ To make the server available across every workspace instead of configuring it pe
 
 | Tool | Description |
 |------|-------------|
-| `start_web_ui` | Start the read-only kanban dashboard and return its URL. Idempotent: a second call reports the running URL instead of binding another port. Optional `addr` (`host:port`) |
+| `start_web_ui` | Start the read-only kanban dashboard and return the token-prefixed URL of this project's board (`http://host:port/<token>/`). Idempotent: a second call reports the running URL instead of binding another port. Optional `addr` (`host:port`) |
 
 ### Relations
 
@@ -515,6 +531,44 @@ title keeps the toggles.
 The `task_types` list defines the allowed values for every task `type` field in the CLI, MCP tools, and task frontmatter. If omitted, the default allowed values are `feature` and `bug`.
 The `relation_types` list defines the allowed values for every relation `type` field in MCP tools and task metadata. If omitted, the default allowed values are `blocked_by`, `relates_to`, and `duplicate_of`.
 
+### The web server's own config file
+
+The dashboard's workspace list is deliberately **not** in a project's
+`mcp-tasks.yaml`: it is cross-project, so it must not depend on which project
+the server happened to be started from. It lives in a user-level file, looked
+up in this order:
+
+1. `$MCP_WEB_CONFIG` — a path you name explicitly. If it does not exist, that
+   is an error: a typo must not degrade into silence.
+2. `$XDG_CONFIG_HOME/mcp-task-manager/web.yaml`
+3. `~/.config/mcp-task-manager/web.yaml`
+
+```yaml
+version: 1            # 1 is the only supported version
+workspaces:
+  - name: my-project  # optional; defaults to the base name of path
+    path: ~/Workspace/my-project   # the PROJECT ROOT, not the tasks directory
+  - name: other
+    path: /srv/other
+    tasks_dir: .tasks # optional; overrides that project's own tasks_dir
+```
+
+`path` is the project root; the tasks directory under it is resolved by the
+same rules as everywhere else (an explicit `tasks_dir`, else that project's
+own `tasks_dir`, else `.tasks` or a legacy `tasks/`), so an entry does not
+have to restate what the project already says. A leading `~` is expanded;
+nothing else is.
+
+**No file is not an error.** There are then no workspaces to pick, the page
+says so, and a dashboard embedded in an MCP server still serves the project
+that server resolved — the normal case.
+
+**A bad entry is reported, not rejected.** An empty or relative `path`, a path
+that is not a directory, a duplicate name, a duplicate backlog or an
+unsupported `version` is written to stderr and shown on the page, and the
+entry is listed as unavailable with its reason rather than disappearing. One
+mistyped path cannot hide the rest, and it cannot break the MCP server either.
+
 ### Environment Variables
 
 | Variable | Description | Default |
@@ -525,6 +579,8 @@ The `relation_types` list defines the allowed values for every relation `type` f
 | `MCP_ROOT_SOURCE` | Restricts resolution to a single source: `MCP_PROJECT_DIR`, `CLAUDE_PROJECT_DIR`, `roots` or `cwd`. Useful for testing the roots path, which the environment variables would otherwise always win | unset |
 | `MCP_WEB_ENABLED` | Starts the web dashboard with the MCP server. Parsed as a bool; an unparseable value is ignored | `false` |
 | `MCP_WEB_ADDR` | Dashboard listen address, `host:port`. Never enables the dashboard on its own | `127.0.0.1:7777` |
+| `MCP_WEB_CONFIG` | The web server's own config file (the workspace list). Unlike the well-known locations, a path named here that does not exist is an error | unset |
+| `XDG_CONFIG_HOME` | Config root searched for `mcp-task-manager/web.yaml` before `~/.config` | unset |
 | `MCP_GIT_BRANCHING` | Turns git branch-per-task on or off. Parsed as a bool; an unparseable value is ignored | `false` |
 
 ### Git Branch-per-Task
@@ -664,7 +720,7 @@ mcp-task-manager/
 │   ├── testsupport/         # Shared test backlog helpers
 │   ├── tools/               # MCP tool handlers
 │   ├── vcs/                 # git wrapper for branch-per-task
-│   └── web/                 # Read-only kanban dashboard (htmx + Tailwind)
+│   └── web/                 # Read-only kanban dashboard (htmx + Tailwind), one session per workspace
 ├── plugins/mcp-task-manager/ # The installable Claude Code / Codex plugin: skills, commands, .mcp.json
 ├── .claude-plugin/          # Claude Code marketplace catalog (points at plugins/mcp-task-manager)
 ├── .agents/plugins/         # Codex marketplace catalog (points at plugins/mcp-task-manager)

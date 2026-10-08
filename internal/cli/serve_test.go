@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -58,18 +59,19 @@ func TestServeWebServesTheBoardAndReturnsOnCancel(t *testing.T) {
 	}()
 
 	client := http.Client{Timeout: time.Second}
-	deadline := time.Now().Add(5 * time.Second)
-	var body string
-	for time.Now().Before(deadline) {
-		resp, err := client.Get("http://" + addr + "/")
-		if err == nil {
-			raw, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			body = string(raw)
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
+	base := "http://" + addr
+
+	// The root is the workspace list now; serve web publishes the project
+	// it resolved as a session, so the board lives behind that session's
+	// token. Reading the token off the page keeps the test out of the
+	// stderr buffer the server goroutine is still writing to.
+	welcome := fetchUntil(t, client, base+"/", "Open now")
+	m := sessionHref.FindStringSubmatch(welcome)
+	if m == nil {
+		t.Fatalf("the workspace list does not link a session:\n%s", welcome)
 	}
+
+	body := fetchUntil(t, client, base+m[1], "Served task")
 	if !strings.Contains(body, "Served task") {
 		t.Errorf("board did not render the backlog:\n%s", body)
 	}
@@ -109,4 +111,29 @@ func TestServeWebBadAddrExitsNonZero(t *testing.T) {
 	if !strings.Contains(stderr.String(), "Error:") {
 		t.Errorf("stderr = %q, want an error message", stderr.String())
 	}
+}
+
+// sessionHref matches the workspace list's link into a live session.
+var sessionHref = regexp.MustCompile(`href="(/[A-Za-z0-9_-]{16,}/)"`)
+
+// fetchUntil polls url until the body contains want, or the deadline passes.
+// The server is still starting up when the test begins, so a miss is a
+// retry, not a failure.
+func fetchUntil(t *testing.T, client http.Client, url, want string) string {
+	t.Helper()
+	var body string
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(url)
+		if err == nil {
+			raw, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			body = string(raw)
+			if strings.Contains(body, want) {
+				return body
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return body
 }

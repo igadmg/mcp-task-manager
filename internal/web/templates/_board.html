@@ -1,10 +1,10 @@
-<div id="board" hx-get="/board" hx-trigger="every {{ .PollSeconds }}s" hx-swap="outerHTML">
+<div id="board" hx-get="{{ nav "/board" }}" hx-trigger="every {{ .PollSeconds }}s" hx-swap="outerHTML">
   {{ if .DangerZone }}
   <div class="mb-4 rounded-xl border border-amber-400/30 bg-amber-400/[0.06] px-4 py-3">
     <p class="text-sm font-medium text-amber-200">An agent may be working right now</p>
     <p class="mt-1 text-sm text-amber-100/70">
       In progress:
-      {{ range $i, $d := .DangerZone }}{{ if $i }}, {{ end }}<a class="underline decoration-amber-400/40 underline-offset-2 hover:decoration-amber-300" href="/tasks/{{ $d.ID }}">#{{ $d.ID }} {{ $d.Title }}</a>{{ end }}.
+      {{ range $i, $d := .DangerZone }}{{ if $i }}, {{ end }}<a class="underline decoration-amber-400/40 underline-offset-2 hover:decoration-amber-300" href="{{ nav "/tasks/" $d.ID }}">#{{ $d.ID }} {{ $d.Title }}</a>{{ end }}.
       Files in these areas can change under you.
     </p>
   </div>

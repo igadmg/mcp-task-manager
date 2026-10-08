@@ -130,7 +130,7 @@ func (r *Resolver) resolve(ctx context.Context) (*Resolved, error) {
 
 // Build constructs the storage, index and task service for an already loaded
 // config, running Initialize. It is the single construction site for a
-// project: Resolver.resolve and the CLI both go through it.
+// project that owns writes: Resolver.resolve and the CLI both go through it.
 //
 // The service always gets the per-user current-task store and the user's
 // identity (one `git config` call, falling back to the OS user). Git itself
@@ -139,6 +139,33 @@ func (r *Resolver) resolve(ctx context.Context) (*Resolved, error) {
 // fails on its first start_task, not here. extra options apply last, so
 // tests can override any of these.
 func Build(cfg *config.Config, extra ...task.ServiceOption) (*Resolved, error) {
+	return build(cfg, false, extra...)
+}
+
+// BuildReadOnly constructs a project for a consumer that may not write to the
+// backlog: the web dashboard opening a workspace nobody resolved for it.
+//
+// It differs from Build in exactly two ways, and both are load-bearing:
+//
+//   - Initialize is replaced by InitializeReadOnly, so opening a workspace
+//     never migrates the legacy flat layout, never auto-archives and never
+//     removes the retired index cache file. A GET must not be able to move a
+//     file on disk, and neither may a workspace the operator merely picked
+//     from a list.
+//   - Git is not injected, even when cfg.Git.Branching is set. The read-only
+//     service never runs a branch flow, so handing it a repository would
+//     only widen what a bug could reach.
+//
+// The identity and the current-task / phase stores are kept: all three are
+// reads, and dropping them would make a read-only project answer differently
+// from a writable one for no reason.
+func BuildReadOnly(cfg *config.Config, extra ...task.ServiceOption) (*Resolved, error) {
+	return build(cfg, true, extra...)
+}
+
+// build is the shared body of Build and BuildReadOnly, so the two cannot
+// drift apart in anything but the two documented differences.
+func build(cfg *config.Config, readOnly bool, extra ...task.ServiceOption) (*Resolved, error) {
 	tasksDir := cfg.TasksDir()
 	mdStorage := storage.NewMarkdownStorage(tasksDir)
 	index := storage.NewIndex(tasksDir, mdStorage)
@@ -153,13 +180,18 @@ func Build(cfg *config.Config, extra ...task.ServiceOption) (*Resolved, error) {
 		task.WithPhaseStore(mdStorage),
 		task.WithIdentity(task.Identity{Name: id.Name, FromGitEmail: id.FromGitEmail}),
 	}
-	if cfg.Git.Branching {
+	if cfg.Git.Branching && !readOnly {
 		opts = append(opts, task.WithGit(vcs.New(root, tasksDir)))
 	}
 	opts = append(opts, extra...)
 
 	svc := task.NewService(mdStorage, mdStorage, mdStorage, index, cfg.TaskTypes, cfg, opts...)
-	if err := svc.Initialize(); err != nil {
+
+	initialize := svc.Initialize
+	if readOnly {
+		initialize = svc.InitializeReadOnly
+	}
+	if err := initialize(); err != nil {
 		return nil, err
 	}
 

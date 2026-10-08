@@ -164,7 +164,8 @@ func newMockIndex() *mockIndex {
 	}
 }
 
-func (m *mockIndex) Load() error { return nil }
+func (m *mockIndex) Load() error    { return nil }
+func (m *mockIndex) Rebuild() error { return nil }
 
 func (m *mockIndex) Get(id string) (*Task, bool) {
 	t, ok := m.tasks[id]

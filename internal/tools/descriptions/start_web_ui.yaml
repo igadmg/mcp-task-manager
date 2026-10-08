@@ -1,9 +1,13 @@
 description: |
-  Start the read-only web dashboard for this project's backlog and return its URL.
-  The dashboard shows the tasks as a kanban board (todo / in progress / done) with
-  priorities, blockers, subtasks and attached files, and highlights what is
-  currently in progress. It runs inside this same server process and mutates
-  nothing. Calling this twice is safe: the second call reports the URL already
-  in use instead of binding another port.
+  Start the read-only web dashboard for this project's backlog and return the URL
+  of its board. The dashboard shows the tasks as a kanban board (todo / in
+  progress / done) with priorities, blockers, subtasks and attached files, and
+  highlights what is currently in progress. It runs inside this same server
+  process and mutates nothing. Calling this twice is safe: the second call
+  reports the URL already in use instead of binding another port.
+
+  The URL carries a session token (http://host:port/<token>/) because one server
+  can show several backlogs at once. The token picks which backlog is shown; it is
+  not a password, and it stops working when this server process ends.
 params:
   addr: "Listen address as host:port, for example 127.0.0.1:7777. Omit it to use the address from mcp-tasks.yaml (default 127.0.0.1:7777). Ignored when the dashboard is already running."

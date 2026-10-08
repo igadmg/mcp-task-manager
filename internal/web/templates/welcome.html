@@ -1,0 +1,89 @@
+{{ define "title" }}Workspaces{{ end }}
+{{ define "content" }}
+<div class="mx-auto max-w-3xl">
+  {{ if .Error }}
+  <p class="mb-4 rounded-lg border border-rose-400/30 bg-rose-400/[0.06] px-3 py-2 text-sm text-rose-200">{{ .Error }}</p>
+  {{ end }}
+
+  <section>
+    <h1 class="text-base font-semibold leading-snug text-neutral-100">Workspaces</h1>
+    <p class="mt-1 text-sm text-neutral-500">
+      Pick a backlog to open its board. Each one gets its own URL for as long as
+      this server runs; a restart invalidates every link.
+    </p>
+
+    {{ if .Workspaces }}
+    <ul class="mt-4 flex flex-col gap-2">
+      {{ range .Workspaces }}
+      <li class="rounded-xl border border-white/10 bg-white/[0.02] px-4 py-3">
+        <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <span class="text-sm text-neutral-100">{{ .Name }}</span>
+          <span class="meta truncate">{{ .Path }}</span>
+          {{ if .TasksDir }}<span class="chip chip-muted">{{ .TasksDir }}</span>{{ end }}
+          <span class="ml-auto">
+            {{ if .Problem }}
+            <span class="chip chip-blocked" title="{{ .Problem }}">unavailable</span>
+            {{ else if .Live }}
+            <a class="chip chip-live" href="{{ .Href }}">open board</a>
+            {{ else }}
+            <form method="post" action="/sessions">
+              <input type="hidden" name="workspace" value="{{ .Name }}">
+              <button type="submit" class="chip chip-muted hover:text-neutral-100">open</button>
+            </form>
+            {{ end }}
+          </span>
+        </div>
+        {{ if .Problem }}<p class="meta mt-1 text-rose-300/80">{{ .Problem }}</p>{{ end }}
+      </li>
+      {{ end }}
+    </ul>
+    {{ else }}
+    <p class="mt-4 rounded-xl border border-dashed border-white/10 p-6 text-sm text-neutral-500">
+      No workspaces are configured.
+      {{ if .ConfigPath }}
+      List them under <code class="text-neutral-400">workspaces:</code> in
+      <code class="text-neutral-400">{{ .ConfigPath }}</code>.
+      {{ else }}
+      Create <code class="text-neutral-400">~/.config/mcp-task-manager/web.yaml</code>
+      with a <code class="text-neutral-400">workspaces:</code> list.
+      {{ end }}
+    </p>
+    {{ end }}
+  </section>
+
+  {{ if .Sessions }}
+  <section class="mt-6">
+    <h2 class="text-xs font-semibold uppercase tracking-wider text-neutral-400">Open now</h2>
+    <ul class="mt-2 flex flex-col gap-1.5">
+      {{ range .Sessions }}
+      <li>
+        <a class="flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded px-1 py-1 hover:bg-white/5" href="{{ .Href }}">
+          <span class="text-sm text-neutral-200">{{ .Name }}</span>
+          <span class="meta truncate">{{ .TasksDir }}</span>
+          <span class="chip chip-muted ml-auto">{{ .Source }}</span>
+        </a>
+      </li>
+      {{ end }}
+    </ul>
+  </section>
+  {{ end }}
+
+  {{ if .Problems }}
+  <section class="mt-6">
+    <h2 class="text-xs font-semibold uppercase tracking-wider text-neutral-400">Configuration problems</h2>
+    <ul class="mt-2 flex flex-col gap-1">
+      {{ range .Problems }}<li class="meta text-amber-200/80">{{ . }}</li>{{ end }}
+    </ul>
+  </section>
+  {{ end }}
+
+  <p class="meta mt-6">
+    {{ if .ConfigPath }}The list comes from {{ .ConfigPath }}.{{ else }}No workspace file was found; create ~/.config/mcp-task-manager/web.yaml to list some.{{ end }}
+  </p>
+  <p class="meta mt-1">
+    A workspace URL is a namespace, not a password: it is in this server's log and
+    in your browser history, and the server listens on loopback only unless you
+    changed its address.
+  </p>
+</div>
+{{ end }}

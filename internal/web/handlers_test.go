@@ -2,9 +2,7 @@ package web
 
 import (
 	"context"
-	"io"
 	"io/fs"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -25,18 +23,46 @@ import (
 // fixedNow keeps "x ago" strings deterministic.
 var fixedNow = time.Date(2026, 1, 2, 15, 4, 5, 0, time.UTC)
 
-func newTestHandler(t *testing.T) (http.Handler, *task.Service, string) {
-	t.Helper()
-	rs, svc, dir := testsupport.NewBacklog(t)
-	h := NewHandler(Deps{
-		Project: rs.Current,
-		Logger:  log.New(io.Discard, "", 0),
-		Now:     func() time.Time { return fixedNow },
-	})
-	return h, svc, dir
+// testHandler is the route table plus the token of the one session the test
+// backlog is served under, so a test can keep writing session paths without
+// a prefix.
+type testHandler struct {
+	http.Handler
+	base string
 }
 
-func get(t *testing.T, h http.Handler, path string) *httptest.ResponseRecorder {
+func newTestHandler(t *testing.T) (*testHandler, *task.Service, string) {
+	t.Helper()
+	rs, svc, dir := testsupport.NewBacklog(t)
+	sessions := newTestSessions(t)
+	sess := adoptBacklog(t, sessions, rs)
+	h := NewHandler(Deps{
+		Sessions: sessions,
+		Logger:   discardLogger(),
+		Now:      func() time.Time { return fixedNow },
+	})
+	return &testHandler{Handler: h, base: sess.Base()}, svc, dir
+}
+
+// isGlobalPath reports whether a path lives outside the token space. Only
+// these two do; everything else is a session route.
+func isGlobalPath(path string) bool {
+	return path == "/healthz" || strings.HasPrefix(path, "/static/") || strings.HasPrefix(path, "/sessions")
+}
+
+// get fetches a session path, prefixing it with the test session's token.
+// The global routes are passed through untouched.
+func get(t *testing.T, h *testHandler, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	if !isGlobalPath(path) {
+		path = h.base + path
+	}
+	return getRaw(t, h, path)
+}
+
+// getRaw fetches a path verbatim, for the cases that are about the URL space
+// itself: the welcome page, an unknown token, a global route.
+func getRaw(t *testing.T, h http.Handler, path string) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
@@ -247,27 +273,46 @@ func TestNoExternalAssetReferences(t *testing.T) {
 }
 
 // TestNoMutatingRoutes asserts the read-only guarantee twice over: every
-// non-GET method is refused, and a full GET sweep leaves the tasks directory
-// byte for byte as it was.
+// non-GET method on a route that shows task data is refused by the mux
+// itself, and a full GET sweep leaves the tasks directory byte for byte as
+// it was.
+//
+// 405 and not merely "an error": the session mux registers GET patterns
+// only, so ServeMux refuses the method before any handler exists to run.
+// That is the structural form of the rule, and a 404 here would mean a
+// pattern had quietly been registered for another method.
 func TestNoMutatingRoutes(t *testing.T) {
 	h, svc, dir := newTestHandler(t)
 	seedBoard(t, svc)
 
-	paths := []string{"/", "/board", "/tasks/1", "/tasks/1/panel", "/healthz", "/static/app.css"}
-	for _, path := range paths {
+	sessionPaths := []string{"/", "/board", "/tasks/1", "/tasks/1/panel", "/tasks/1/files/research"}
+	for _, path := range sessionPaths {
+		for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest(method, h.base+path, nil))
+			if rec.Code != http.StatusMethodNotAllowed {
+				t.Errorf("%s %s = %d, want 405", method, h.base+path, rec.Code)
+			}
+		}
+	}
+
+	// The global routes carry no task data, so all that matters is that
+	// they never succeed for a mutating method.
+	for _, path := range []string{"/healthz", "/static/app.css"} {
 		for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, httptest.NewRequest(method, path, nil))
-			if rec.Code != http.StatusMethodNotAllowed {
-				t.Errorf("%s %s = %d, want 405", method, path, rec.Code)
+			if rec.Code >= 200 && rec.Code < 300 {
+				t.Errorf("%s %s = %d, want a refusal", method, path, rec.Code)
 			}
 		}
 	}
 
 	before := snapshotDir(t, dir)
-	for _, path := range paths {
+	for _, path := range append(sessionPaths, "/healthz", "/static/app.css") {
 		get(t, h, path)
 	}
+	getRaw(t, h, "/")
 	if after := snapshotDir(t, dir); after != before {
 		t.Errorf("a GET sweep changed the tasks directory:\nbefore:\n%s\nafter:\n%s", before, after)
 	}
@@ -303,43 +348,82 @@ func TestEscaping(t *testing.T) {
 	}
 }
 
-// TestUnresolvedProjectPlaceholder proves the structural rule: a GET can never
-// be what first resolves the project, because resolution runs Initialize(),
-// which migrates the layout and may auto-archive.
-func TestUnresolvedProjectPlaceholder(t *testing.T) {
+// TestNoRequestEverResolves is the structural rule in its new form: a
+// handler reads the registry and nothing else, so no GET - and not even the
+// one POST - can be what first resolves a project. Resolution runs
+// Initialize(), which migrates the layout and may auto-archive.
+func TestNoRequestEverResolves(t *testing.T) {
 	testsupport.IsolateEnv(t)
 	rs := project.NewResolver(func(context.Context) ([]string, error) {
 		t.Fatal("an HTTP request resolved the project")
 		return nil, nil
 	})
-	h := NewHandler(Deps{Project: rs.Current, Logger: log.New(io.Discard, "", 0)})
+	_ = rs // held only to fail the test if anything reaches for it
 
-	for _, path := range []string{"/", "/board"} {
-		rec := get(t, h, path)
-		if rec.Code != http.StatusOK {
-			t.Errorf("GET %s = %d, want 200 with a placeholder", path, rec.Code)
-		}
-		if !strings.Contains(rec.Body.String(), "No project resolved yet") {
-			t.Errorf("GET %s did not render the placeholder", path)
-		}
+	h := NewHandler(Deps{Sessions: newTestSessions(t), Logger: discardLogger()})
+
+	// With nothing registered the root is the workspace list, not a board.
+	rec := getRaw(t, h, "/")
+	if rec.Code != http.StatusOK {
+		t.Errorf("GET / = %d, want 200", rec.Code)
 	}
-	if rec := get(t, h, "/tasks/1"); rec.Code != http.StatusNotFound {
-		t.Errorf("GET /tasks/1 with no project = %d, want 404", rec.Code)
+	if body := rec.Body.String(); !strings.Contains(body, "No workspaces are configured") {
+		t.Errorf("GET / did not render the empty workspace list: %s", body)
 	}
 }
 
-func TestInvalidateShowsPlaceholderAgain(t *testing.T) {
-	rs, svc, _ := testsupport.NewBacklog(t)
-	seedBoard(t, svc)
-	h := NewHandler(Deps{Project: rs.Current, Logger: log.New(io.Discard, "", 0)})
+// An unknown token is the normal case after a restart, so it explains itself
+// instead of answering a bare 404.
+func TestUnknownTokenExplainsItself(t *testing.T) {
+	h := NewHandler(Deps{Sessions: newTestSessions(t), Logger: discardLogger()})
 
-	if body := get(t, h, "/board").Body.String(); !strings.Contains(body, "Ship the board") {
-		t.Fatal("board did not render the seeded backlog")
+	for _, path := range []string{"/nosuchtoken/", "/nosuchtoken/tasks/1"} {
+		rec := getRaw(t, h, path)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("GET %s = %d, want 404", path, rec.Code)
+		}
+		body := rec.Body.String()
+		if !strings.Contains(body, "not open") {
+			t.Errorf("GET %s did not explain the missing session: %s", path, body)
+		}
+		if !strings.Contains(body, `href="/"`) {
+			t.Errorf("GET %s did not link back to the workspace list", path)
+		}
 	}
+}
 
-	rs.Invalidate()
-	if body := get(t, h, "/board").Body.String(); !strings.Contains(body, "No project resolved yet") {
-		t.Error("board still renders data after the resolution was invalidated")
+// The htmx targets answer 200 instead: htmx does not swap a 404, so an open
+// board would freeze with no explanation. The replacement carries no
+// hx-trigger, so it also stops polling.
+func TestUnknownTokenSwapsAFragmentAndStopsPolling(t *testing.T) {
+	h := NewHandler(Deps{Sessions: newTestSessions(t), Logger: discardLogger()})
+
+	for _, path := range []string{"/nosuchtoken/board", "/nosuchtoken/tasks/1/panel"} {
+		rec := getRaw(t, h, path)
+		if rec.Code != http.StatusOK {
+			t.Errorf("GET %s = %d, want 200 so htmx swaps it in", path, rec.Code)
+		}
+		body := rec.Body.String()
+		if !strings.Contains(body, "not open") {
+			t.Errorf("GET %s did not explain the missing session: %s", path, body)
+		}
+		if strings.Contains(body, "hx-trigger") {
+			t.Errorf("GET %s keeps polling a session that is gone", path)
+		}
+	}
+}
+
+// The plain-text route stays a bare 404: it serves a file into a new tab, so
+// an HTML explanation would be the wrong kind of answer.
+func TestUnknownTokenOnTheFileRouteIsAPlain404(t *testing.T) {
+	h := NewHandler(Deps{Sessions: newTestSessions(t), Logger: discardLogger()})
+
+	rec := getRaw(t, h, "/nosuchtoken/tasks/1/files/research")
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("GET a file of an unknown token = %d, want 404", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "<html") {
+		t.Error("the file route answered with a page")
 	}
 }
 
@@ -434,7 +518,7 @@ func TestBoardRendersPhaseLanes(t *testing.T) {
 	}
 
 	planning := laneSection(t, body, "planning")
-	for _, want := range []string{"Fix the index", "chip-live", `hx-get="/tasks/3/panel"`, ">1</span>"} {
+	for _, want := range []string{"Fix the index", "chip-live", `hx-get="` + h.base + `/tasks/3/panel"`, ">1</span>"} {
 		if !strings.Contains(planning, want) {
 			t.Errorf("planning lane is missing %q", want)
 		}
@@ -448,7 +532,7 @@ func TestBoardRendersPhaseLanes(t *testing.T) {
 			t.Errorf("%s lane does not count 0", phase)
 		}
 	}
-	if n := strings.Count(body, `hx-get="/tasks/3/panel"`); n != 1 {
+	if n := strings.Count(body, `hx-get="`+h.base+`/tasks/3/panel"`); n != 1 {
 		t.Errorf("task 3 renders %d times, want once", n)
 	}
 }
@@ -583,7 +667,7 @@ func TestBoardDoneColumnRendersStats(t *testing.T) {
 			t.Errorf("Done column lacks %s", want)
 		}
 	}
-	if strings.Contains(body, "Old chore") || strings.Contains(body, `hx-get="/tasks/4/panel"`) {
+	if strings.Contains(body, "Old chore") || strings.Contains(body, `hx-get="`+h.base+`/tasks/4/panel"`) {
 		t.Error("the Done column renders task 4 as a card")
 	}
 	if strings.Contains(body, "style=") {
@@ -633,7 +717,7 @@ func TestStatsBarsEscaping(t *testing.T) {
 		Bars: []StatsBarView{{Value: payload, Total: 1, Done: 1}}}
 
 	var b strings.Builder
-	if err := fragments.ExecuteTemplate(&b, "_stats_bars.html", card); err != nil {
+	if err := rootTpl.fragments.ExecuteTemplate(&b, "_stats_bars.html", card); err != nil {
 		t.Fatalf("execute _stats_bars.html: %v", err)
 	}
 	out := b.String()
@@ -735,7 +819,7 @@ func TestStatsLinesEscaping(t *testing.T) {
 			Days:   []StatsDayView{{X: 0, Title: payload}}}}
 
 	var b strings.Builder
-	if err := fragments.ExecuteTemplate(&b, "_stats_lines.html", card); err != nil {
+	if err := rootTpl.fragments.ExecuteTemplate(&b, "_stats_lines.html", card); err != nil {
 		t.Fatalf("execute _stats_lines.html: %v", err)
 	}
 	out := b.String()

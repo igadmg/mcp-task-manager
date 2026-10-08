@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/gpayer/mcp-task-manager/internal/project"
 	"github.com/gpayer/mcp-task-manager/internal/task"
 	"github.com/gpayer/mcp-task-manager/internal/testsupport"
 )
@@ -19,10 +20,16 @@ import (
 func TestHandlerRaceAgainstWrites(t *testing.T) {
 	rs, svc, _ := testsupport.NewBacklog(t)
 	seedBoard(t, svc)
+	rs2, svc2, _ := testsupport.NewBacklog(t)
+	seedBoard(t, svc2)
+
+	sessions := newTestSessions(t)
+	one := adoptBacklog(t, sessions, rs)
+	two := adoptBacklog(t, sessions, rs2)
 
 	srv := httptest.NewServer(NewHandler(Deps{
-		Project: rs.Current,
-		Logger:  log.New(io.Discard, "", 0),
+		Sessions: sessions,
+		Logger:   log.New(io.Discard, "", 0),
 	}))
 	defer srv.Close()
 
@@ -49,25 +56,52 @@ func TestHandlerRaceAgainstWrites(t *testing.T) {
 		resp.Body.Close()
 	}
 
+	// Both sessions are read concurrently, and the welcome page reads the
+	// registry while a session is being adopted.
+	for _, s := range []*Session{one, two} {
+		base := s.Base()
+		run(func(int) { fetch(base + "/") })
+		run(func(int) { fetch(base + "/board") })
+		run(func(int) { fetch(base + "/tasks/1/panel") })
+		run(func(int) { fetch(base + "/tasks/5") })
+		run(func(int) { fetch(base + "/tasks/3") })
+	}
 	run(func(int) { fetch("/") })
-	run(func(int) { fetch("/board") })
-	run(func(int) { fetch("/tasks/1/panel") })
-	run(func(int) { fetch("/tasks/5") })
+	run(func(int) { fetch("/nosuchtoken/board") })
 
-	run(func(i int) {
-		svc.Create(fmt.Sprintf("created %d", i), "", task.PriorityMedium, "feature", "", "")
-	})
-	run(func(i int) {
-		title := fmt.Sprintf("renamed %d", i)
-		svc.Update("1", &title, nil, nil, nil, nil)
-	})
-	// Task 3 is in progress, so /board lists its files while they change.
-	names := []string{"research", "design", "plan"}
-	run(func(i int) { _ = svc.WriteTaskFile("3", names[i%len(names)], "x") })
-	// Phase records are read for in-progress cards and the detail view.
-	run(func(int) { _, _, _ = svc.StartPhase("3", task.PhaseResearch) })
-	run(func(int) { _, _, _ = svc.FinishPhase("3", task.PhaseResearch, task.PhaseFinish{}) })
-	run(func(int) { fetch("/tasks/3") })
+	for i, s := range []*task.Service{svc, svc2} {
+		s := s
+		suffix := i
+		run(func(i int) {
+			s.Create(fmt.Sprintf("created %d-%d", suffix, i), "", task.PriorityMedium, "feature", "", "")
+		})
+		run(func(i int) {
+			title := fmt.Sprintf("renamed %d-%d", suffix, i)
+			s.Update("1", &title, nil, nil, nil, nil)
+		})
+		// Task 3 is in progress, so /board lists its files while they change.
+		names := []string{"research", "design", "plan"}
+		run(func(i int) { _ = s.WriteTaskFile("3", names[i%len(names)], "x") })
+		// Phase records are read for in-progress cards and the detail view.
+		run(func(int) { _, _, _ = s.StartPhase("3", task.PhaseResearch) })
+		run(func(int) { _, _, _ = s.FinishPhase("3", task.PhaseResearch, task.PhaseFinish{}) })
+	}
+
+	// Re-adopting is what the resolver does when its roots change, and it
+	// swaps a live session's project under the readers above.
+	run(func(int) { adoptAgain(t, sessions, rs) })
 
 	wg.Wait()
+}
+
+// adoptAgain re-registers an already-registered project, the way
+// Resolver.OnResolve does after an Invalidate.
+func adoptAgain(t *testing.T, s *Sessions, rs *project.Resolver) {
+	resolved, ok := rs.Current()
+	if !ok {
+		return
+	}
+	if _, err := s.Adopt(resolved); err != nil {
+		t.Errorf("Adopt() error = %v", err)
+	}
 }

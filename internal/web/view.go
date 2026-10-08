@@ -17,8 +17,13 @@ import (
 // ordinary text by html/template.
 
 // ProjectView identifies the backlog the board is showing.
+//
+// It no longer carries a "resolved" flag: a live session always has a
+// project, because registering the session is what builds it. The state that
+// flag used to stand for - the dashboard is up but nothing named a project
+// yet - is now the welcome page, which is a better answer because it does
+// not pretend a board exists.
 type ProjectView struct {
-	Resolved  bool
 	Root      string
 	TasksDir  string
 	Source    string
@@ -482,14 +487,8 @@ func newStatsChart(c task.StatsCard) *StatsChartView {
 	return chart
 }
 
-// unresolvedBoardView is what the board shows while no project is resolved
-// yet, which only happens in MCP-server mode before the first tool call.
-func unresolvedBoardView(poll int) BoardView {
-	return BoardView{PollSeconds: poll}
-}
-
 func newProjectView(cfg *config.Config, taskCount int) ProjectView {
-	p := ProjectView{Resolved: true, TaskCount: taskCount}
+	p := ProjectView{TaskCount: taskCount}
 	if cfg == nil {
 		return p
 	}
@@ -721,4 +720,93 @@ func humanizeAgo(now, then time.Time) string {
 	default:
 		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
 	}
+}
+
+// WelcomeView is the page at /: every workspace this server may open, and
+// every session already open.
+type WelcomeView struct {
+	// Project is empty here; the layout reads it for the header and renders
+	// nothing when there is no backlog behind the page.
+	Project ProjectView
+	// Workspaces is the configured list in file order, unavailable entries
+	// included - an operator who mistyped a path sees why here instead of
+	// wondering where their workspace went.
+	Workspaces []WorkspaceRow
+	// Sessions are the live sessions, sorted by name. A session MCP opened
+	// appears here without ever having been configured.
+	Sessions []SessionRow
+	// ConfigPath is the file Workspaces was read from, empty when none was
+	// found.
+	ConfigPath string
+	// Problems are the config file's findings, shown so the page explains
+	// itself rather than only the server log.
+	Problems []string
+	// Error is the message of a failed pick, shown above the list.
+	Error string
+}
+
+// WorkspaceRow is one configured workspace on the welcome page.
+type WorkspaceRow struct {
+	Name     string
+	Path     string
+	TasksDir string
+	// Problem is why this entry cannot be opened, empty when it can.
+	Problem string
+	// Href is where picking it goes - the live session when there is one.
+	// Empty for an entry with a Problem.
+	Href string
+	// Live is true when a session for this backlog already exists, so the
+	// page offers a link instead of the form button.
+	Live bool
+}
+
+// SessionRow is one live session on the welcome page.
+type SessionRow struct {
+	Name     string
+	TasksDir string
+	Source   string
+	Href     string
+}
+
+// GoneView is the unknown-token page and fragment.
+type GoneView struct {
+	Project ProjectView
+	// Token is what the URL asked for, echoed so a stale bookmark is
+	// recognizable. It is rendered as ordinary escaped text.
+	Token string
+}
+
+func newWelcomeView(statuses []WorkspaceStatus, live []*Session, configPath string, problems []string, errMsg string) WelcomeView {
+	v := WelcomeView{ConfigPath: configPath, Problems: problems, Error: errMsg}
+
+	for _, st := range statuses {
+		row := WorkspaceRow{
+			Name:     st.Name,
+			Path:     st.Path,
+			TasksDir: st.Workspace.TasksDir,
+			Problem:  st.Problem,
+			Live:     st.Live,
+		}
+		if st.Live {
+			row.Href = "/" + st.Token + "/"
+		}
+		v.Workspaces = append(v.Workspaces, row)
+	}
+
+	for _, s := range live {
+		v.Sessions = append(v.Sessions, SessionRow{
+			Name:     s.Name,
+			TasksDir: s.TasksDir,
+			Source:   string(s.Source()),
+			Href:     s.Base() + "/",
+		})
+	}
+	sort.Slice(v.Sessions, func(i, j int) bool {
+		if v.Sessions[i].Name != v.Sessions[j].Name {
+			return v.Sessions[i].Name < v.Sessions[j].Name
+		}
+		return v.Sessions[i].TasksDir < v.Sessions[j].TasksDir
+	})
+
+	return v
 }

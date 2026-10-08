@@ -5,22 +5,25 @@ import (
 	"net/http"
 	"os"
 	"time"
-
-	"github.com/gpayer/mcp-task-manager/internal/project"
 )
 
-// DefaultPollSeconds is how often the board refreshes itself. Each poll takes
-// the service lock and can trigger an index rebuild when the tasks directory
-// changed, so this is deliberately not one second.
+// DefaultPollSeconds is how often one board refreshes itself. Each poll takes
+// that session's service lock and can trigger an index rebuild when its tasks
+// directory changed, so this is deliberately not one second - and the cost
+// multiplies by the number of open boards, because every one of them polls.
 const DefaultPollSeconds = 5
 
 // Deps is everything the web module needs from the rest of the process.
 type Deps struct {
-	// Project reads the current project WITHOUT resolving it. Resolution
-	// runs Service.Initialize(), which migrates the layout and may
-	// auto-archive; a plain GET must never be able to move files on disk.
-	// Wire this to Resolver.Current, never to Resolver.Get.
-	Project func() (*project.Resolved, bool)
+	// Sessions is the workspace registry. Handlers only ever Lookup() in
+	// it: a session's project was built by whoever registered it - the MCP
+	// resolver, or the one POST on the registry - never by a request.
+	//
+	// That is the structural form of the read-only rule. Resolution runs
+	// Service.Initialize(), which migrates the legacy layout and may
+	// auto-archive, and even the POST cannot reach it: Sessions.Pick opens
+	// a workspace through project.BuildReadOnly, which does neither.
+	Sessions *Sessions
 	// Logger receives request and render errors. It must never write to
 	// stdout: in MCP stdio mode stdout is the JSON-RPC channel.
 	Logger *log.Logger
@@ -31,8 +34,8 @@ type Deps struct {
 }
 
 func (d Deps) withDefaults() Deps {
-	if d.Project == nil {
-		d.Project = func() (*project.Resolved, bool) { return nil, false }
+	if d.Sessions == nil {
+		d.Sessions = NewSessions(SessionsConfig{Logger: d.Logger})
 	}
 	if d.Logger == nil {
 		d.Logger = log.New(os.Stderr, "web: ", log.LstdFlags)
@@ -48,19 +51,54 @@ func (d Deps) withDefaults() Deps {
 
 // NewHandler builds the dashboard's route table.
 //
-// Read-only is structural, not a convention: only GET patterns are ever
-// registered, so ServeMux answers every other method with 405 by itself, and
-// no handler below can reach a mutating Service method.
+// Every URL that shows task data starts with a session token, and the whole
+// read-only guarantee is one sentence: task data is reachable by GET only,
+// and the single POST in this server is the session registry, which touches
+// no task data at all. Only GET patterns are registered in the session mux,
+// so ServeMux answers every other method there with 405 by itself and no
+// handler below can reach a mutating Service method.
+//
+// /static/ and /healthz stay outside the token space: the embedded assets
+// are identical for every session, so they get one URL space and one browser
+// cache. Both names are reserved against the token generator
+// (reservedSegments).
+//
+// # Why the session routes are a nested mux
+//
+// This is a correctness constraint, not a style choice. ServeMux panics at
+// registration when two patterns overlap and neither is more specific, and
+// a wildcard first segment overlaps the static routes in exactly that way:
+// "GET /static/{file}" and "GET /{token}/board" both match /static/board,
+// and neither dominates - the first segment favours one, the second the
+// other. Flat token patterns are therefore a startup panic, whatever shape
+// the static pattern takes.
+//
+// A subtree pattern has no such problem: "/{token}/" and "/static/{file...}"
+// differ in one segment where one is a literal and the other a wildcard, and
+// every path the static pattern matches is also matched by the subtree, so
+// ServeMux ranks it more specific and routes it first. The session patterns
+// then live in their own mux, where the only thing they can collide with is
+// each other.
+//
+// Registering the subtree without a method is deliberate: a POST to
+// /<token>/board has to reach the session mux to be answered with 405. A
+// "GET /{token}/" pattern would answer 404 instead, and the structural
+// read-only claim would quietly weaken to a convention.
 func NewHandler(d Deps) http.Handler {
 	h := &handler{Deps: d.withDefaults()}
 
+	sessions := http.NewServeMux()
+	sessions.HandleFunc("GET /{token}/{$}", h.board)
+	sessions.HandleFunc("GET /{token}/board", h.boardFragment)
+	sessions.HandleFunc("GET /{token}/tasks/{id}", h.detail)
+	sessions.HandleFunc("GET /{token}/tasks/{id}/panel", h.detailPanel)
+	sessions.HandleFunc("GET /{token}/tasks/{id}/files/{name}", h.taskFile)
+
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /{$}", h.board)
-	mux.HandleFunc("GET /board", h.boardFragment)
-	mux.HandleFunc("GET /tasks/{id}", h.detail)
-	mux.HandleFunc("GET /tasks/{id}/panel", h.detailPanel)
-	mux.HandleFunc("GET /tasks/{id}/files/{name}", h.taskFile)
-	mux.Handle("GET /static/", http.StripPrefix("/static/", staticHandler()))
+	mux.HandleFunc("GET /{$}", h.welcome)
+	mux.HandleFunc("POST /sessions", h.createSession)
+	mux.Handle("GET /static/{file...}", http.StripPrefix("/static/", staticHandler()))
 	mux.HandleFunc("GET /healthz", h.health)
+	mux.Handle("/{token}/", sessions)
 	return mux
 }

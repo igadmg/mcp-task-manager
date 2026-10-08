@@ -55,6 +55,11 @@ const (
 	SourceRoots       Source = "roots"
 	SourceCwd         Source = "cwd"
 	SourceFallback    Source = "cwd-fallback"
+	// SourceWorkspace is a project named by the web server's own workspace
+	// list (web.yaml), not found by any of the root-resolution steps above.
+	// It is a different axis from the web session's own source: this says
+	// how the tasks directory was arrived at, that says who opened it.
+	SourceWorkspace Source = "workspace"
 )
 
 // RootsProvider returns filesystem paths advertised by the MCP client through
@@ -236,6 +241,47 @@ func Resolve(roots RootsProvider) (*Config, error) {
 	cfg.DataDir = res.TasksDir
 	cfg.ProjectFound = isDir(res.TasksDir)
 	cfg.Resolution = res
+	return cfg, nil
+}
+
+// LoadForRoot loads the project rooted at root, without consulting the
+// environment or the working directory.
+//
+// It is how the web server opens a workspace from its own list: the
+// environment overrides (MCP_TASKS_DIR and friends) describe the process's
+// own project, not an arbitrary directory an operator listed, so applying
+// them here would make one workspace entry silently shadow another.
+//
+// tasksDirOverride wins over the project's own tasks_dir; when both are
+// empty the tasks directory is picked exactly as Resolve picks it.
+func LoadForRoot(root, tasksDirOverride string) (*Config, error) {
+	root = absPath(filepath.Clean(root))
+	cfg := DefaultConfig()
+
+	if data, err := os.ReadFile(filepath.Join(root, ConfigFileName)); err == nil {
+		if err := yaml.Unmarshal(data, cfg); err != nil {
+			return nil, fmt.Errorf("parse %s in %s: %w", ConfigFileName, root, err)
+		}
+	}
+	cfg.applyDefaults()
+	reportStatsProblems(cfg)
+
+	name := strings.TrimSpace(tasksDirOverride)
+	if name == "" {
+		name = strings.TrimSpace(cfg.TasksDirName)
+	}
+	if name == "" {
+		name = pickTasksDirName(root)
+	}
+	tasksDir := name
+	if !filepath.IsAbs(tasksDir) {
+		tasksDir = filepath.Join(root, name)
+	}
+	tasksDir = filepath.Clean(tasksDir)
+
+	cfg.DataDir = tasksDir
+	cfg.ProjectFound = isDir(tasksDir)
+	cfg.Resolution = &Resolution{Root: root, TasksDir: tasksDir, Source: SourceWorkspace}
 	return cfg, nil
 }
 

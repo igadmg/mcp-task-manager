@@ -1,0 +1,12 @@
+<!-- Deliberately no hx-trigger: when this swaps into an open board, the
+     session behind it is gone, so polling it again would only repeat the
+     same answer every few seconds. -->
+<div id="board" class="rounded-xl border border-white/10 bg-white/[0.02] p-8 text-center">
+  <p class="text-sm font-medium text-neutral-200">This workspace session is not open</p>
+  <p class="mx-auto mt-2 max-w-md text-sm text-neutral-500">
+    Sessions live only as long as the server process, so a restart invalidates
+    every workspace link. Pick the workspace again to get a new one.
+  </p>
+  {{ if .Token }}<p class="meta mt-3 truncate">asked for {{ .Token }}</p>{{ end }}
+  <p class="mt-4"><a class="chip chip-muted hover:text-neutral-100" href="/">all workspaces</a></p>
+</div>

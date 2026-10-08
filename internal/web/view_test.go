@@ -344,21 +344,23 @@ func TestProjectViewComesFromResolution(t *testing.T) {
 	}}
 	v := newBoardView(boardOf(tk("a", "", task.StatusTodo, task.PriorityLow, fixedNow)), cfg, fixedNow, 5)
 
-	if !v.Project.Resolved {
-		t.Error("Project.Resolved = false for a resolved config")
+	if v.Project.Root != "/repo" || v.Project.Source != string(config.SourceProjectEnv) {
+		t.Errorf("Project = %+v, want the resolution's root and source", v.Project)
 	}
 	if v.Project.TasksDir != "/repo/tasks" || v.Project.TaskCount != 1 {
 		t.Errorf("Project = %+v, want /repo/tasks with 1 task", v.Project)
 	}
 }
 
-func TestUnresolvedBoardViewKeepsPolling(t *testing.T) {
-	v := unresolvedBoardView(7)
-	if v.Project.Resolved {
-		t.Error("Project.Resolved = true on the placeholder view")
+// The welcome page renders through the same layout as a board, so it has to
+// survive a ProjectView with nothing in it: there is no backlog behind it.
+func TestWelcomeViewHasNoProject(t *testing.T) {
+	v := newWelcomeView(nil, nil, "", nil, "")
+	if v.Project.TasksDir != "" || v.Project.TaskCount != 0 {
+		t.Errorf("Project = %+v, want an empty one", v.Project)
 	}
-	if v.PollSeconds != 7 {
-		t.Errorf("PollSeconds = %d, want 7: the placeholder has to self-heal", v.PollSeconds)
+	if len(v.Workspaces) != 0 || len(v.Sessions) != 0 {
+		t.Errorf("newWelcomeView(nil, nil, ...) = %+v, want nothing listed", v)
 	}
 }
 

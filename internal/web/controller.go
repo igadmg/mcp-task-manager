@@ -83,6 +83,13 @@ func (c *Controller) URL() (string, bool) {
 	return c.url, c.ln != nil
 }
 
+// SessionPath reports the URL path of the session serving tasksDir, so a
+// caller holding the listener's base URL can report a usable link. It works
+// whether or not the listener is up: the registry is independent of it.
+func (c *Controller) SessionPath(tasksDir string) (string, bool) {
+	return c.deps.Sessions.PathFor(tasksDir)
+}
+
 // Shutdown stops the listener and waits for in-flight requests. Idempotent:
 // shutting down a controller that never started, or already stopped, is fine.
 func (c *Controller) Shutdown(ctx context.Context) error {

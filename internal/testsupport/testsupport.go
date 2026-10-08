@@ -117,6 +117,8 @@ func IsolateEnv(t *testing.T) {
 		config.EnvWebEnabled,
 		config.EnvWebAddr,
 		config.EnvGitBranching,
+		config.EnvWebConfig,
+		config.EnvXDGConfigHome,
 	} {
 		// t.Setenv registers the restore; Unsetenv then makes it actually
 		// absent rather than set-to-empty, which resolution treats alike but
@@ -124,4 +126,9 @@ func IsolateEnv(t *testing.T) {
 		t.Setenv(name, "")
 		os.Unsetenv(name)
 	}
+
+	// The web server's own workspace file is looked up under the user's
+	// config directory, so a test must not be able to read - let alone open
+	// a backlog from - the developer's real ~/.config.
+	t.Setenv("HOME", t.TempDir())
 }

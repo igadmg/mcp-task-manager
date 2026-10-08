@@ -52,7 +52,14 @@ type RelationEdge struct {
 //
 // This design keeps list operations fast while still providing full task data on demand.
 type Index interface {
+	// Load builds the index from the task files and is allowed to tidy up
+	// after older versions of this package - it removes the retired shared
+	// cache file, so it is not a pure read.
 	Load() error
+	// Rebuild builds the index from the task files and touches nothing on
+	// disk. InitializeReadOnly is the one caller that needs that
+	// distinction.
+	Rebuild() error
 	Get(id string) (*Task, bool) // Loads full task with description from disk
 	Set(t *Task)
 	Delete(id string)
@@ -199,6 +206,23 @@ func (s *Service) Initialize() error {
 		}
 	}
 	return nil
+}
+
+// InitializeReadOnly populates the index and does nothing else.
+//
+// It is the entry point for a consumer that may not write to the backlog at
+// all: no legacy-layout migration, no auto-archive, and deliberately
+// index.Rebuild rather than index.Load - Load also removes the retired
+// .index.json cache file, which is still a write to the tasks directory.
+//
+// A backlog still in the legacy flat layout therefore reads as empty here
+// instead of being migrated. That is the point: whoever owns writes does the
+// migration, and this caller shows what it can see.
+func (s *Service) InitializeReadOnly() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.index.Rebuild()
 }
 
 // Create creates a new task (optionally as a subtask). If id is non-empty,

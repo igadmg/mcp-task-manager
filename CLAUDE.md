@@ -33,6 +33,11 @@ A Go-based MCP server for task management, designed for Claude and coding agents
 does not expose gets a new method on `task.Service` (see
 `internal/task/view.go`), never its own storage handle.
 
+`internal/web` never constructs a project: the session registry takes an
+`OpenFunc` and `internal/app` supplies the one that goes through
+`config.LoadForRoot` + `project.BuildReadOnly`. `internal/app` stays the only
+package that knows both `project` and `web`.
+
 `internal/vcs` wraps the system `git` binary and imports only the standard
 library. `project.Build` is the only place that constructs it; `task.Service`
 drives it through the `task.GitRepo` interface, which tests wrap for fault
@@ -238,10 +243,18 @@ A task can have zero or more free-form named text files attached to it (e.g. res
 A read-only kanban dashboard, served by `internal/web` (`net/http` +
 `html/template` + `http.ServeMux` patterns; no framework).
 
-- **One process, two transports.** MCP (stdio) and HTTP share a single resolved project and a single `task.Service`. `internal/app` is the composition root.
+- **One process, many workspaces.** MCP (stdio) and HTTP still share the project the MCP server resolved and its single `task.Service`, so a tool call's write is on the board immediately; the same server also serves any number of *other* backlogs at once. `internal/app` is the composition root.
 - **Ways to start it:** `web.enabled` in the config (or `MCP_WEB_ENABLED`) brings it up with the MCP server; the `start_web_ui` tool starts it on demand; `mcp-task-manager serve web` runs it in the foreground.
-- **Read-only is structural.** Only `GET` patterns are registered, so `ServeMux` answers everything else with 405, and no handler can reach a mutating service method.
-- **Handlers never resolve.** They read `Resolver.Current()`, never `Get()`: resolution runs `Service.Initialize()`, which migrates the layout and may auto-archive, and a plain GET must not move files. Before the first tool call the board renders a placeholder that polls itself back to life.
+- **Every URL starts with a session token.** `/<token>/`, `/<token>/board`, `/<token>/tasks/{id}`, `/<token>/tasks/{id}/panel`, `/<token>/tasks/{id}/files/{name}`. `/static/{file...}` and `/healthz` are global — the embedded assets are identical for every session, so they get one URL space and one browser cache. There is no untokenized route to task data and no redirect from a legacy one.
+- **A token is not authentication.** It is a namespace that picks which backlog is shown. Tokens are random, so a URL is not guessable from a path, but nothing may be built as if this were access control: a token is in the server log, in the browser history, in the `Referer` of any outbound link, and in anything that proxies the page. The listener is loopback-only by default, and that — not the token — is the only thing resembling a boundary.
+- **Read-only is structural, in one sentence.** *Task data is reachable by GET only, and the single POST in this server is the session registry, which touches no task data.* The session routes live in their own `ServeMux` with GET patterns only, so a `POST /<token>/board` is answered 405 by the mux before any handler exists.
+- **Why the session routes are a nested mux.** Not style — `ServeMux` panics at registration when two patterns overlap and neither is more specific, and a wildcard first segment does exactly that to the asset routes: `GET /static/{file}` and `GET /{token}/board` both match `/static/board` and neither dominates. Flat token patterns are a startup panic whatever shape the static pattern takes. The subtree `/{token}/` has no such problem (every path `/static/{file...}` matches is also matched by it, so the literal ranks more specific), and it is registered **without a method** on purpose: a `POST /<token>/board` has to reach the session mux to be answered 405 rather than 404.
+- **Handlers never resolve, and never build.** A handler reads `Sessions.Lookup(token)` — one map read — and nothing else. A session's project was built by whoever registered it, and the two registrars are the MCP resolver (`OnResolve` → `Sessions.Adopt`) and the one POST (`Sessions.Pick`, which opens through `project.BuildReadOnly`: no layout migration, no auto-archive, not even `index.Load`'s removal of the retired cache file). So nothing a request can do runs `Service.Initialize()`.
+- **The registry is keyed on the tasks directory**, in memory, for the life of the process. `source` (`mcp` / `web`) is recorded as provenance, never as identity: keying on `{path, source}` would admit two services, two indices and two freshness stories for one backlog. Consequences: a repeat pick of a workspace **reuses its token**, so URLs are stable and the registry cannot grow past one session per configured workspace; and a backlog a human opened that MCP later resolves is **adopted in place** — same token, live project swapped in, so an open tab keeps its URL and starts seeing MCP's writes under the shared lock. A restart invalidates every link, which is why an unknown token renders an explanation (404 on the page routes; **200** on the htmx fragment routes, because htmx does not swap a 404 and an open board would freeze — the replacement fragment carries no `hx-trigger`, so it also stops polling).
+- **Reserved segments.** `static`, `healthz` and `sessions` are in `reservedSegments` (name → reason, shaped like `storage.reservedTaskIDs`) and the generator redraws rather than emitting one. The asymmetry is deliberate: a task id is caller-supplied, so a reserved id is a validation error; a token is server-generated, so this is a generator postcondition.
+- **`nav` is the one way a template writes a URL.** `{{ nav "/board" }}`, `{{ nav "/tasks/" .ID }}`. The package's template sets are **prototypes and are never executed** (`html/template` refuses to `Clone` a set that has run): each session clones them once at registration with `nav` bound to its prefix, and `rootTpl` is the clone the welcome and unknown-token pages render through. A `Base` field on the view models was rejected — `_card.html` is executed with a `CardView`, so the prefix would have to be copied onto four structs and a forgotten one renders a link that looks right and 404s when clicked. `TestTemplatesHaveNoAbsoluteSessionPaths` reads the embedded templates and fails on any absolute path but `/`, `/sessions` and `/static/`.
+- **The welcome page at `/`** lists the configured workspaces (unavailable entries included, with their reason) and the live sessions, and `POST /sessions` turns a pick into a session and answers `303` into `/<token>/`. It replaces "the board at `/`", and with it the old `_unresolved.html` placeholder and `ProjectView.Resolved`: a live session always has a project, because registering it is what builds it.
+- **Cost.** One `*task.Service` and one index per *registered* session — nothing is built until MCP resolves or a human clicks. Per open board, one `GET /<token>/board` every `DefaultPollSeconds` (5), taking **that** session's lock and scanning **that** directory only when its task count or an mtime diverged; the locks are per service, so sessions do not serialize against each other and the ceiling is one scan per open browser tab per five seconds.
 - **Assets are embedded.** Tailwind output and htmx are vendored under `internal/web/static/` and compiled in with `go:embed`; the page renders offline. Regenerate the CSS with `scripts/build-css.sh` (on Windows x64, run it from Git Bash) after editing templates or `input.css` — a maintainer step, never part of `go build`. `input.css` imports Tailwind with `source(none)`, so only `@source "../templates"` is scanned and the output does not depend on the directory the script runs from. Static assets are served as immutable, but the layout links them as `/static/<name>?v=<content hash>` (`asset` template func), so a changed asset is a new URL and no hard reload is needed.
 - **Danger zone.** In-progress tasks are highlighted and named in a banner, so a human reading the board knows an agent may be editing those areas. Presentation only; the UI stays read-only.
 - **Phase lanes.** The In progress column groups its cards into four virtual, overlapping lanes: Research, Design, Planning and Implementation. Cards stay in one vertical stack, and each later lane is shifted right by half a card: `.lane-<phase>` sets `--lane` and `.lanes` sets the step in `assets/input.css`. Cards keep a minimum width of 11rem, so the step compresses in narrow columns, and the indent collapses below 14rem. A task's lane is the phase of its latest started run in its `<phase>.phase` records (ties go to the later phase; see Phase records). A task without readable records falls back to its attached workflow files (names from the `begin_task` skill): `research` → Design, `design` → Planning, `plan` (or `implementation`) → Implementation, only `task` or nothing → Research. The furthest artifact wins, case is ignored and an optional `.md` suffix counts. A card holding nested in-progress subtasks sits in the furthest phase of its group. `task.Service.BoardSnapshot` computes it (`Phases`, plus `PhaseInfo` for tasks with records; in-progress tasks only, at most four small file reads each per poll; a failed listing reads as Research). The column header counts every in-progress task; each lane counts the tasks on its cards, so the lane counts add up to the total. Empty lanes show a header-only stub. In progress takes half the board from `xl`.
@@ -396,7 +409,7 @@ is refused, the file name wins over its `phase` key. Subtasks have their own.
 ### Web UI
 | Tool | Description |
 |------|-------------|
-| `start_web_ui` | Start the read-only kanban dashboard and report its URL; optional `addr`. Idempotent — a second call reports the running URL and never double-binds |
+| `start_web_ui` | Start the read-only kanban dashboard and report the **token-prefixed** URL of the resolved project's board (`http://host:port/<token>/`); optional `addr`. Idempotent — a second call reports the running URL and never double-binds. A lookup miss falls back to the server root (the workspace list) rather than failing |
 
 ### Relations
 | Tool | Description |
@@ -497,6 +510,50 @@ want to show the findings themselves - a board placeholder, say - read
 alternatives (fail the load; an "invalid card" placeholder on the board) are
 in `tasks/done-stats-config-errors/decision.md`.
 
+### The web server's own config file
+
+The dashboard's selectable workspace list is **not** in a project's
+`mcp-tasks.yaml`: it is cross-project, so it must not depend on which project
+the process was started from. It lives in a machine/user-level file
+(`internal/config/webfile.go`), looked up in this order — `MCP_WEB_CONFIG`
+(a path named here that does not exist **is** an error),
+`$XDG_CONFIG_HOME/mcp-task-manager/web.yaml`,
+`~/.config/mcp-task-manager/web.yaml`. `~/.config` is used literally on every
+platform rather than `os.UserConfigDir()`, which on macOS yields
+`~/Library/Application Support`: this is a file a developer edits by hand.
+
+```yaml
+version: 1            # 1 is the only supported version; a higher one is reported, not refused
+workspaces:
+  - name: my-project  # optional; defaults to the base name of path
+    path: ~/Workspace/my-project   # the PROJECT ROOT, not the tasks dir; a leading ~ is expanded
+    tasks_dir: .tasks # optional; overrides the project's own tasks_dir
+```
+
+`path` is the project root, and the tasks directory under it is resolved by
+the rules that already exist (`config.LoadForRoot`: an explicit `tasks_dir`,
+else the project's own `tasks_dir`, else `.tasks` / legacy `tasks`), so an
+entry does not restate what the project already says. `LoadForRoot`
+deliberately ignores the environment overrides — `MCP_TASKS_DIR` and friends
+describe *this process's* project, not an arbitrary directory in a list.
+
+**A missing file is not an error.** There are then no selectable workspaces,
+the welcome page says so, and a dashboard embedded in an MCP server still
+serves the project that server resolved. That is the normal state.
+
+**An invalid entry is reported, never rejected and never dropped** — the same
+rule as `web.done_stats` cards, for the same reason. `ValidateWorkspaces`
+flags an empty or relative `path`, a `path` that is not a directory, a
+duplicate `name`, a duplicate backlog and an unsupported `version`; findings
+land on `WebFile.Problems` and on the entry's own `Problem`, one line each
+goes to **stderr** (`statsWarnTo`, never stdout — in stdio mode that is the
+JSON-RPC channel), and the welcome page lists the entry as unavailable with
+its reason. An operator who mistyped a path sees why on the page instead of
+wondering where their workspace went, and one bad entry cannot hide the rest.
+
+A read failure in `internal/app` is logged, not fatal: the dashboard is an
+extra, and a typo in a personal config file must not stop the MCP server.
+
 Environment overrides:
 
 | Variable | Effect |
@@ -507,6 +564,8 @@ Environment overrides:
 | `MCP_ROOT_SOURCE` | restrict resolution to one source (`roots` to exercise the protocol path) |
 | `MCP_WEB_ENABLED` | start the web dashboard with the MCP server (bool; unparseable values ignored) |
 | `MCP_WEB_ADDR` | dashboard listen address; never enables it on its own |
+| `MCP_WEB_CONFIG` | the web server's own config file; unlike the well-known locations, a path named here that does not exist is an error |
+| `XDG_CONFIG_HOME` | config root for `web.yaml`, before `~/.config` |
 | `MCP_GIT_BRANCHING` | git branch per task on/off (bool; unparseable values ignored). No override for the base list |
 
 `mcp-task-manager version` prints the resolved root, tasks directory and source.
@@ -536,7 +595,8 @@ mcp-task-manager/
 │   │   ├── output.go            # Output formatters (table, JSON)
 │   │   └── output_test.go       # Output formatter tests
 │   ├── config/
-│   │   ├── config.go            # Project root / tasks dir resolution + config loading
+│   │   ├── config.go            # Project root / tasks dir resolution + config loading + LoadForRoot
+│   │   ├── webfile.go           # The web server's own ~/.config/mcp-task-manager/web.yaml (workspace list)
 │   │   ├── stats.go             # web.done_stats cards: defaults, per-card defaults, DoneStatsCards, ValidateStatsCards
 │   │   └── resolve_test.go      # Resolution order tests
 │   ├── project/
@@ -580,13 +640,15 @@ mcp-task-manager/
 │   │   ├── refs.go              # Branch queries and compare-and-swap ref updates, switch
 │   │   └── tree.go              # Snapshot (tasks dir excluded), merge-tree, commit-tree, replay
 │   └── web/
-│       ├── server.go            # Route table (GET only)
-│       ├── handlers.go          # board, board fragment, detail, panel, health
+│       ├── server.go            # Route table (global + a GET-only session mux)
+│       ├── session.go           # Session registry: tokens, reserved segments, Pick/Adopt/Lookup
+│       ├── sessiontpl.go        # Per-session template clones and the nav func
+│       ├── handlers.go          # welcome, session POST, board, fragment, detail, panel, gone, health
 │       ├── view.go              # View models + pure mapping from the snapshot
 │       ├── controller.go        # Listener lifecycle: Start / URL / Shutdown
 │       ├── templates.go         # Embedded template sets
 │       ├── assets.go            # Embedded static assets
-│       ├── templates/           # layout, board, card, detail, placeholder
+│       ├── templates/           # layout, board, card, detail, welcome, gone
 │       ├── assets/input.css     # Tailwind entry (input to scripts/build-css.sh)
 │       └── static/              # app.css + htmx.min.js + app.js, committed and embedded
 ├── scripts/
@@ -617,6 +679,8 @@ mcp-task-manager/
 - A single `sync.Mutex` on `task.Service` serializes every task operation. It is the only lock over the index and the markdown storage, both of which are reachable solely through that type.
 - **Twin discipline:** exported methods lock once on entry and delegate to an unexported, unlocked twin (`Get`/`get`, `Update`/`update`, …). Service methods never call each other's exported forms — Go mutexes are not reentrant. `TestServiceNoSelfDeadlock` fails if a new method breaks the shape.
 - `EnsureProjectExists`, `ProjectFound`, `Config` and `BranchingEnabled` are deliberately unlocked: they read only write-once fields (as is the stats clock `now`, set by `WithClock`).
+- `Service.InitializeReadOnly` is the read-only twin of `Initialize`: it calls `index.Rebuild()` and nothing else — not `index.Load()`, which also removes the retired `.index.json`. `project.BuildReadOnly` is its one caller (through the `build` body `Build` shares), and it also withholds `task.WithGit`, so a service that only reads never holds a repository handle. `internal/web`'s session registry is the consumer; `split-mcp-web-processes` wants the same mode.
+- A second mutex lives in `internal/web`: `Sessions.mu` (an `RWMutex`) over the token and directory maps. `Lookup` is one read under it; `Pick` builds the project **outside** it and re-checks on insert, so a slow directory scan never blocks another session's poll.
 - Git runs inside `StartTask` / `StartPhase` / `CompleteTask` while the lock is held, so a flow's ref, record, pointer and phase-record changes are atomic to every other call; web reads wait for it (each git command has a 60 s timeout). `StartPhase` and `FinishPhase` follow the twin discipline and are in `TestServiceNoSelfDeadlock` and `TestServiceRace`.
 - The lock matters because mcp-go's stdio server dispatches tool calls across a worker pool, and because the web dashboard reads the same service concurrently. `go test -race` covers both (`internal/task/concurrency_test.go`, `internal/web/race_test.go`).
 - File writes are atomic (write to temp file, then rename)
