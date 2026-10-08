@@ -2,6 +2,7 @@ package task
 
 import (
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 	_ "time/tzdata" // Europe/Berlin on machines without a zoneinfo database
@@ -351,5 +352,39 @@ func TestWithClockNilKeepsDefault(t *testing.T) {
 	}
 	if snap.TakenAt.IsZero() {
 		t.Error("TakenAt is zero with the default clock")
+	}
+}
+
+// The config package cannot ask this one for its vocabularies - it is the
+// one this package imports - so it declares them itself. These two tests are
+// what keeps the copies honest: adding a field here without listing it there
+// makes it unconfigurable, and listing one there without implementing it
+// here makes the diagnostic promise a field that silently yields nothing.
+
+func TestStatsFieldsMatchConfig(t *testing.T) {
+	declared := config.StatsFields()
+	slices.Sort(declared)
+
+	implemented := make([]string, 0, len(statsFields))
+	for name := range statsFields {
+		implemented = append(implemented, name)
+	}
+	slices.Sort(implemented)
+
+	if !slices.Equal(declared, implemented) {
+		t.Errorf("config.StatsFields() = %q, statsFields = %q", declared, implemented)
+	}
+}
+
+func TestStatsLineNamesMatchConfig(t *testing.T) {
+	for _, name := range config.StatsLineNames() {
+		if _, _, ok := statsMetric(name); !ok {
+			t.Errorf("config.StatsLineNames() offers %q, statsMetric rejects it", name)
+		}
+	}
+	for _, name := range []string{"", "opened", "created_total", "CREATED"} {
+		if _, _, ok := statsMetric(name); ok {
+			t.Errorf("statsMetric accepts %q, which config does not offer", name)
+		}
 	}
 }

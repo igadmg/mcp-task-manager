@@ -2,6 +2,9 @@ package config
 
 import (
 	"fmt"
+	"io"
+	"os"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -24,11 +27,146 @@ const (
 // DefaultStatsDays is the window of a lines card that names none.
 const DefaultStatsDays = 14
 
+// statsKinds, statsFieldNames and statsLineNames are the vocabularies a
+// written card is checked against. The behaviour behind every field and line
+// name lives in internal/task, which imports this package and so cannot be
+// asked; TestStatsFieldsMatchConfig and TestStatsLineNamesMatchConfig there
+// fail if the lists ever drift apart.
+var (
+	statsKinds      = []string{StatsKindBars, StatsKindLines}
+	statsFieldNames = []string{"priority", "type", "status", "resolution", "created_by"}
+	statsLineNames  = []string{
+		StatsLineCreated,
+		StatsLineClosed,
+		StatsLineCreatedCumulative,
+		StatsLineClosedCumulative,
+	}
+)
+
+// StatsFields returns the task fields a bars card can group on and a lines
+// card can split by. The order is the fields' own (priority to created_by),
+// not the sorted order a diagnostic lists them in. Every call returns the
+// caller's own copy.
+func StatsFields() []string { return slices.Clone(statsFieldNames) }
+
+// StatsLineNames returns the line names a lines card can draw, cumulative
+// variants included. Every call returns the caller's own copy.
+func StatsLineNames() []string { return slices.Clone(statsLineNames) }
+
 // DoneStatsConfig defines the statistics cards the board's Done column shows.
 type DoneStatsConfig struct {
 	// Cards in board order. nil (the key absent, or `cards:`) means the
 	// defaults; an empty list (`cards: []`) means no cards.
 	Cards []StatsCard `yaml:"cards"`
+	// Problems lists what is wrong with the written cards, filled by
+	// applyDefaults and reported by Resolve. It is never fatal and never
+	// changes Cards - see ValidateStatsCards.
+	Problems []StatsCardProblem `yaml:"-"`
+}
+
+// StatsCardProblem is one thing wrong with a written Done-statistics card:
+// where it is, which card it is, and what the server does about it.
+type StatsCardProblem struct {
+	// Index is the card's position in web.done_stats.cards.
+	Index int
+	// ID is the normalized card's ID, so a problem can be tied to the card
+	// the board draws (or does not).
+	ID string
+	// Detail says what is wrong and what follows from it.
+	Detail string
+}
+
+func (p StatsCardProblem) String() string {
+	return fmt.Sprintf("web.done_stats.cards[%d] (%s): %s", p.Index, p.ID, p.Detail)
+}
+
+// ValidateStatsCards reports what is wrong with the cards as written, without
+// changing them: an invalid entry is kept, normalized and drawn (or left
+// empty) exactly as before. Nothing here is an error - a typo in a dashboard
+// card must not break the config load, and with it every MCP tool and the
+// CLI. See the task's decision.md for the rejected alternatives.
+//
+// It is pure: it normalizes its own copy and takes the written cards for the
+// one check normalization erases (a negative days).
+func ValidateStatsCards(written []StatsCard) []StatsCardProblem {
+	cards := normalizeStatsCards(written)
+	if len(cards) != len(written) {
+		// written named no cards at all, so these are the defaults,
+		// which are valid by construction.
+		return nil
+	}
+	var out []StatsCardProblem
+	for i, c := range cards {
+		for _, detail := range statsCardProblems(c, written[i]) {
+			out = append(out, StatsCardProblem{Index: i, ID: c.ID, Detail: detail})
+		}
+	}
+	return out
+}
+
+// statsCardProblems checks one normalized card, with the card as written for
+// the values normalization has already repaired.
+func statsCardProblems(c, written StatsCard) []string {
+	var out []string
+	switch c.Kind {
+	case StatsKindBars:
+		switch {
+		case c.Field == "":
+			out = append(out, fmt.Sprintf("a bars card needs a field (one of %s); the card stays empty", oneOf(statsFieldNames)))
+		case !slices.Contains(statsFieldNames, c.Field):
+			out = append(out, fmt.Sprintf("unknown field %q (one of %s); the card stays empty", c.Field, oneOf(statsFieldNames)))
+		}
+	case StatsKindLines:
+		// Only a negative value proves the key was written: yaml decodes
+		// an absent days and `days: 0` alike, so 0 stays a silent default.
+		if written.Days < 0 {
+			out = append(out, fmt.Sprintf("days: %d is not a positive number; using %d", written.Days, c.Days))
+		}
+		if c.SplitBy != "" {
+			if !slices.Contains(statsFieldNames, c.SplitBy) {
+				out = append(out, fmt.Sprintf("unknown split_by %q (one of %s); the card stays empty", c.SplitBy, oneOf(statsFieldNames)))
+			}
+			if !slices.Contains(statsLineNames, c.Metric) {
+				out = append(out, fmt.Sprintf("unknown metric %q (one of %s); the card stays empty", c.Metric, oneOf(statsLineNames)))
+			}
+			// A split card's hidden entries name field values, and which
+			// values exist is a property of the backlog, not the config.
+			return out
+		}
+		for _, name := range c.Lines {
+			if !slices.Contains(statsLineNames, name) {
+				out = append(out, fmt.Sprintf("unknown line %q (one of %s); it is not drawn", name, oneOf(statsLineNames)))
+			}
+		}
+		for _, name := range c.Hidden {
+			if !slices.Contains(c.Lines, name) {
+				out = append(out, fmt.Sprintf("hidden line %q is not one of the card's lines; it has no effect", name))
+			}
+		}
+	default:
+		out = append(out, fmt.Sprintf("unknown kind %q (one of %s); the card is not drawn", c.Kind, oneOf(statsKinds)))
+	}
+	return out
+}
+
+// oneOf lists a vocabulary for a diagnostic, sorted so the message is stable.
+func oneOf(names []string) string {
+	sorted := slices.Clone(names)
+	slices.Sort(sorted)
+	return strings.Join(sorted, ", ")
+}
+
+// statsWarnTo is where Resolve reports a card's problems; a test swaps it.
+// Never stdout: in stdio mode that is the JSON-RPC channel.
+var statsWarnTo io.Writer = os.Stderr
+
+// reportStatsProblems writes one line per problem. It is the only place the
+// diagnostics leave the config, so a consumer that wants to show them itself
+// reads Web.DoneStats.Problems instead.
+func reportStatsProblems(c *Config) {
+	for _, p := range c.Web.DoneStats.Problems {
+		fmt.Fprintf(statsWarnTo, "%s: %s\n", ConfigFileName, p)
+	}
 }
 
 // StatsCard is one Done-column card: a bars card groups the tasks on one

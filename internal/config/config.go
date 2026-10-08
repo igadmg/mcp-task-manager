@@ -213,6 +213,7 @@ func Resolve(roots RootsProvider) (*Config, error) {
 	}
 	cfg.applyDefaults()
 	cfg.applyEnvOverrides()
+	reportStatsProblems(cfg)
 
 	if res.TasksDir == "" {
 		name := relTasksDir
@@ -245,7 +246,8 @@ func Resolve(roots RootsProvider) (*Config, error) {
 //
 // Booleans are deliberately left as written - false is a real value there.
 // The Done-column cards are refilled when `cards:` reset them to nil, and
-// each written card gets its per-card defaults (see normalizeStatsCards).
+// each written card gets its per-card defaults (see normalizeStatsCards). An
+// invalid card is kept as written and reported, never rejected.
 func (c *Config) applyDefaults() {
 	d := DefaultConfig()
 	if len(c.TaskTypes) == 0 {
@@ -260,6 +262,9 @@ func (c *Config) applyDefaults() {
 	if strings.TrimSpace(c.Web.Addr) == "" {
 		c.Web.Addr = d.Web.Addr
 	}
+	// Validate before normalizing: normalization repairs some of what the
+	// diagnostics report. Problems are never fatal and never change Cards.
+	c.Web.DoneStats.Problems = ValidateStatsCards(c.Web.DoneStats.Cards)
 	c.Web.DoneStats.Cards = normalizeStatsCards(c.Web.DoneStats.Cards)
 	bases := trimList(c.Git.BaseBranches)
 	if len(bases) == 0 {

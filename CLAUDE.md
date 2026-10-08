@@ -462,9 +462,31 @@ every card from zero, so per-card defaults are filled after decoding: kind,
 (`bars-<field>`, `lines-<days>d`, `lines-<split_by>-<metric>-<days>d`), made
 unique in list order with `-2`, `-3`. Consumers read
 `Config.DoneStatsCards()`, which is nil-safe, fills the same defaults for a
-config that skipped `applyDefaults`, and returns a copy. Invalid entries are
-not rejected yet (task `done-stats-config-errors`); a YAML type error such as
-`days: abc` fails the load like any other.
+config that skipped `applyDefaults`, and returns a copy. A YAML type error
+such as `days: abc` fails the load like any other.
+
+An **invalid card is reported, never rejected and never dropped**: a typo in a
+dashboard card must not break every MCP tool and the CLI along with the board.
+`ValidateStatsCards` (pure) checks the written cards against the three
+vocabularies - `statsKinds`, `statsFieldNames`, `statsLineNames`, the latter
+two exported as `StatsFields()` / `StatsLineNames()` because `internal/task`
+owns the behaviour behind each name and imports this package, so `config`
+cannot ask it; `TestStatsFieldsMatchConfig` and `TestStatsLineNamesMatchConfig`
+in `internal/task` fail if the copies drift. It flags an unknown kind, field,
+`split_by`, `metric` or line name, a bars card with no field, a `hidden` entry
+that is not one of a non-split card's lines, and a negative `days`. `days: 0`
+is **not** flagged: yaml decodes an absent key and a written zero alike, so
+only a negative value proves the key was written. A split card's `hidden`
+names field values, which only the backlog knows, so it is not checked.
+`applyDefaults` validates before normalizing (normalization repairs some of
+what is reported) and keeps the findings on `Web.DoneStats.Problems`;
+`Resolve` writes one line per finding to **stderr** (`statsWarnTo`, never
+stdout - in stdio mode that is the JSON-RPC channel), each naming the card's
+index, its derived id, what is wrong and what follows from it. Consumers that
+want to show the findings themselves - a board placeholder, say - read
+`Problems` instead of re-deriving them. The rationale and the rejected
+alternatives (fail the load; an "invalid card" placeholder on the board) are
+in `tasks/done-stats-config-errors/decision.md`.
 
 Environment overrides:
 
@@ -506,7 +528,7 @@ mcp-task-manager/
 │   │   └── output_test.go       # Output formatter tests
 │   ├── config/
 │   │   ├── config.go            # Project root / tasks dir resolution + config loading
-│   │   ├── stats.go             # web.done_stats cards: defaults, per-card defaults, DoneStatsCards
+│   │   ├── stats.go             # web.done_stats cards: defaults, per-card defaults, DoneStatsCards, ValidateStatsCards
 │   │   └── resolve_test.go      # Resolution order tests
 │   ├── project/
 │   │   ├── resolver.go          # Lazy, cached project resolution (used by tool handlers)
