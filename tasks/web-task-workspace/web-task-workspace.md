@@ -1,12 +1,12 @@
 ---
 id: web-task-workspace
 title: 'Web: task workspace — board slides away, task column + large file viewer'
-status: in_progress
+status: todo
 priority: high
 type: feature
 created_at: "2026-10-07T19:15:45Z"
 created_by: igor.cwer
-updated_at: "2026-10-07T20:45:42Z"
+updated_at: "2026-10-08T19:21:41Z"
 branch: igor.cwer/wip/web-task-workspace
 base_branch: main_patched
 start_commit: 8b16e42cd939db0eb155b3afed9f6164ceb0b5af

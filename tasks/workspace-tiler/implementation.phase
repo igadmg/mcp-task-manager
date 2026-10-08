@@ -3,3 +3,6 @@ phase: implementation
 runs:
   - started_at: "2026-10-08T06:37:22Z"
     started_by: igor.cwer
+    finished_at: "2026-10-08T19:14:28Z"
+    finished_by: igor.cwer
+    note: T1-T7 landed on 5155787..4a095c2; T7 browser pass recorded in implementation.md

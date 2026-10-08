@@ -2,15 +2,19 @@
 id: workspace-tiler
 parent_id: web-task-workspace
 title: 'Tiler: URL column chain, strip layout, nesting rail, routes'
-status: in_progress
+status: done
 priority: critical
 type: feature
 created_at: "2026-10-07T19:58:32Z"
 created_by: igor.cwer
-updated_at: "2026-10-08T06:37:22Z"
+updated_at: "2026-10-08T19:14:39Z"
+resolution: completed
+resolution_note: T1-T7 landed; squash-merged onto the parent's wip. Shipped strip is left-aligned, not the ADR's right-aligned - see implementation.md
+closed_at: "2026-10-08T19:14:39Z"
 branch: igor.cwer/wip/web-task-workspace--workspace-tiler
 base_branch: igor.cwer/wip/web-task-workspace
 start_commit: 8dee9de6965c93ada4958154a9db50f86341faa0
+squash_commit: d98189e34f9d3e9d76d2303143a59739af2f8b83
 ---
 
 The load-bearing subtask: the column chain as a first-class model, the layout engine that places and shifts columns, the left nesting rail, and the route family they hang off. Every other UI subtask plugs a column type into this.

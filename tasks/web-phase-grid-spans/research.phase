@@ -1,0 +1,9 @@
+version: 1
+phase: research
+runs:
+  - started_at: "2026-10-08T19:21:47Z"
+    started_by: igor.cwer
+    finished_at: "2026-10-08T19:25:07Z"
+    finished_by: igor.cwer
+    tokens: 54000
+    note: 'research: lane model/geometry/phase sources mapped; three open questions (span counting, header shape, 11/14rem thresholds)'

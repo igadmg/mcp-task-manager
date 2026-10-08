@@ -1,0 +1,9 @@
+version: 1
+phase: planning
+runs:
+  - started_at: "2026-10-08T19:37:33Z"
+    started_by: igor.cwer
+    finished_at: "2026-10-08T19:37:37Z"
+    finished_by: igor.cwer
+    tokens: 0
+    note: 'no separate plan: folded into implementation on the user''s request (skip the steps); order is view model -> template -> CSS -> tests -> docs -> build-css.sh'
