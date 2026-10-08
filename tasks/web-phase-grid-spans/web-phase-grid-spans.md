@@ -1,7 +1,7 @@
 ---
 id: web-phase-grid-spans
 title: 'In progress: phase grid, parent cards span their subtasks'' phase range'
-status: in_progress
+status: done
 priority: medium
 type: feature
 relations:
@@ -9,7 +9,10 @@ relations:
     task: in-progress-phase-columns
 created_at: "2026-10-07T21:05:19Z"
 created_by: igor.cwer
-updated_at: "2026-10-08T19:21:47Z"
+updated_at: "2026-10-08T20:04:27Z"
+resolution: completed
+resolution_note: 'Landed in f33a6ac on igor.cwer/wip/web-task-workspace (no task branch: tracked tasks/ blocked the switch)'
+closed_at: "2026-10-08T20:04:27Z"
 ---
 
 **Complexity: high** — a full rework of the In progress column geometry (view model + templates + CSS grid), not a cosmetic change.
