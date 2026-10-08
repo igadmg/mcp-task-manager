@@ -591,6 +591,25 @@ func TestBoardDoneColumnRendersStats(t *testing.T) {
 	}
 }
 
+// The bar's colours are explained by the SVG's <title>, which is both the
+// hover tooltip and the accessible name, so there is no aria-label.
+func TestStatsBarsTooltipNamesTheColours(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedBoard(t, svc)
+
+	body := get(t, h, "/board").Body.String()
+	// Task 4 (medium bug) is done and closed just now, task 5 is a medium
+	// todo one: 1 done, 1 of them recent, 0 in progress, 1 to do.
+	const want = "<title>medium: 1 done (green), 1 of them in the last 24 h (light green), " +
+		"0 in progress (amber), 1 to do (grey)</title>"
+	if !strings.Contains(body, want) {
+		t.Errorf("the medium bar lacks %s", want)
+	}
+	if strings.Contains(body, `<svg class="stats-bar" viewBox="0 0 2 1" preserveAspectRatio="none" role="img" aria-label=`) {
+		t.Error("the bar still carries an aria-label next to its <title>")
+	}
+}
+
 func TestBoardDoneColumnEmptyWithoutCards(t *testing.T) {
 	h, svc, _ := newTestHandler(t)
 	seedBoard(t, svc)
