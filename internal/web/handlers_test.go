@@ -746,3 +746,35 @@ func TestStatsLinesEscaping(t *testing.T) {
 		t.Errorf("escaped day title missing:\n%s", out)
 	}
 }
+
+// TestPanelIsTheOnlyScroller pins the panel's scroll model. A long description
+// has to scroll inside #panel, not drag the page and the board along, so the
+// aside is a capped scroll container that does not chain its overscroll, and
+// the description below it is no longer a nested scroller of its own.
+func TestPanelIsTheOnlyScroller(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedBoard(t, svc)
+
+	body := get(t, h, "/").Body.String()
+	for _, want := range []string{
+		`id="panel"`, "overscroll-contain",
+		"lg:max-h-[calc(100dvh-6rem)]", "lg:overflow-y-auto", "lg:sticky",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the panel aside lacks %q", want)
+		}
+	}
+
+	if _, err := svc.Create("Long one", "line\nafter line", "medium", "feature", "", "long"); err != nil {
+		t.Fatalf("Create error = %v", err)
+	}
+	panel := get(t, h, "/tasks/long/panel").Body.String()
+	if !strings.Contains(panel, "whitespace-pre-wrap") {
+		t.Fatal("the description is not the pre-wrapped block any more")
+	}
+	for _, bad := range []string{"max-h-96", "overflow-auto"} {
+		if strings.Contains(panel, bad) {
+			t.Errorf("the description still carries %q: a second scroller nested in #panel", bad)
+		}
+	}
+}

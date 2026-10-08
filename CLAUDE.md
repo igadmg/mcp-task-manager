@@ -251,6 +251,15 @@ A read-only kanban dashboard, served by `internal/web` (`net/http` +
   of it while the subtask stays in the To do queue. Column counts are per
   status and lane counts count only in-progress cards, so neither double-counts
   it. Every nested row carries a status dot.
+- **One scroller per column.** `#panel` is sticky, capped at
+  `calc(100dvh-6rem)` and `overflow-y-auto` with `overscroll-contain`, so a
+  description longer than the screen scrolls in the panel instead of dragging
+  the page and the board with it, and the wheel does not chain out at either
+  end. The description is therefore a plain pre-wrapped `<pre>`, not a second
+  scroller nested in it. An `innerHTML` swap keeps the container's `scrollTop`,
+  so `static/app.js` resets it on `htmx:afterSwap` into `#panel` and a fresh
+  panel opens at its top (`TestPanelIsTheOnlyScroller`,
+  `TestAppJSResetsPanelScroll`).
 - **Card and detail content.** Every card shows its creator and creation time. An in-progress card with phase records also shows the current phase, who started its latest run and when (or when it finished), and the tokens of all finished runs (`81.2k tok`). Todo and done cards never read phase records. The detail view lists every run of every phase (`.phase-runs` grid) with the total tokens, and leaves `*.phase` files out of "Attached files".
 - **Archived tasks are not on the board** (the snapshot is the active index); the detail route still serves them, read-only.
 - **Logging goes to stderr.** Nothing in `internal/web` writes to stdout — in stdio mode stdout is the JSON-RPC channel.

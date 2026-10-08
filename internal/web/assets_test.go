@@ -92,3 +92,19 @@ func TestAppJSStatsToggles(t *testing.T) {
 		}
 	}
 }
+
+// TestAppJSResetsPanelScroll pins the other half of the panel's scroll model:
+// #panel is a scroll container, and an innerHTML swap keeps its scrollTop, so
+// a fresh panel has to be put back to its top explicitly.
+func TestAppJSResetsPanelScroll(t *testing.T) {
+	data, err := staticFS.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatalf("read embedded app.js: %v", err)
+	}
+	js := string(data)
+	for _, w := range []string{`"htmx:afterSwap"`, `"panel"`, "scrollTop = 0"} {
+		if !strings.Contains(js, w) {
+			t.Errorf("app.js lacks %s", w)
+		}
+	}
+}

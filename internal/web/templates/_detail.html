@@ -26,7 +26,7 @@
   </div>
 
   {{ if .Description }}
-  <pre class="mt-4 max-h-96 overflow-auto whitespace-pre-wrap rounded-lg bg-black/30 p-3 font-mono text-xs leading-relaxed text-neutral-300">{{ .Description }}</pre>
+  <pre class="mt-4 whitespace-pre-wrap break-words rounded-lg bg-black/30 p-3 font-mono text-xs leading-relaxed text-neutral-300">{{ .Description }}</pre>
   {{ else }}
   <p class="mt-4 text-xs text-neutral-600">No description.</p>
   {{ end }}

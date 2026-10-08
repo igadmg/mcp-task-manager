@@ -158,3 +158,19 @@
   });
   applyAll();
 })();
+
+// A fresh panel starts at its top. #panel is a scroll container (see
+// board.html), and an innerHTML swap keeps the container's own scrollTop, so
+// without this the next card's description opens wherever the previous one was
+// scrolled to. One delegated listener on document; client-side only, it sends
+// no request and adds no htmx attribute.
+(function () {
+  "use strict";
+
+  document.addEventListener("htmx:afterSwap", function (event) {
+    var target = event.detail && event.detail.target;
+    if (target && target.id === "panel") {
+      target.scrollTop = 0;
+    }
+  });
+})();
