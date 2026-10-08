@@ -60,29 +60,73 @@
   .board-grid { @apply min-h-0 flex-1; }
   .column-body { @apply min-h-0 flex-1 overflow-y-auto; }
 
-  /* In progress phase lanes: one vertical stack, each later lane shifted
-   * right by one step. The step is a half card (20% of the stack, card 40%)
-   * when the column allows it, shrinks to keep cards at least --lane-min
-   * wide, and the container query below drops the indent entirely when the
-   * stack is narrower than 14rem. --lane comes from .lane-<phase>, named
-   * like chip-<priority>, so Go never computes geometry. */
+  /* In progress phase grid: four overlapping lanes on seven tracks, so a
+   * card can straddle the phases its nested subtasks are in.
+   *
+   * Lane k starts at k*s (s = one lane step) and a single-lane card is
+   * C = 100% - 3s wide, so a card ending in lane m has its right edge at
+   * m*s + C. The eight distinct grid lines are therefore
+   *
+   *     0, s, 2s, 3s, 100%-3s, 100%-2s, 100%-s, 100%
+   *
+   * i.e. the three leading and three trailing tracks are one step each and
+   * the middle one absorbs the rest. A card spanning lanes k..m is
+   * grid-column (k+1) / (m+5), which is one class per side:
+   * .lane-from-<phase> and .lane-to-<phase>, named like chip-<priority>, so
+   * Go names phases and never computes geometry.
+   *
+   * The 16.666% cap is what keeps the middle track from going negative
+   * (100% - 6s >= 0); it makes a single-lane card half the column with a
+   * step of a third of a card, and a four-lane span exactly the column.
+   * Below that the step shrinks so a card never goes under --lane-min,
+   * and the container query drops the whole grid to a plain stack.
+   *
+   * A lane is display:contents: its header and its cards are grid items of
+   * .lanes, each placed by its own from/to pair. Sparse auto-placement puts
+   * every one of them on a row of its own in document order - each item's
+   * column start lies left of the cursor - so the column stays one vertical
+   * stack and row-gap replaces the old per-lane card stack. */
   .lanes {
-    @apply flex flex-col gap-3;
+    @apply grid;
     container: lanes / inline-size;
+    row-gap: 0.5rem;
+    column-gap: 0;
     --lane-min: 11rem;
-    --lane-step: clamp(0px, (100% - var(--lane-min)) / 3, 20%);
+    --lane-step: clamp(0px, (100% - var(--lane-min)) / 3, 16.666%);
+    grid-template-columns:
+      var(--lane-step) var(--lane-step) var(--lane-step)
+      minmax(0, 1fr)
+      var(--lane-step) var(--lane-step) var(--lane-step);
   }
-  .lane {
-    @apply min-w-0;
-    margin-left: calc(var(--lane, 0) * var(--lane-step));
-    width: calc(100% - 3 * var(--lane-step));
+  .lane { display: contents; }
+  .lane-head { @apply min-w-0 pt-2; }
+  .lane:first-child .lane-head { @apply pt-0; }
+  .lane-card { @apply min-w-0; }
+  .lane-from-research       { grid-column-start: 1; }
+  .lane-from-design         { grid-column-start: 2; }
+  .lane-from-planning       { grid-column-start: 3; }
+  .lane-from-implementation { grid-column-start: 4; }
+  .lane-to-research         { grid-column-end: 5; }
+  .lane-to-design           { grid-column-end: 6; }
+  .lane-to-planning         { grid-column-end: 7; }
+  .lane-to-implementation   { grid-column-end: 8; }
+  /* A nested subtask row, indented to its own phase lane: the same step as
+   * the grid, written in container units so it resolves against .lanes -
+   * the inline-size container - and not against the card it sits in. The
+   * staircase inside a card therefore has the grid's pitch; it is a pitch
+   * match, not pixel alignment, since the card's padding offsets every row
+   * alike. Outside .lanes --sub-lane is 0, so the margin is too. */
+  .sub-lane {
+    margin-left: calc(var(--sub-lane, 0) * clamp(0px, (100cqi - var(--lane-min, 11rem)) / 3, 16.666cqi));
   }
-  .lane-research       { --lane: 0; }
-  .lane-design         { --lane: 1; }
-  .lane-planning       { --lane: 2; }
-  .lane-implementation { --lane: 3; }
+  .sub-lane-0 { --sub-lane: 0; }
+  .sub-lane-1 { --sub-lane: 1; }
+  .sub-lane-2 { --sub-lane: 2; }
+  .sub-lane-3 { --sub-lane: 3; }
   @container lanes (width < 14rem) {
-    .lane { margin-left: 0; width: auto; }
+    .lanes { grid-template-columns: minmax(0, 1fr); }
+    .lane-head, .lane-card { grid-column: 1 / -1; }
+    .sub-lane { margin-left: 0; }
   }
   /* Detail view phase history: one row per run - phase and run number,
    * start, finish, tokens - with a run's note on a row of its own. */

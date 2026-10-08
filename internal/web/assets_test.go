@@ -1,26 +1,37 @@
 package web
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/gpayer/mcp-task-manager/internal/task"
 )
 
-// TestAppCSSDefinesLaneClasses ties the phase list to the compiled CSS:
-// a forgotten scripts/build-css.sh run, or a phase without its
-// .lane-<phase> rule, fails here first. The strings are the minified forms
-// Tailwind v4.3.3 emits; it rewrites the 14rem collapse rule's
-// "width < 14rem" as "not (min-width:14rem)".
+// TestAppCSSDefinesLaneClasses ties the phase list to the compiled CSS: a
+// forgotten scripts/build-css.sh run, or a phase without its placement
+// rules, fails here first. The strings are the minified forms Tailwind
+// v4.3.3 emits; it rewrites the 14rem collapse rule's "width < 14rem" as
+// "not (min-width:14rem)".
 func TestAppCSSDefinesLaneClasses(t *testing.T) {
 	data, err := staticFS.ReadFile("static/app.css")
 	if err != nil {
 		t.Fatalf("read embedded app.css: %v", err)
 	}
 	css := string(data)
-	want := []string{".lanes{", "container:lanes/inline-size", ".lane{", "lanes not (min-width:14rem)"}
-	for _, p := range task.Phases() {
-		want = append(want, ".lane-"+string(p)+"{")
+	want := []string{
+		".lanes{", "container:lanes/inline-size", "grid-template-columns:",
+		".lane{", "lanes not (min-width:14rem)", ".lane-head{", ".lane-card{",
+		".sub-lane{",
+	}
+	for i, p := range task.Phases() {
+		// One class per side of a card's span, plus a nested row's indent
+		// in steps right of the card's first lane.
+		want = append(want,
+			".lane-from-"+string(p)+"{",
+			".lane-to-"+string(p)+"{",
+			".sub-lane-"+strconv.Itoa(i)+"{",
+		)
 	}
 	for _, w := range want {
 		if !strings.Contains(css, w) {

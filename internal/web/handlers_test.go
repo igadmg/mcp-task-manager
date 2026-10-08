@@ -444,7 +444,7 @@ func TestBoardRendersPhaseLanes(t *testing.T) {
 	}
 	last := -1
 	for _, phase := range []string{"research", "design", "planning", "implementation"} {
-		i := strings.Index(body, `class="lane lane-`+phase+`" data-phase="`+phase+`"`)
+		i := strings.Index(body, `class="lane" data-phase="`+phase+`"`)
 		if i <= last {
 			t.Errorf("lane %s at %d, want after %d", phase, i, last)
 		}
@@ -452,7 +452,12 @@ func TestBoardRendersPhaseLanes(t *testing.T) {
 	}
 
 	planning := laneSection(t, body, "planning")
-	for _, want := range []string{"Fix the index", "chip-live", `hx-get="/tasks/3/panel"`, ">1</span>"} {
+	for _, want := range []string{
+		"Fix the index", "chip-live", `hx-get="/tasks/3/panel"`, ">1</span>",
+		// A card with no in-progress subtasks occupies its own lane only.
+		`class="lane-card lane-from-planning lane-to-planning"`,
+		`class="lane-head lane-from-planning lane-to-planning `,
+	} {
 		if !strings.Contains(planning, want) {
 			t.Errorf("planning lane is missing %q", want)
 		}
@@ -471,7 +476,12 @@ func TestBoardRendersPhaseLanes(t *testing.T) {
 	}
 }
 
-func TestBoardLaneGroupsByFurthestPhase(t *testing.T) {
+// TestBoardLaneGroupSpansItsSubtasks: parent 10 has no artifact, so it
+// reads as research, while its subtask 11 has a plan and reads as
+// implementation. The card is drawn in the lane it begins in, spans
+// research..implementation, and its nested row is shifted three steps; each
+// of the two tasks counts in the lane of its own phase.
+func TestBoardLaneGroupSpansItsSubtasks(t *testing.T) {
 	h, svc, _ := newTestHandler(t)
 	testsupport.Seed(t, svc,
 		testsupport.TaskSpec{ID: "10", Status: "in_progress"},
@@ -482,14 +492,27 @@ func TestBoardLaneGroupsByFurthestPhase(t *testing.T) {
 	}
 
 	body := get(t, h, "/board").Body.String()
-	impl := laneSection(t, body, "implementation")
-	for _, want := range []string{"#10</span>", "#11</span>", ">2</span>"} {
-		if !strings.Contains(impl, want) {
-			t.Errorf("implementation lane is missing %q", want)
+	research := laneSection(t, body, "research")
+	for _, want := range []string{
+		"#10</span>", "#11</span>", ">1</span>",
+		`class="lane-card lane-from-research lane-to-implementation"`,
+		`class="sub-lane sub-lane-3 `,
+	} {
+		if !strings.Contains(research, want) {
+			t.Errorf("research lane is missing %q:\n%s", want, research)
 		}
 	}
-	if strings.Contains(laneSection(t, body, "research"), "<article") {
-		t.Error("research lane holds a card, want none")
+	impl := laneSection(t, body, "implementation")
+	if strings.Contains(impl, "<article") {
+		t.Error("implementation lane holds a card, want the spanning card in research")
+	}
+	if !strings.Contains(impl, ">1</span>") {
+		t.Errorf("implementation lane does not count subtask 11:\n%s", impl)
+	}
+	for _, phase := range []string{"design", "planning"} {
+		if s := laneSection(t, body, phase); !strings.Contains(s, ">0</span>") {
+			t.Errorf("%s lane does not count 0:\n%s", phase, s)
+		}
 	}
 }
 

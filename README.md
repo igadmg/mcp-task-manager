@@ -95,7 +95,7 @@ call shows up on the board on the next refresh (every 5 seconds).
 - `serve web` resolves the project eagerly, so the board has data from the very first request. Started from inside the MCP server it comes up before the client has named a project and shows a placeholder until the first tool call.
 - `serve web --mcp` additionally serves MCP over stdio in the same process. It is off by default: a terminal has a TTY on stdin, and a JSON-RPC reader there would eat your keystrokes.
 - Tailwind CSS and htmx are compiled into the binary, so the page renders with no network access.
-- In progress groups its cards into Research / Design / Planning / Implementation lanes, each shifted right by half a card. A task's lane is the phase of its latest started run in its `<phase>.phase` records; a task without records falls back to the workflow files (`research`, `design`, `plan`) attached to it.
+- In progress is a grid of Research / Design / Planning / Implementation lanes, each starting one step right of the one before. A task's lane is the phase of its latest started run in its `<phase>.phase` records; a task without records falls back to the workflow files (`research`, `design`, `plan`) attached to it. A card whose nested subtasks are in other phases spans the whole range of its group, and each nested row is indented to its own lane — so a parent in research with a subtask in planning reads as research..planning instead of looking like one planning task. A lane's count is the tasks whose own phase it is, so the four counts add up to the column's.
 - Done shows statistics instead of task cards: per configured field (by default `priority`, `type`, `resolution`) one stacked bar per value with the done / in progress / todo split, the closures of the last 24 h highlighted, and a label like `7/12 · 5 open · +2`; and line charts of tasks created and closed per day (plain, cumulative, or one line per value of a field), drawn as inline SVG on the server with a legend, day tooltips and the lines listed in `hidden` switched off. Clicking a legend entry shows or hides its line; the choice is kept per browser (in `localStorage`, per card `id` and line) and survives the board refresh, and the toggle sends no request. A done task stays reachable at `/tasks/{id}`. See `web.done_stats` under Configuration.
 - Every card shows who created the task and when; in-progress cards with phase records also show the current phase, who started it and when, and the tokens spent so far. The detail view lists every phase run.
 - Clicking a card opens its panel at `/tasks/{id}` — the board with that panel open, not a separate page. Opening a file or a subtask from there turns the board into a workspace: the board slides off to the left, the task's own column takes its place on the far left, and what you opened appears as a column to its right. Opening something from there adds another column, so a subtask sits beside its parent rather than replacing it. A rail on the far left lists the whole chain, so one click steps back. Every column is one screen tall and scrolls inside itself; the page does not scroll, and the strip cannot be panned with a mouse or trackpad — there is no scroll container to pan. Below `lg` nothing slides and the columns stack.
@@ -330,8 +330,9 @@ inside this repository, where the skills also live under `.claude/skills/`.
 **Phase records.** The server keeps every run of a phase in
 `<tasks_dir>/<id>/<phase>.phase`: who started it and when, when it finished,
 its tokens and an optional note. The dashboard places an in-progress card in
-the lane of its latest phase and shows that phase, who started it and the
-tokens spent so far; the detail view lists every run. A few rules:
+the lane of its latest phase — spanning to its subtasks' lanes when it has
+in-progress subtasks — and shows that phase, who started it and the tokens
+spent so far; the detail view lists every run. A few rules:
 
 - Only one run per task may be open at a time. If a session dies mid-phase,
   close the run with `finish_phase` (no tokens) before starting again.

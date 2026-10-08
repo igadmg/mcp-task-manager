@@ -133,10 +133,21 @@ type StatsBarView struct {
 }
 
 // PhaseLaneView is one workflow-phase lane inside In progress. Phase is
-// the raw value ("planning"): it names the lane-<phase> CSS class and the
-// data-phase attribute, and is the heading (the template upper-cases it).
-// Count is the in-progress tasks on its cards, nested subtasks included,
-// so the lane counts add up to the column's.
+// the raw value ("planning"): it names the data-phase attribute and the
+// lane-from-<phase> / lane-to-<phase> placement classes, and is the heading
+// (the template upper-cases it).
+//
+// Cards and Count answer different questions on purpose, because a card can
+// straddle lanes:
+//
+//   - Cards are the cards that *begin* in this lane, i.e. whose LaneFrom it
+//     is, so the column's one vertical stack is ordered by where a card
+//     starts. A card listed here may reach into later lanes.
+//   - Count is the in-progress tasks whose *own* phase this lane is - the
+//     card's own task, plus each nested in-progress subtask counted in its
+//     own lane even when it is drawn inside a parent sitting elsewhere. A
+//     nested todo subtask counts in To do. Every in-progress task has
+//     exactly one own phase, so the four counts partition the column's.
 type PhaseLaneView struct {
 	Phase string
 	Count int
@@ -185,6 +196,16 @@ type CardView struct {
 	// Branch is the git branch to show on the card: the final branch once
 	// the task has been delivered, its wip branch before that.
 	Branch string
+	// LaneFrom and LaneTo are the phase lanes this card spans on the In
+	// progress grid, earliest to latest: its own phase plus every nested
+	// in-progress subtask's. They are equal for a card without such
+	// subtasks, and empty outside In progress.
+	LaneFrom string
+	LaneTo   string
+	// LaneOffset is a nested subtask row's indent, in lane steps right of
+	// the parent card's first lane (0..3). It is 0 for a row with no phase
+	// of its own - a todo subtask - and for every card outside In progress.
+	LaneOffset int
 	// Subtasks are nested when they sit in the same column as this card,
 	// plus the todo subtasks of an in-progress card, which also keep their
 	// own card in To do; otherwise they render standalone in their column.
@@ -404,8 +425,10 @@ func newBoardView(snap *task.BoardSnapshot, cfg *config.Config, now time.Time, p
 		}
 		switch col.Status {
 		case task.StatusInProgress:
-			cv.Cards = deref(cards)
+			// newPhaseLanes fills in the lane span and the nested rows'
+			// offsets, so it runs before the cards are copied out.
 			cv.Lanes = newPhaseLanes(cards, snap)
+			cv.Cards = deref(cards)
 		case task.StatusDone:
 			// Done shows statistics, not tasks; its tasks are still counted.
 			cv.Stats = newStatsCards(snap.Stats)
@@ -432,28 +455,40 @@ func newBoardView(snap *task.BoardSnapshot, cfg *config.Config, now time.Time, p
 }
 
 // newPhaseLanes buckets the In progress root cards, already sorted, into
-// one lane per task.Phases entry; lane i holds phase Order() i. A card goes
-// to the furthest phase of its group: itself plus its nested in-progress
-// subtasks (nested todo subtasks belong to To do). Bucketing is
-// stable, so each lane keeps the column's priority, age, id order.
+// one lane per task.Phases entry; lane i holds phase Order() i. On the way
+// it fills in each card's LaneFrom/LaneTo span and its nested rows'
+// LaneOffset, which is why it runs before the cards are copied out.
+//
+// A card spans its group: itself plus its nested in-progress subtasks
+// (nested todo subtasks have their own To do card, no phase of their own,
+// and widen nothing). It is listed in the lane it begins in, while every
+// task counts in the lane of its own phase - see PhaseLaneView. Bucketing
+// is stable, so each lane keeps the column's priority, age, id order.
 func newPhaseLanes(roots []*CardView, snap *task.BoardSnapshot) []PhaseLaneView {
-	var lanes []PhaseLaneView
-	for _, p := range task.Phases() {
+	phases := task.Phases()
+	lanes := make([]PhaseLaneView, 0, len(phases))
+	for _, p := range phases {
 		lanes = append(lanes, PhaseLaneView{Phase: string(p)})
 	}
 	for _, card := range roots {
-		rank, count := snap.Phases[card.ID].Order(), 1
+		own := snap.Phases[card.ID].Order()
+		from, to := own, own
+		lanes[own].Count++
 		for _, kid := range card.Subtasks {
-			// A nested todo subtask has its own To do card and no phase
-			// of its own, so it counts and ranks there, not here.
 			if !kid.InProgress {
 				continue
 			}
-			rank = max(rank, snap.Phases[kid.ID].Order())
-			count++
+			rank := snap.Phases[kid.ID].Order()
+			from, to = min(from, rank), max(to, rank)
+			lanes[rank].Count++
 		}
-		lanes[rank].Cards = append(lanes[rank].Cards, *card)
-		lanes[rank].Count += count
+		card.LaneFrom, card.LaneTo = string(phases[from]), string(phases[to])
+		for i := range card.Subtasks {
+			if kid := &card.Subtasks[i]; kid.InProgress {
+				kid.LaneOffset = snap.Phases[kid.ID].Order() - from
+			}
+		}
+		lanes[from].Cards = append(lanes[from].Cards, *card)
 	}
 	return lanes
 }

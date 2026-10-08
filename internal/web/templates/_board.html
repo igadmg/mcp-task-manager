@@ -22,17 +22,20 @@
            its neighbours, and a data-pane so the poll keeps the offset. */}}
       <div class="column-body" data-pane="column:{{ .Status }}">
         {{ if .Lanes }}
+        {{/* The four phase lanes are one grid. A lane is display:contents, so
+             its header and its cards are placed on that grid themselves: the
+             lane-from-<phase>/lane-to-<phase> pair names the span, and a card
+             whose nested subtasks sit in later phases straddles the lanes it
+             covers. The lane survives as the grouping and the data-phase hook. */}}
         <div class="lanes">
           {{ range .Lanes }}
-          <section class="lane lane-{{ .Phase }}" data-phase="{{ .Phase }}">
-            <header class="flex items-center gap-2 px-1 pb-1.5">
+          <section class="lane" data-phase="{{ .Phase }}">
+            <header class="lane-head lane-from-{{ .Phase }} lane-to-{{ .Phase }} flex items-center gap-2 px-1 pb-1.5">
               <h3 class="text-[11px] font-medium uppercase tracking-wider text-neutral-500">{{ .Phase }}</h3>
               <span class="chip chip-muted ml-auto">{{ .Count }}</span>
             </header>
-            {{ if .Cards }}
-            <div class="flex flex-col gap-2">
-              {{ range .Cards }}{{ template "_card.html" . }}{{ end }}
-            </div>
+            {{ range .Cards }}
+            <div class="lane-card lane-from-{{ .LaneFrom }} lane-to-{{ .LaneTo }}">{{ template "_card.html" . }}</div>
             {{ end }}
           </section>
           {{ end }}
