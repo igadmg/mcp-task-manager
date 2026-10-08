@@ -2,6 +2,7 @@ package web
 
 import (
 	"fmt"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -37,6 +38,14 @@ type BoardView struct {
 	DangerZone  []DangerItem
 	PollSeconds int
 	Generated   string
+	// Panel is the task whose side panel is open, nil on the bare board.
+	// /tasks/{id} is that state: the board with a panel, which is also
+	// where the workspace rail ends.
+	Panel *DetailView
+	// Title is the document title: "#id Title" with a panel open, else
+	// the board's own. htmx caches and restores document.title, so a
+	// history entry stays distinguishable.
+	Title string
 }
 
 // ColumnView is one status column.
@@ -129,10 +138,21 @@ type StatsBarView struct {
 }
 
 // PhaseLaneView is one workflow-phase lane inside In progress. Phase is
-// the raw value ("planning"): it names the lane-<phase> CSS class and the
-// data-phase attribute, and is the heading (the template upper-cases it).
-// Count is the in-progress tasks on its cards, nested subtasks included,
-// so the lane counts add up to the column's.
+// the raw value ("planning"): it names the data-phase attribute and the
+// lane-from-<phase> / lane-to-<phase> placement classes, and is the heading
+// (the template upper-cases it).
+//
+// Cards and Count answer different questions on purpose, because a card can
+// straddle lanes:
+//
+//   - Cards are the cards that *begin* in this lane, i.e. whose LaneFrom it
+//     is, so the column's one vertical stack is ordered by where a card
+//     starts. A card listed here may reach into later lanes.
+//   - Count is the in-progress tasks whose *own* phase this lane is - the
+//     card's own task, plus each nested in-progress subtask counted in its
+//     own lane even when it is drawn inside a parent sitting elsewhere. A
+//     nested todo subtask counts in To do. Every in-progress task has
+//     exactly one own phase, so the four counts partition the column's.
 type PhaseLaneView struct {
 	Phase string
 	Count int
@@ -141,8 +161,14 @@ type PhaseLaneView struct {
 
 // CardView is one task on the board.
 type CardView struct {
-	ID           string
-	Title        string
+	ID    string
+	Title string
+	// Href and HXGet open this card as a workspace column. They are filled
+	// for a detail view's subtask rows, so a subtask opens beside its
+	// parent instead of leaving the workspace; board cards leave them
+	// empty and _card.html builds its own panel link.
+	Href         string
+	HXGet        string
 	Priority     string
 	Type         string
 	Status       string
@@ -175,6 +201,16 @@ type CardView struct {
 	// Branch is the git branch to show on the card: the final branch once
 	// the task has been delivered, its wip branch before that.
 	Branch string
+	// LaneFrom and LaneTo are the phase lanes this card spans on the In
+	// progress grid, earliest to latest: its own phase plus every nested
+	// in-progress subtask's. They are equal for a card without such
+	// subtasks, and empty outside In progress.
+	LaneFrom string
+	LaneTo   string
+	// LaneOffset is a nested subtask row's indent, in lane steps right of
+	// the parent card's first lane (0..3). It is 0 for a row with no phase
+	// of its own - a todo subtask - and for every card outside In progress.
+	LaneOffset int
 	// Subtasks are nested when they sit in the same column as this card,
 	// plus the todo subtasks of an in-progress card, which also keep their
 	// own card in To do; otherwise they render standalone in their column.
@@ -208,7 +244,7 @@ type DetailView struct {
 	Relations   []RelationView
 	// Files are the attached files, without the phase records that
 	// Phases shows.
-	Files          []string
+	Files          []FileLinkView
 	Phases         []PhaseView
 	TotalTokens    string
 	UpdatedAt      string
@@ -225,6 +261,72 @@ type DetailView struct {
 	StartCommitShort  string
 	SquashCommit      string
 	SquashCommitShort string
+}
+
+// WorkspaceView is one workspace state: the rail, then the strip. The board
+// is the strip's first unit and stays in the DOM at every depth, so it keeps
+// polling while it is off-screen.
+type WorkspaceView struct {
+	Project     ProjectView
+	Title       string
+	PollSeconds int
+	Board       BoardView
+	Rail        []RailEntryView
+	Columns     []ColumnUnitView
+	// Root is the root task's own column, rendered as the strip's second
+	// unit whenever anything is open. The chain does not name it - the
+	// root is already in the URL - but it is what takes the board's
+	// leftmost slot once the board slides away, so everything else is
+	// placed from it.
+	Root *ColumnUnitView
+	// Shifted says the board has slid off the left, which is exactly the
+	// case when something is open. Only ever one unit leaves, so the
+	// offset is a single width rather than a sum over kinds, and the strip
+	// can carry it in one custom property and transition it.
+	Shifted bool
+}
+
+// RailEntryView is one rung of the nesting rail. Href is the chain truncated
+// to this entry, which is what makes the rail the primary Back: every rung is
+// a real URL and browser Back does the same thing.
+type RailEntryView struct {
+	Kind    string
+	Label   string
+	Ref     string
+	Href    string
+	HXGet   string
+	Current bool
+}
+
+// ColumnUnitView is one column in the strip. Class comes from the kind
+// registry and is declared in input.css, Template draws the body, and Data is
+// whatever that kind resolved.
+type ColumnUnitView struct {
+	Kind     string
+	Class    string
+	Label    string
+	Ref      string
+	Template string
+	Working  bool
+	Href     string
+	Data     any
+}
+
+// FileLinkView is one attached file: its name as the backlog spells it, and
+// the URL that serves it. Href is built here rather than in a template
+// because html/template's URL normalizer escapes a space but leaves '#' and
+// '?' alone, which would turn the rest of a name like "a#b.md" into a
+// fragment and make the file unreachable.
+type FileLinkView struct {
+	Name string
+	// Href opens the file as a workspace column; HXGet is the same state
+	// as a fragment. The panel is the depth-0 workspace, so a file chip
+	// there is the chain's entry point.
+	Href  string
+	HXGet string
+	// RawHref serves the bytes as text/plain, which is what the file
+	// column's "raw" link and anything outside the workspace uses.
+	RawHref string
 }
 
 // PhaseView is one phase's run history in the detail view.
@@ -328,8 +430,10 @@ func newBoardView(snap *task.BoardSnapshot, cfg *config.Config, now time.Time, p
 		}
 		switch col.Status {
 		case task.StatusInProgress:
-			cv.Cards = deref(cards)
+			// newPhaseLanes fills in the lane span and the nested rows'
+			// offsets, so it runs before the cards are copied out.
 			cv.Lanes = newPhaseLanes(cards, snap)
+			cv.Cards = deref(cards)
 		case task.StatusDone:
 			// Done shows statistics, not tasks; its tasks are still counted.
 			cv.Stats = newStatsCards(snap.Stats)
@@ -356,28 +460,40 @@ func newBoardView(snap *task.BoardSnapshot, cfg *config.Config, now time.Time, p
 }
 
 // newPhaseLanes buckets the In progress root cards, already sorted, into
-// one lane per task.Phases entry; lane i holds phase Order() i. A card goes
-// to the furthest phase of its group: itself plus its nested in-progress
-// subtasks (nested todo subtasks belong to To do). Bucketing is
-// stable, so each lane keeps the column's priority, age, id order.
+// one lane per task.Phases entry; lane i holds phase Order() i. On the way
+// it fills in each card's LaneFrom/LaneTo span and its nested rows'
+// LaneOffset, which is why it runs before the cards are copied out.
+//
+// A card spans its group: itself plus its nested in-progress subtasks
+// (nested todo subtasks have their own To do card, no phase of their own,
+// and widen nothing). It is listed in the lane it begins in, while every
+// task counts in the lane of its own phase - see PhaseLaneView. Bucketing
+// is stable, so each lane keeps the column's priority, age, id order.
 func newPhaseLanes(roots []*CardView, snap *task.BoardSnapshot) []PhaseLaneView {
-	var lanes []PhaseLaneView
-	for _, p := range task.Phases() {
+	phases := task.Phases()
+	lanes := make([]PhaseLaneView, 0, len(phases))
+	for _, p := range phases {
 		lanes = append(lanes, PhaseLaneView{Phase: string(p)})
 	}
 	for _, card := range roots {
-		rank, count := snap.Phases[card.ID].Order(), 1
+		own := snap.Phases[card.ID].Order()
+		from, to := own, own
+		lanes[own].Count++
 		for _, kid := range card.Subtasks {
-			// A nested todo subtask has its own To do card and no phase
-			// of its own, so it counts and ranks there, not here.
 			if !kid.InProgress {
 				continue
 			}
-			rank = max(rank, snap.Phases[kid.ID].Order())
-			count++
+			rank := snap.Phases[kid.ID].Order()
+			from, to = min(from, rank), max(to, rank)
+			lanes[rank].Count++
 		}
-		lanes[rank].Cards = append(lanes[rank].Cards, *card)
-		lanes[rank].Count += count
+		card.LaneFrom, card.LaneTo = string(phases[from]), string(phases[to])
+		for i := range card.Subtasks {
+			if kid := &card.Subtasks[i]; kid.InProgress {
+				kid.LaneOffset = snap.Phases[kid.ID].Order() - from
+			}
+		}
+		lanes[from].Cards = append(lanes[from].Cards, *card)
 	}
 	return lanes
 }
@@ -560,6 +676,29 @@ func newBlockerViews(blockers []task.BlockingInfo) []BlockerView {
 
 // newDetailView maps one task's detail. titles resolves relation targets to
 // their titles; a missing entry simply renders as the bare id.
+// newFileLinkViews pairs every attached file with its URL. Both segments are
+// percent-encoded here, so the template emits a finished string and a name
+// holding '#', '?' or '%' survives the trip to the browser.
+func newFileLinkViews(id string, names []string) []FileLinkView {
+	base := Chain{Root: id}
+	links := make([]FileLinkView, 0, len(names))
+	for _, name := range names {
+		open := base.Append(KindFile, name)
+		links = append(links, FileLinkView{
+			Name:    name,
+			Href:    open.Path(),
+			HXGet:   open.Fragment(),
+			RawHref: taskFileHref(id, name),
+		})
+	}
+	return links
+}
+
+// taskFileHref is the one place the /tasks/{id}/files/{name} URL is spelled.
+func taskFileHref(id, name string) string {
+	return "/tasks/" + url.PathEscape(id) + "/files/" + url.PathEscape(name)
+}
+
 func newDetailView(d *task.TaskDetail, cfg *config.Config, titles map[string]string, now time.Time) DetailView {
 	t := d.Task
 	card := CardView{
@@ -587,8 +726,11 @@ func newDetailView(d *task.TaskDetail, cfg *config.Config, titles map[string]str
 		if sub.Status == task.StatusDone {
 			card.SubtaskDone++
 		}
+		open := Chain{Root: t.ID}.Append(KindTask, sub.ID)
 		card.Subtasks = append(card.Subtasks, CardView{
 			ID:         sub.ID,
+			Href:       open.Path(),
+			HXGet:      open.Fragment(),
 			Title:      sub.Title,
 			Priority:   string(sub.Priority),
 			Type:       sub.Type,
@@ -606,7 +748,7 @@ func newDetailView(d *task.TaskDetail, cfg *config.Config, titles map[string]str
 		Card:           card,
 		Description:    t.Description,
 		Archived:       d.Archived,
-		Files:          d.Files,
+		Files:          newFileLinkViews(t.ID, d.Files),
 		UpdatedAt:      t.UpdatedAt.Format(timeFormat),
 		ResolutionNote: t.ResolutionNote,
 

@@ -8,9 +8,10 @@ import (
 //go:embed templates/*.html
 var templateFS embed.FS
 
-// The two page sets each pair the shared layout with one page template, so
-// both can define "content" without colliding. Fragments are parsed on their
-// own for the htmx swap targets.
+// There is one page set: board.html plus the shared layout. Every state the
+// dashboard serves - the bare board, a task's panel, a workspace chain - is
+// that one page, so a URL never switches surface. Fragments are parsed on
+// their own for the htmx swap targets.
 //
 // There are two funcMap entries. asset maps an embedded file name to its
 // content-hashed URL and is the same for every session, because /static/ is
@@ -32,7 +33,6 @@ var (
 	funcs       = template.FuncMap{"asset": assetURL, "nav": navFor("")}
 	fragments   = template.Must(template.New("fragments").Funcs(funcs).ParseFS(templateFS, "templates/_*.html"))
 	boardPage   = mustPage("board.html")
-	detailPage  = mustPage("detail.html")
 	welcomePage = mustPage("welcome.html")
 	gonePage    = mustPage("gone.html")
 

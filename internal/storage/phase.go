@@ -58,7 +58,7 @@ func (s *MarkdownStorage) LoadPhase(taskID string, p task.Phase) (*task.PhaseRec
 
 // SavePhase writes rec into the active task's directory, atomically.
 func (s *MarkdownStorage) SavePhase(taskID string, rec *task.PhaseRecord) error {
-	if err := validatePathSegment("task id", taskID); err != nil {
+	if err := task.ValidateNameSegment("task id", taskID); err != nil {
 		return err
 	}
 	data, err := encodePhase(rec)
@@ -71,7 +71,7 @@ func (s *MarkdownStorage) SavePhase(taskID string, rec *task.PhaseRecord) error 
 // RemovePhase deletes the active task's record for p. Removing a missing
 // record is not an error.
 func (s *MarkdownStorage) RemovePhase(taskID string, p task.Phase) error {
-	if err := validatePathSegment("task id", taskID); err != nil {
+	if err := task.ValidateNameSegment("task id", taskID); err != nil {
 		return err
 	}
 	if err := os.Remove(s.phasePath(s.taskDir(taskID), p)); err != nil && !os.IsNotExist(err) {

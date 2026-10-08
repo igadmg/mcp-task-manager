@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -251,9 +252,9 @@ func TestStaticAssetsServed(t *testing.T) {
 // loads has to come out of the binary.
 func TestNoExternalAssetReferences(t *testing.T) {
 	h, svc, _ := newTestHandler(t)
-	seedBoard(t, svc)
+	seedWorkspace(t, svc)
 
-	for _, path := range []string{"/", "/tasks/1"} {
+	for _, path := range []string{"/", "/tasks/1", "/tasks/1/w/f/research.md", "/strip/tasks/1"} {
 		body := get(t, h, path).Body.String()
 		for _, attr := range []string{`src="`, `href="`} {
 			rest := body
@@ -283,9 +284,12 @@ func TestNoExternalAssetReferences(t *testing.T) {
 // pattern had quietly been registered for another method.
 func TestNoMutatingRoutes(t *testing.T) {
 	h, svc, dir := newTestHandler(t)
-	seedBoard(t, svc)
+	seedWorkspace(t, svc)
 
-	sessionPaths := []string{"/", "/board", "/tasks/1", "/tasks/1/panel", "/tasks/1/files/research"}
+	sessionPaths := []string{
+		"/", "/board", "/tasks/1", "/tasks/1/panel", "/tasks/1/files/research.md",
+		"/tasks/1/w/f/research.md", "/tasks/1/w/t/2", "/strip/tasks/1", "/strip/",
+	}
 	for _, path := range sessionPaths {
 		for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
 			rec := httptest.NewRecorder()
@@ -334,7 +338,13 @@ func TestEscaping(t *testing.T) {
 	const branchPayload = `dev/wip/"><script>alert(2)</script>`
 	setBranch(t, dir(t, svc), "1", branchPayload, "")
 
-	for _, path := range []string{"/", "/board", "/tasks/1", "/tasks/1/panel"} {
+	// The payload also travels in a chain URL: the file column's ref is the
+	// attacking file name, escaped on the way out and on the way back.
+	chainFile := "/tasks/1/w/f/" + url.PathEscape("x<script>.md")
+	for _, path := range []string{
+		"/", "/board", "/tasks/1", "/tasks/1/panel",
+		chainFile, "/strip" + chainFile, "/strip/tasks/1",
+	} {
 		body := get(t, h, path).Body.String()
 		if strings.Contains(body, payload) || strings.Contains(body, branchPayload) {
 			t.Errorf("%s rendered a payload unescaped", path)
@@ -510,7 +520,7 @@ func TestBoardRendersPhaseLanes(t *testing.T) {
 	}
 	last := -1
 	for _, phase := range []string{"research", "design", "planning", "implementation"} {
-		i := strings.Index(body, `class="lane lane-`+phase+`" data-phase="`+phase+`"`)
+		i := strings.Index(body, `class="lane" data-phase="`+phase+`"`)
 		if i <= last {
 			t.Errorf("lane %s at %d, want after %d", phase, i, last)
 		}
@@ -518,7 +528,12 @@ func TestBoardRendersPhaseLanes(t *testing.T) {
 	}
 
 	planning := laneSection(t, body, "planning")
-	for _, want := range []string{"Fix the index", "chip-live", `hx-get="` + h.base + `/tasks/3/panel"`, ">1</span>"} {
+	for _, want := range []string{
+		"Fix the index", "chip-live", `hx-get="` + h.base + `/tasks/3/panel"`, ">1</span>",
+		// A card with no in-progress subtasks occupies its own lane only.
+		`class="lane-card lane-from-planning lane-to-planning"`,
+		`class="lane-head lane-from-planning lane-to-planning `,
+	} {
 		if !strings.Contains(planning, want) {
 			t.Errorf("planning lane is missing %q", want)
 		}
@@ -537,7 +552,12 @@ func TestBoardRendersPhaseLanes(t *testing.T) {
 	}
 }
 
-func TestBoardLaneGroupsByFurthestPhase(t *testing.T) {
+// TestBoardLaneGroupSpansItsSubtasks: parent 10 has no artifact, so it
+// reads as research, while its subtask 11 has a plan and reads as
+// implementation. The card is drawn in the lane it begins in, spans
+// research..implementation, and its nested row is shifted three steps; each
+// of the two tasks counts in the lane of its own phase.
+func TestBoardLaneGroupSpansItsSubtasks(t *testing.T) {
 	h, svc, _ := newTestHandler(t)
 	testsupport.Seed(t, svc,
 		testsupport.TaskSpec{ID: "10", Status: "in_progress"},
@@ -548,14 +568,27 @@ func TestBoardLaneGroupsByFurthestPhase(t *testing.T) {
 	}
 
 	body := get(t, h, "/board").Body.String()
-	impl := laneSection(t, body, "implementation")
-	for _, want := range []string{"#10</span>", "#11</span>", ">2</span>"} {
-		if !strings.Contains(impl, want) {
-			t.Errorf("implementation lane is missing %q", want)
+	research := laneSection(t, body, "research")
+	for _, want := range []string{
+		"#10</span>", "#11</span>", ">1</span>",
+		`class="lane-card lane-from-research lane-to-implementation"`,
+		`class="sub-lane sub-lane-3 `,
+	} {
+		if !strings.Contains(research, want) {
+			t.Errorf("research lane is missing %q:\n%s", want, research)
 		}
 	}
-	if strings.Contains(laneSection(t, body, "research"), "<article") {
-		t.Error("research lane holds a card, want none")
+	impl := laneSection(t, body, "implementation")
+	if strings.Contains(impl, "<article") {
+		t.Error("implementation lane holds a card, want the spanning card in research")
+	}
+	if !strings.Contains(impl, ">1</span>") {
+		t.Errorf("implementation lane does not count subtask 11:\n%s", impl)
+	}
+	for _, phase := range []string{"design", "planning"} {
+		if s := laneSection(t, body, phase); !strings.Contains(s, ">0</span>") {
+			t.Errorf("%s lane does not count 0:\n%s", phase, s)
+		}
 	}
 }
 
@@ -832,18 +865,16 @@ func TestStatsLinesEscaping(t *testing.T) {
 }
 
 // TestPanelIsTheOnlyScroller pins the panel's scroll model. A long description
-// has to scroll inside #panel, not drag the page and the board along, so the
-// aside is a capped scroll container that does not chain its overscroll, and
-// the description below it is no longer a nested scroller of its own.
+// has to scroll inside #panel, not drag the page and the board along. Since
+// the workspace the strip introduced, the panel is one of the strip's panes:
+// a .pane with a data-pane key, scrolling inside a viewport-tall unit - and
+// the description below it is still not a nested scroller of its own.
 func TestPanelIsTheOnlyScroller(t *testing.T) {
 	h, svc, _ := newTestHandler(t)
 	seedBoard(t, svc)
 
 	body := get(t, h, "/").Body.String()
-	for _, want := range []string{
-		`id="panel"`, "overscroll-contain",
-		"lg:max-h-[calc(100dvh-6rem)]", "lg:overflow-y-auto", "lg:sticky",
-	} {
+	for _, want := range []string{`id="panel"`, `class="pane"`, `data-pane="panel"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the panel aside lacks %q", want)
 		}
@@ -859,6 +890,484 @@ func TestPanelIsTheOnlyScroller(t *testing.T) {
 	for _, bad := range []string{"max-h-96", "overflow-auto"} {
 		if strings.Contains(panel, bad) {
 			t.Errorf("the description still carries %q: a second scroller nested in #panel", bad)
+		}
+	}
+}
+
+// TestAttachedFileHrefEscaped covers the characters html/template's URL
+// normalizer leaves alone: a '#' would start a fragment and a '?' a query, so
+// an unescaped href makes the file unreachable. Both names are legal
+// attached-file names (task.ValidateAttachedName rejects only empty, a path
+// separator and dots-and-spaces-only). Every href is built in Go, which is
+// why both the workspace link and the raw route survive them.
+func TestAttachedFileHrefEscaped(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedBoard(t, svc)
+	names := []string{"a#b.md", "a?b.md", "my notes.md"}
+	for _, name := range names {
+		if err := svc.WriteTaskFile("1", name, "content of "+name); err != nil {
+			t.Fatalf("WriteTaskFile(%q) error = %v", name, err)
+		}
+	}
+
+	// The panel is the depth-0 workspace, so its file chips open a column.
+	body := get(t, h, "/tasks/1/panel").Body.String()
+	for _, want := range []string{
+		`href="` + h.base + `/tasks/1/w/f/a%23b.md"`,
+		`href="` + h.base + `/tasks/1/w/f/a%3Fb.md"`,
+		`href="` + h.base + `/tasks/1/w/f/my%20notes.md"`,
+		`hx-get="` + h.base + `/strip/tasks/1/w/f/a%23b.md"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("panel is missing %s", want)
+		}
+	}
+
+	// Both escaped URLs round-trip: the workspace renders the file, and the
+	// raw route serves its bytes.
+	for _, name := range names {
+		content := "content of " + name
+		ws := "/tasks/1/w/f/" + url.PathEscape(name)
+		rec := get(t, h, ws)
+		if rec.Code != http.StatusOK {
+			t.Errorf("GET %s = %d, want 200", ws, rec.Code)
+		} else if !strings.Contains(rec.Body.String(), content) {
+			t.Errorf("GET %s does not show the file content", ws)
+		}
+
+		raw := "/tasks/1/files/" + url.PathEscape(name)
+		rec = get(t, h, raw)
+		if rec.Code != http.StatusOK {
+			t.Errorf("GET %s = %d, want 200", raw, rec.Code)
+		} else if got := rec.Body.String(); got != content {
+			t.Errorf("GET %s = %q, want %q", raw, got, content)
+		}
+	}
+}
+
+// TestTaskURLIsBoardAndPanel pins the repurposed route: /tasks/{id} is the
+// board with that task's panel open, not a surface of its own. It is the
+// state a workspace chain of depth 0 names.
+func TestTaskURLIsBoardAndPanel(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedBoard(t, svc)
+
+	body := get(t, h, "/tasks/3").Body.String()
+	// The board is there: its three column headings and a card of another
+	// task.
+	for _, want := range []string{"To do", "In progress", "Done", "Ship the board"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("/tasks/3 is missing the board's %q", want)
+		}
+	}
+	// And so is the panel, inside the #panel aside.
+	_, rest, ok := strings.Cut(body, `id="panel"`)
+	if !ok {
+		t.Fatal("/tasks/3 has no #panel")
+	}
+	panel, _, ok := strings.Cut(rest, "</aside>")
+	if !ok {
+		t.Fatal("#panel is never closed")
+	}
+	if !strings.Contains(panel, "Fix the index") {
+		t.Error("#panel does not hold the task's own title")
+	}
+	if strings.Contains(body, "Pick a card to see its description") {
+		t.Error("/tasks/{id} still renders the empty-panel placeholder")
+	}
+	if !strings.Contains(body, "<title>#3 Fix the index</title>") {
+		t.Error("/tasks/{id} does not title the document after the task")
+	}
+
+	// The bare board keeps its own title and its placeholder.
+	root := get(t, h, "/").Body.String()
+	if !strings.Contains(root, "<title>Task board</title>") {
+		t.Error("/ lost its title")
+	}
+	if !strings.Contains(root, "Pick a card to see its description") {
+		t.Error("/ lost the empty-panel placeholder")
+	}
+}
+
+// seedWorkspace gives task 1 a file and task 2 (its subtask) one too, which
+// is enough to walk a task-then-file chain.
+func seedWorkspace(t *testing.T, svc *task.Service) {
+	t.Helper()
+	seedBoard(t, svc)
+	if err := svc.WriteTaskFile("1", "research.md", "# root findings"); err != nil {
+		t.Fatalf("WriteTaskFile() error = %v", err)
+	}
+	if err := svc.WriteTaskFile("2", "plan.md", "# subtask plan"); err != nil {
+		t.Fatalf("WriteTaskFile() error = %v", err)
+	}
+}
+
+// TestWorkspaceDeepLinks walks every state a chain can be in and asserts each
+// one is a whole page that renders its own columns: a deep link and a reload
+// are the same request, so this is what "reload restores the layout" means.
+func TestWorkspaceDeepLinks(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedWorkspace(t, svc)
+
+	tests := []struct {
+		name string
+		path string
+		want []string
+	}{
+		{
+			name: "a file of the root",
+			path: "/tasks/1/w/f/research.md",
+			want: []string{`data-column="f"`, `data-ref="research.md"`, "# root findings"},
+		},
+		{
+			name: "a subtask",
+			path: "/tasks/1/w/t/2",
+			want: []string{`data-column="t"`, `data-ref="2"`, "Write templates"},
+		},
+		{
+			name: "a subtask then its file",
+			path: "/tasks/1/w/t/2/f/plan.md",
+			want: []string{`data-ref="2"`, `data-ref="plan.md"`, "# subtask plan"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := get(t, h, tc.path)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("GET %s = %d, want 200", tc.path, rec.Code)
+			}
+			body := rec.Body.String()
+			if !strings.Contains(body, "<html") {
+				t.Error("a chain URL must be a whole document: it is the deep link and the reload")
+			}
+			// The board is still in the strip at every depth, which is
+			// what keeps it polling while off-screen.
+			if !strings.Contains(body, `id="board"`) {
+				t.Error("the board left the strip")
+			}
+			if !strings.Contains(body, `id="strip"`) {
+				t.Error("no strip to swap")
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(body, want) {
+					t.Errorf("%s is missing %q", tc.path, want)
+				}
+			}
+		})
+	}
+}
+
+// TestWorkspaceFragmentIsAFragment pairs the fragment route with the page
+// route the way /board pairs with /{$}.
+func TestWorkspaceFragmentIsAFragment(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedWorkspace(t, svc)
+
+	for _, path := range []string{
+		"/strip/tasks/1/w/f/research.md",
+		"/strip/tasks/1/w/t/2/f/plan.md",
+		"/strip/tasks/1",
+		"/strip/",
+	} {
+		rec := get(t, h, path)
+		if rec.Code != http.StatusOK {
+			t.Errorf("GET %s = %d, want 200", path, rec.Code)
+			continue
+		}
+		body := rec.Body.String()
+		if strings.Contains(body, "<html") {
+			t.Errorf("%s returned a full page; it is swapped into #strip", path)
+		}
+		if !strings.Contains(body, `id="strip"`) {
+			t.Errorf("%s does not carry #strip, so outerHTML would drop the target", path)
+		}
+	}
+}
+
+// TestWorkspaceRailTruncates is the Back mechanism: entry i links to exactly
+// the chain cut to i columns, and the last entry is the current one.
+func TestWorkspaceRailTruncates(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedWorkspace(t, svc)
+
+	body := get(t, h, "/tasks/1/w/t/2/f/plan.md").Body.String()
+	rail, _, ok := strings.Cut(body, "</nav>")
+	if !ok {
+		t.Fatal("the workspace has no rail")
+	}
+	_, rail, _ = strings.Cut(rail, `class="rail"`)
+
+	for _, want := range []string{
+		`href="` + h.base + `/tasks/1"`,
+		`href="` + h.base + `/tasks/1/w/t/2"`,
+		`href="` + h.base + `/tasks/1/w/t/2/f/plan.md"`,
+		`hx-get="` + h.base + `/strip/tasks/1"`,
+		`hx-target="#strip"`,
+		`aria-current="true"`,
+	} {
+		if !strings.Contains(rail, want) {
+			t.Errorf("rail is missing %s:\n%s", want, rail)
+		}
+	}
+	if n := strings.Count(rail, "rail-step"); n != 3 {
+		t.Errorf("rail has %d steps, want 3 (root + two columns)", n)
+	}
+	if n := strings.Count(rail, "rail-current"); n != 1 {
+		t.Errorf("rail marks %d current steps, want 1", n)
+	}
+
+	// Depth 0 has nothing to step back through, so it has no rail.
+	if plain := get(t, h, "/tasks/1").Body.String(); strings.Contains(plain, `class="rail"`) {
+		t.Error("/tasks/{id} renders a rail; the board is already the whole strip")
+	}
+}
+
+// TestWorkspaceColumnLinksAppend covers the other half of the chain: a link
+// inside a column opens the next state.
+func TestWorkspaceColumnLinksAppend(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedWorkspace(t, svc)
+
+	// From the root's panel, a file chip appends f/<name>.
+	panel := get(t, h, "/tasks/1/panel").Body.String()
+	if !strings.Contains(panel, `href="`+h.base+`/tasks/1/w/f/research.md"`) {
+		t.Error("the panel does not open its file as a column")
+	}
+
+	// From a task column, both its files and its subtasks append.
+	col := get(t, h, "/tasks/1/w/t/2").Body.String()
+	if !strings.Contains(col, `href="`+h.base+`/tasks/1/w/t/2/f/plan.md"`) {
+		t.Error("a task column does not open its own file")
+	}
+	// The working column is marked, which is what the layout keys on.
+	if !strings.Contains(col, "unit-working") {
+		t.Error("no working column is marked")
+	}
+}
+
+// TestWorkspaceNotFound keeps every bad chain a 404. A chain lives in the URL,
+// so a chain that names nothing is a URL that names nothing - never a 500.
+func TestWorkspaceNotFound(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedWorkspace(t, svc)
+
+	paths := []string{
+		"/tasks/nope/w/f/research.md",   // root is gone
+		"/tasks/1/w/f/missing.md",       // file is gone
+		"/tasks/1/w/t/nope",             // task column is gone
+		"/tasks/1/w/z/research.md",      // unknown kind
+		"/tasks/1/w/f",                  // malformed pair
+		"/tasks/1/w/f/%2E%2E",           // dots-only ref
+		"/tasks/1/w/f/a%2Fb.md",         // encoded separator
+		"/tasks/1/w/t/2/f/research.md",  // the file belongs to the root, not to task 2
+		"/strip/tasks/1/w/f/missing.md", // the fragment route agrees
+		"/strip/tasks/nope",             // and on the root
+	}
+	for _, path := range paths {
+		if rec := get(t, h, path); rec.Code != http.StatusNotFound {
+			t.Errorf("GET %s = %d, want 404", path, rec.Code)
+		}
+	}
+
+	// And over the depth cap.
+	deep := "/tasks/1/w" + strings.Repeat("/t/2", maxChainDepth+1)
+	if rec := get(t, h, deep); rec.Code != http.StatusNotFound {
+		t.Errorf("a chain past the cap = %d, want 404", rec.Code)
+	}
+}
+
+// TestWorkspaceArchivedTask keeps the workspace read-only but reachable for an
+// archived task, like the panel already is.
+func TestWorkspaceArchivedTask(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	testsupport.Seed(t, svc, testsupport.TaskSpec{ID: "9", Title: "Finished thing", Status: "done"})
+	if err := svc.WriteTaskFile("9", "design.md", "# shipped"); err != nil {
+		t.Fatalf("WriteTaskFile() error = %v", err)
+	}
+	if err := svc.ArchiveTask("9"); err != nil {
+		t.Fatalf("ArchiveTask() error = %v", err)
+	}
+
+	rec := get(t, h, "/tasks/9/w/f/design.md")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET an archived task's file column = %d, want 200", rec.Code)
+	}
+	for _, want := range []string{"# shipped", "Archived"} {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("the archived workspace is missing %q", want)
+		}
+	}
+}
+
+// TestWorkspaceRootColumnLeadsTheStrip pins the layout model the browser pass
+// settled on: opening anything slides the board off and the root task's own
+// column takes its leftmost slot, with the chain's columns to its right. A
+// subtask therefore opens as a column beside its parent, not over it.
+func TestWorkspaceRootColumnLeadsTheStrip(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedWorkspace(t, svc)
+
+	// Nothing open: no root column, and the strip is not shifted.
+	plain := get(t, h, "/tasks/1").Body.String()
+	if strings.Contains(plain, "strip-shifted") {
+		t.Error("/tasks/{id} shifts the strip; the board is the whole view until something opens")
+	}
+	if strings.Contains(plain, `data-column="root"`) {
+		t.Error("/tasks/{id} renders a root column next to its own panel")
+	}
+
+	// A file of the root: board away, root column first, file column after.
+	body := get(t, h, "/tasks/1/w/f/research.md").Body.String()
+	if !strings.Contains(body, "strip-shifted") {
+		t.Error("the board does not slide off when a column opens")
+	}
+	rootAt := strings.Index(body, `data-column="root"`)
+	fileAt := strings.Index(body, `data-column="f"`)
+	if rootAt < 0 {
+		t.Fatal("no root task column leads the strip")
+	}
+	if fileAt < 0 || rootAt > fileAt {
+		t.Error("the root column does not come before the opened column")
+	}
+	// Its links hang off the depth-0 chain, so the root column opens the
+	// first column rather than a second one.
+	if !strings.Contains(body, `href="`+h.base+`/tasks/1/w/t/2"`) {
+		t.Error("the root column does not open its subtask as the first column")
+	}
+
+	// A subtask: root column, then the subtask's own column beside it.
+	sub := get(t, h, "/tasks/1/w/t/2").Body.String()
+	rootAt = strings.Index(sub, `data-column="root"`)
+	subAt := strings.Index(sub, `data-column="t"`)
+	if rootAt < 0 || subAt < 0 || rootAt > subAt {
+		t.Error("a subtask does not open to the right of its parent's column")
+	}
+	// Two columns past the board: the root and the subtask. The board unit
+	// carries no data-column, so this counts only the strip's columns.
+	if n := strings.Count(sub, `data-column="`); n != 2 {
+		t.Errorf("the strip has %d columns, want 2 (root + subtask)", n)
+	}
+
+	// A root that is gone takes the whole workspace with it.
+	if rec := get(t, h, "/tasks/nope/w/f/x.md"); rec.Code != http.StatusNotFound {
+		t.Errorf("a missing root = %d, want 404", rec.Code)
+	}
+}
+
+// TestTaskColumnIsTheSamePlate pins what a task column looks like: the task's
+// detail view, exactly as the side panel renders it. Moving a task to the left
+// of the strip must not turn it into a different-looking thing, so the column
+// and the panel share one fragment and the column only rebases its links.
+func TestTaskColumnIsTheSamePlate(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedWorkspace(t, svc)
+
+	panel := get(t, h, "/tasks/1/panel").Body.String()
+	column := get(t, h, "/tasks/1/w/f/research.md").Body.String()
+
+	// Everything the panel shows about the task is in the column too.
+	for _, want := range []string{
+		"Ship the board", // the title
+		"Subtasks 0/1",   // the subtask section heading
+		"Attached files", // the file section heading
+		"research.md",
+	} {
+		if !strings.Contains(panel, want) {
+			t.Fatalf("the panel itself is missing %q; fixture is wrong", want)
+		}
+		if !strings.Contains(column, want) {
+			t.Errorf("the task column is missing %q, so it is not the same plate", want)
+		}
+	}
+
+	// And its links are rebased onto the column's place in the chain, not
+	// re-rooted on the task: opening the subtask from the root column
+	// appends the first column.
+	if !strings.Contains(column, `href="`+h.base+`/tasks/1/w/t/2"`) {
+		t.Error("the root column does not append its subtask to the chain")
+	}
+
+	// A subtask column rebases onto its own position rather than becoming a
+	// new root.
+	sub := get(t, h, "/tasks/1/w/t/2").Body.String()
+	if !strings.Contains(sub, `href="`+h.base+`/tasks/1/w/t/2/f/plan.md"`) {
+		t.Error("a subtask column re-roots the chain instead of appending to it")
+	}
+	if strings.Contains(sub, `href="`+h.base+`/tasks/2/w/f/plan.md"`) {
+		t.Error("a subtask column still links as if it were the chain's root")
+	}
+}
+
+// TestNoTemplateErrors renders every surface against a task that carries one
+// of everything. A template that reads a field its data does not have fails at
+// execute time, which render turns into a 500 - so this catches a fragment
+// wired to the wrong view model, whatever the fragment is reused by.
+func TestNoTemplateErrors(t *testing.T) {
+	h, svc, tasksDir := newTestHandler(t)
+	seedWorkspace(t, svc)
+	// Task 5 is blocked by 3, task 1 has a subtask and files; give 1 a
+	// branch, a phase run and a relation so no section is skipped.
+	setBranch(t, tasksDir, "1", "dev/wip/1-ship", "")
+	if _, _, err := svc.StartPhase("1", task.PhaseResearch); err != nil {
+		t.Fatalf("StartPhase() error = %v", err)
+	}
+	if err := svc.AddRelation("1", "relates_to", "3"); err != nil {
+		t.Fatalf("AddRelation() error = %v", err)
+	}
+
+	paths := []string{
+		"/", "/board",
+		"/tasks/1", "/tasks/1/panel",
+		"/tasks/5", "/tasks/5/panel",
+		"/tasks/1/w/f/research.md",
+		"/tasks/1/w/t/2",
+		"/tasks/1/w/t/2/f/plan.md",
+		"/strip/", "/strip/tasks/1", "/strip/tasks/1/w/f/research.md",
+	}
+	for _, path := range paths {
+		rec := get(t, h, path)
+		if rec.Code != http.StatusOK {
+			t.Errorf("GET %s = %d, want 200", path, rec.Code)
+			continue
+		}
+		if strings.Contains(rec.Body.String(), "internal error") {
+			t.Errorf("GET %s rendered a template error", path)
+		}
+	}
+}
+
+// TestEveryPaneHasAKey ties the markup to app.js: a scroll container without
+// a data-pane key is a column whose scroll position is lost on the next board
+// poll. Both kinds count - the strip's .pane and a board column's
+// .column-body - because app.js keys on the attribute, not on the class.
+func TestEveryPaneHasAKey(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedWorkspace(t, svc)
+
+	for _, path := range []string{"/", "/tasks/1", "/tasks/1/w/t/2/f/plan.md"} {
+		body := get(t, h, path).Body.String()
+		panes := strings.Count(body, `class="pane`) +
+			strings.Count(body, `class="column-body"`)
+		keys := strings.Count(body, "data-pane=")
+		if panes == 0 {
+			t.Errorf("%s renders no pane", path)
+		}
+		if panes != keys {
+			t.Errorf("%s has %d scroll containers but %d keys", path, panes, keys)
+		}
+	}
+
+	// The keys are distinct, or two panes would share one offset.
+	body := get(t, h, "/tasks/1/w/t/2/f/plan.md").Body.String()
+	for _, want := range []string{
+		`data-pane="board"`, `data-pane="panel"`, `data-pane="root"`,
+		`data-pane="t:2"`, `data-pane="f:plan.md"`,
+		`data-pane="column:todo"`, `data-pane="column:in_progress"`,
+		`data-pane="column:done"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("a deep chain is missing %s", want)
 		}
 	}
 }

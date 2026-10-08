@@ -17,6 +17,11 @@ set -euo pipefail
 # phase workflow on itself.
 SKILLS=(begin_task research design planning implementation workflow)
 
+# Skills that live only in this repository: they drive development *of* this
+# repository (building and running the binary from source), so they are not
+# part of the installed package. Not mirrored, and kept across a sync.
+LOCAL_ONLY=(open_board)
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC="${REPO_ROOT}/plugins/mcp-task-manager/skills"
 DST="${REPO_ROOT}/.claude/skills"
@@ -32,6 +37,9 @@ if [[ "${1:-}" == "--check" ]]; then
   for d in "${DST}"/*/; do
     [[ -d "$d" ]] || continue
     name="$(basename "$d")"
+    if [[ " ${LOCAL_ONLY[*]} " == *" ${name} "* ]]; then
+      continue
+    fi
     if [[ ! " ${SKILLS[*]} " == *" ${name} "* ]]; then
       echo "unexpected: .claude/skills/${name} is not mirrored from the plugin" >&2
       status=1
@@ -40,8 +48,13 @@ if [[ "${1:-}" == "--check" ]]; then
   exit "$status"
 fi
 
-rm -rf "${DST}"
 mkdir -p "${DST}"
+for d in "${DST}"/*/; do
+  [[ -d "$d" ]] || continue
+  name="$(basename "$d")"
+  [[ " ${LOCAL_ONLY[*]} " == *" ${name} "* ]] && continue
+  rm -rf "$d"
+done
 for s in "${SKILLS[@]}"; do
   cp -R "${SRC}/${s}" "${DST}/${s}"
 done

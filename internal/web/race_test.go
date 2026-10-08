@@ -65,6 +65,10 @@ func TestHandlerRaceAgainstWrites(t *testing.T) {
 		run(func(int) { fetch(base + "/tasks/1/panel") })
 		run(func(int) { fetch(base + "/tasks/5") })
 		run(func(int) { fetch(base + "/tasks/3") })
+		// A workspace chain reads the board, a task and a file in one
+		// request, while the writers below are changing all three.
+		run(func(int) { fetch(base + "/tasks/3/w/f/research") })
+		run(func(int) { fetch(base + "/strip/tasks/3/w/t/2") })
 	}
 	run(func(int) { fetch("/") })
 	run(func(int) { fetch("/nosuchtoken/board") })

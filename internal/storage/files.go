@@ -4,36 +4,18 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/gpayer/mcp-task-manager/internal/task"
 )
 
-// validatePathSegment holds the three checks common to both attached
-// filenames and task ids: non-empty (after trim), no path separator, not
-// a ".." traversal segment. label is used only to word the error message
-// ("filename" vs "task id").
-func validatePathSegment(label, name string) error {
-	if strings.TrimSpace(name) == "" {
-		return fmt.Errorf("%s cannot be empty", label)
-	}
-	if strings.ContainsAny(name, "/\\") {
-		return fmt.Errorf("%s %q must not contain a path separator", label, name)
-	}
-	if name == ".." {
-		return fmt.Errorf("%s %q is not allowed", label, name)
-	}
-	return nil
-}
-
-// validateFilename rejects filenames that are empty, contain a path
-// separator or a ".." traversal segment, or (when checkReserved is true)
+// validateFilename rejects filenames that are malformed (empty, a path
+// separator, a name of only dots and spaces) or (when checkReserved is true)
 // collide with the task's own reserved "{id}.md" record file or a
-// server-owned "*.phase" record (task.IsReservedFileName). Attached
-// filenames are caller-controlled and joined directly into a filesystem
-// path, so this is the one validation this feature needs.
+// server-owned "*.phase" record (task.IsReservedFileName). The shape rules
+// are task.ValidateAttachedName - the one definition, shared with every
+// consumer that has to judge a name before reading one.
 func validateFilename(id string, filename string, checkReserved bool) error {
-	if err := validatePathSegment("filename", filename); err != nil {
+	if err := task.ValidateAttachedName(filename); err != nil {
 		return err
 	}
 	if checkReserved && filename == fmt.Sprintf("%s.md", id) {
@@ -59,7 +41,7 @@ var reservedTaskIDs = map[string]string{
 // It does not check uniqueness against existing tasks - see Exists /
 // ArchiveStorage.IsArchived for that (requires I/O, format doesn't).
 func (s *MarkdownStorage) ValidateID(id string) error {
-	if err := validatePathSegment("task id", id); err != nil {
+	if err := task.ValidateNameSegment("task id", id); err != nil {
 		return err
 	}
 	if reason, ok := reservedTaskIDs[id]; ok {

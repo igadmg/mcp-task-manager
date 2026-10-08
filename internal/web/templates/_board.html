@@ -1,6 +1,6 @@
-<div id="board" hx-get="{{ nav "/board" }}" hx-trigger="every {{ .PollSeconds }}s" hx-swap="outerHTML">
+<div id="board" class="board" hx-get="{{ nav "/board" }}" hx-trigger="every {{ .PollSeconds }}s" hx-swap="outerHTML">
   {{ if .DangerZone }}
-  <div class="mb-4 rounded-xl border border-amber-400/30 bg-amber-400/[0.06] px-4 py-3">
+  <div class="mb-4 shrink-0 rounded-xl border border-amber-400/30 bg-amber-400/[0.06] px-4 py-3">
     <p class="text-sm font-medium text-amber-200">An agent may be working right now</p>
     <p class="mt-1 text-sm text-amber-100/70">
       In progress:
@@ -10,44 +10,51 @@
   </div>
   {{ end }}
 
-  <div class="grid gap-3 md:grid-cols-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_minmax(0,1fr)]">
+  <div class="board-grid grid gap-3 md:grid-cols-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_minmax(0,1fr)]">
     {{ range .Columns }}
     <section class="column">
-      <header class="flex items-center gap-2 px-1 pb-2 pt-1">
+      <header class="flex shrink-0 items-center gap-2 px-1 pb-2 pt-1">
         <span class="dot dot-{{ .Status }}"></span>
         <h2 class="text-xs font-semibold uppercase tracking-wider text-neutral-400">{{ .Title }}</h2>
         <span class="chip chip-muted ml-auto">{{ .Count }}</span>
       </header>
-      {{ if .Lanes }}
-      <div class="lanes">
-        {{ range .Lanes }}
-        <section class="lane lane-{{ .Phase }}" data-phase="{{ .Phase }}">
-          <header class="flex items-center gap-2 px-1 pb-1.5">
-            <h3 class="text-[11px] font-medium uppercase tracking-wider text-neutral-500">{{ .Phase }}</h3>
-            <span class="chip chip-muted ml-auto">{{ .Count }}</span>
-          </header>
-          {{ if .Cards }}
-          <div class="flex flex-col gap-2">
-            {{ range .Cards }}{{ template "_card.html" . }}{{ end }}
-          </div>
+      {{/* Each column scrolls its own cards: one screen tall, independent of
+           its neighbours, and a data-pane so the poll keeps the offset. */}}
+      <div class="column-body" data-pane="column:{{ .Status }}">
+        {{ if .Lanes }}
+        {{/* The four phase lanes are one grid. A lane is display:contents, so
+             its header and its cards are placed on that grid themselves: the
+             lane-from-<phase>/lane-to-<phase> pair names the span, and a card
+             whose nested subtasks sit in later phases straddles the lanes it
+             covers. The lane survives as the grouping and the data-phase hook. */}}
+        <div class="lanes">
+          {{ range .Lanes }}
+          <section class="lane" data-phase="{{ .Phase }}">
+            <header class="lane-head lane-from-{{ .Phase }} lane-to-{{ .Phase }} flex items-center gap-2 px-1 pb-1.5">
+              <h3 class="text-[11px] font-medium uppercase tracking-wider text-neutral-500">{{ .Phase }}</h3>
+              <span class="chip chip-muted ml-auto">{{ .Count }}</span>
+            </header>
+            {{ range .Cards }}
+            <div class="lane-card lane-from-{{ .LaneFrom }} lane-to-{{ .LaneTo }}">{{ template "_card.html" . }}</div>
+            {{ end }}
+          </section>
           {{ end }}
-        </section>
+        </div>
+        {{ else if .Stats }}
+        <div class="flex flex-col gap-2">
+          {{ range .Stats }}{{ if eq .Kind "lines" }}{{ template "_stats_lines.html" . }}{{ else }}{{ template "_stats_bars.html" . }}{{ end }}{{ end }}
+        </div>
+        {{ else }}
+        <div class="flex flex-col gap-2">
+          {{ range .Cards }}{{ template "_card.html" . }}{{ else }}
+          <p class="px-1 py-6 text-center text-xs text-neutral-600">empty</p>
+          {{ end }}
+        </div>
         {{ end }}
       </div>
-      {{ else if .Stats }}
-      <div class="flex flex-col gap-2">
-        {{ range .Stats }}{{ if eq .Kind "lines" }}{{ template "_stats_lines.html" . }}{{ else }}{{ template "_stats_bars.html" . }}{{ end }}{{ end }}
-      </div>
-      {{ else }}
-      <div class="flex flex-col gap-2">
-        {{ range .Cards }}{{ template "_card.html" . }}{{ else }}
-        <p class="px-1 py-6 text-center text-xs text-neutral-600">empty</p>
-        {{ end }}
-      </div>
-      {{ end }}
     </section>
     {{ end }}
   </div>
 
-  <p class="meta mt-3 text-right">updated {{ .Generated }}</p>
+  <p class="meta mt-3 shrink-0 text-right">updated {{ .Generated }}</p>
 </div>

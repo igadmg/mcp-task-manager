@@ -19,7 +19,6 @@ import (
 // 404s as an unknown token when clicked.
 type sessionTemplates struct {
 	board     *template.Template
-	detail    *template.Template
 	fragments *template.Template
 	welcome   *template.Template
 	gone      *template.Template
@@ -29,7 +28,6 @@ func newSessionTemplates(base string) sessionTemplates {
 	funcs := template.FuncMap{"nav": navFor(base)}
 	return sessionTemplates{
 		board:     mustClone(boardPage, funcs),
-		detail:    mustClone(detailPage, funcs),
 		fragments: mustClone(fragments, funcs),
 		welcome:   mustClone(welcomePage, funcs),
 		gone:      mustClone(gonePage, funcs),

@@ -1,17 +1,2 @@
-{{ define "content" }}
-<div class="grid gap-5 lg:grid-cols-[minmax(0,1fr)_22rem]">
-  <div class="min-w-0">
-    {{ template "_board.html" . }}
-  </div>
-
-  <!-- The panel is the only scroller in its column: sticky and capped at the
-       viewport, so a description longer than the screen scrolls here instead
-       of dragging the page (and the board) along, and overscroll-contain
-       keeps the wheel from chaining out to the page at either end. -->
-  <aside id="panel" class="overscroll-contain lg:sticky lg:top-20 lg:max-h-[calc(100dvh-6rem)] lg:self-start lg:overflow-y-auto">
-    <div class="rounded-xl border border-dashed border-white/10 p-6 text-sm text-neutral-500">
-      Pick a card to see its description, relations and attached files.
-    </div>
-  </aside>
-</div>
-{{ end }}
+{{ define "title" }}{{ if .Title }}{{ .Title }}{{ else }}Task board{{ end }}{{ end }}
+{{ define "content" }}{{ template "_workspace.html" . }}{{ end }}

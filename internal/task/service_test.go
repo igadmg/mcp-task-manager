@@ -94,14 +94,8 @@ var mockReservedTaskIDs = map[string]string{
 }
 
 func (m *mockStorage) ValidateID(id string) error {
-	if strings.TrimSpace(id) == "" {
-		return fmt.Errorf("task id cannot be empty")
-	}
-	if strings.ContainsAny(id, "/\\") {
-		return fmt.Errorf("task id %q must not contain a path separator", id)
-	}
-	if id == ".." {
-		return fmt.Errorf("task id %q is not allowed", id)
+	if err := ValidateNameSegment("task id", id); err != nil {
+		return err
 	}
 	if reason, ok := mockReservedTaskIDs[id]; ok {
 		return fmt.Errorf("task id %q is reserved (%s)", id, reason)

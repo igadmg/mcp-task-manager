@@ -131,7 +131,11 @@ func TestNilPhasesMapReadsAsResearch(t *testing.T) {
 	}
 }
 
-func TestLaneGroupTakesFurthestPhase(t *testing.T) {
+// TestLaneGroupSpansItsSubtaskPhases pins the spanning rule: the parent P
+// is in research with a planning subtask, so its card is listed in the lane
+// it begins in and spans research..planning, while each task counts in the
+// lane of its own phase.
+func TestLaneGroupSpansItsSubtaskPhases(t *testing.T) {
 	snap := boardOf(
 		tk("P", "", task.StatusInProgress, task.PriorityHigh, fixedNow),
 		tk("S", "P", task.StatusInProgress, task.PriorityHigh, fixedNow),
@@ -139,18 +143,55 @@ func TestLaneGroupTakesFurthestPhase(t *testing.T) {
 	snap.Phases["S"] = task.PhasePlanning
 
 	v := newBoardView(snap, nil, fixedNow, 5)
-	planning := lane(v, task.PhasePlanning)
-	if got := cardIDs(planning.Cards); !slices.Equal(got, []string{"P"}) {
-		t.Fatalf("planning lane = %v, want [P]", got)
+	research := lane(v, task.PhaseResearch)
+	if got := cardIDs(research.Cards); !slices.Equal(got, []string{"P"}) {
+		t.Fatalf("research lane = %v, want [P]: a card is listed where it begins", got)
 	}
-	if got := cardIDs(planning.Cards[0].Subtasks); !slices.Equal(got, []string{"S"}) {
+	card := research.Cards[0]
+	if card.LaneFrom != "research" || card.LaneTo != "planning" {
+		t.Errorf("P spans %s..%s, want research..planning", card.LaneFrom, card.LaneTo)
+	}
+	if got := cardIDs(card.Subtasks); !slices.Equal(got, []string{"S"}) {
 		t.Errorf("P nests %v, want [S]", got)
 	}
-	if planning.Count != 2 {
-		t.Errorf("planning Count = %d, want 2: nested subtasks count", planning.Count)
+	if got := card.Subtasks[0].LaneOffset; got != 2 {
+		t.Errorf("S LaneOffset = %d, want 2 steps right of research", got)
 	}
-	if research := lane(v, task.PhaseResearch); research.Count != 0 || len(research.Cards) != 0 {
-		t.Errorf("research lane = %d count, %v cards, want empty", research.Count, cardIDs(research.Cards))
+	if research.Count != 1 {
+		t.Errorf("research Count = %d, want 1: only P is in research", research.Count)
+	}
+	if planning := lane(v, task.PhasePlanning); planning.Count != 1 || len(planning.Cards) != 0 {
+		t.Errorf("planning lane = %d count, %v cards, want 1 count and no card of its own",
+			planning.Count, cardIDs(planning.Cards))
+	}
+	for _, phase := range []task.Phase{task.PhaseDesign, task.PhaseImplementation} {
+		if l := lane(v, phase); l.Count != 0 || len(l.Cards) != 0 {
+			t.Errorf("%s lane = %d count, %v cards, want empty", phase, l.Count, cardIDs(l.Cards))
+		}
+	}
+}
+
+// TestSingleLaneCardSpansOneLane: without in-progress subtasks a card still
+// occupies exactly its own phase, and a nested todo subtask - which has no
+// phase of its own - neither widens the span nor shifts its row.
+func TestSingleLaneCardSpansOneLane(t *testing.T) {
+	snap := boardOf(
+		tk("P", "", task.StatusInProgress, task.PriorityHigh, fixedNow),
+		tk("S", "P", task.StatusTodo, task.PriorityHigh, fixedNow),
+	)
+	snap.Phases["P"] = task.PhaseDesign
+
+	v := newBoardView(snap, nil, fixedNow, 5)
+	design := lane(v, task.PhaseDesign)
+	if len(design.Cards) != 1 || design.Count != 1 {
+		t.Fatalf("design lane = %d count, %v cards, want 1 and [P]", design.Count, cardIDs(design.Cards))
+	}
+	card := design.Cards[0]
+	if card.LaneFrom != "design" || card.LaneTo != "design" {
+		t.Errorf("P spans %s..%s, want design..design", card.LaneFrom, card.LaneTo)
+	}
+	if got := card.Subtasks[0].LaneOffset; got != 0 {
+		t.Errorf("todo subtask LaneOffset = %d, want 0", got)
 	}
 }
 
@@ -190,6 +231,9 @@ func TestLanesPartitionTheColumn(t *testing.T) {
 	snap.Phases["b1"] = task.PhaseImplementation
 	snap.Phases["c"] = task.PhasePlanning
 	snap.Phases["d1"] = task.PhaseDesign
+	// a has no phase, so it reads as research; b spans design..implementation
+	// and is listed in design; c's nested subtask is todo, so c stays in
+	// planning; d1 is a standalone subtask in design.
 
 	col := column(newBoardView(snap, nil, fixedNow, 5), "in_progress")
 	var counts []int
@@ -200,8 +244,15 @@ func TestLanesPartitionTheColumn(t *testing.T) {
 		ids = append(ids, cardIDs(l.Cards)...)
 		sum += l.Count
 	}
-	if want := []int{1, 1, 1, 2}; !slices.Equal(counts, want) {
-		t.Errorf("lane counts = %v, want %v", counts, want)
+	if want := []int{1, 2, 1, 1}; !slices.Equal(counts, want) {
+		t.Errorf("lane counts = %v, want %v: every task counts in its own phase", counts, want)
+	}
+	if got := cardIDs(col.Lanes[1].Cards); !slices.Equal(got, []string{"b", "d1"}) {
+		t.Errorf("design lane holds %v, want [b d1]", got)
+	}
+	if got := col.Lanes[3]; len(got.Cards) != 0 || got.Count != 1 {
+		t.Errorf("implementation lane = %d count, %v cards, want 1 count from b1 and no card",
+			got.Count, cardIDs(got.Cards))
 	}
 	if sum != col.Count || col.Count != 5 {
 		t.Errorf("lane counts sum to %d, column Count = %d, want both 5", sum, col.Count)
@@ -397,6 +448,11 @@ func TestDetailViewArchivedShape(t *testing.T) {
 	}
 	if len(v.Files) != 1 {
 		t.Errorf("Files = %v, want the one attached file", v.Files)
+	} else if f := v.Files[0]; f.Name != "design.md" ||
+		f.Href != "/tasks/7/w/f/design.md" ||
+		f.HXGet != "/strip/tasks/7/w/f/design.md" ||
+		f.RawHref != "/tasks/7/files/design.md" {
+		t.Errorf("Files[0] = %+v, want design.md with its workspace and raw URLs", f)
 	}
 }
 
