@@ -92,3 +92,101 @@ func TestAppJSStatsToggles(t *testing.T) {
 		}
 	}
 }
+
+// TestAppCSSDefinesWorkspaceClasses ties the task workspace to the compiled
+// CSS. Three of these strings carry a design decision rather than a style, so
+// a well-meant edit that breaks them should fail here:
+//
+//   - "overflow:clip visible" on .stage. Tailwind's minifier folds the two
+//     axes into the shorthand. It must stay clip-plus-visible: "hidden" would
+//     make the stage a scroll container, drag the vertical axis away from
+//     visible and break the panel's lg:sticky - and it would give the strip
+//     something to pan, which clip structurally denies.
+//   - the strip-slide keyframes. The slide must be an animation, not a
+//     transition: htmx replaces the whole #strip, and a freshly inserted
+//     element has no previous value to transition from.
+//   - the viewport-height workspace. Every column is one screen tall and
+//     scrolls inside its own .pane, so the page itself never scrolls.
+//   - the prefers-reduced-motion block. It is the only motion the workspace
+//     adds and the first such rule in this project.
+func TestAppCSSDefinesWorkspaceClasses(t *testing.T) {
+	data, err := staticFS.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatalf("read embedded app.css: %v", err)
+	}
+	css := string(data)
+
+	want := []string{
+		".workspace{",
+		".stage{",
+		"overflow:clip visible",
+		".strip{",
+		".strip-shifted{",
+		"@keyframes strip-slide",
+		".unit{",
+		".unit-working{",
+		".pane{",
+		// The board is not its own scroll container: its pane clips and each
+		// status column scrolls inside .column-body, so a long To do queue
+		// cannot push In progress off the screen.
+		".pane-board{overflow:hidden}",
+		".board{",
+		".board-grid{",
+		".column-body{",
+		"@keyframes unit-in",
+		"height:calc(100dvh - var(--shell-chrome))",
+		".rail{",
+		".rail-step{",
+		".rail-current{",
+		".rail-label{",
+		".rail-ref{",
+		".col-head{",
+		".col-section{",
+		".col-link{",
+		".col-file-body{",
+		// Tailwind rewrites "width < 64rem" as a negated min-width.
+		"@media not all and (min-width:64rem)",
+		"@media (prefers-reduced-motion:reduce)",
+	}
+	// Every registered kind must have its width class compiled, or a column
+	// of that kind would lay out with no width at all.
+	for tag, k := range columnKinds {
+		if !strings.Contains(css, "."+k.Class+"{") {
+			t.Errorf("app.css lacks a width rule for kind %q (.%s)", tag, k.Class)
+		}
+	}
+	want = append(want, ".kind-board{")
+
+	for _, w := range want {
+		if !strings.Contains(css, w) {
+			t.Errorf("app.css lacks %q - rerun scripts/build-css.sh", w)
+		}
+	}
+}
+
+// TestAppJSPreservesPaneScroll pins the scroll-keeping block. Columns scroll
+// inside themselves, so the board's poll replaces #board inside a scroll
+// container and the browser clamps scrollTop to 0 while the old node is gone:
+// without this the column jumps to the top every five seconds. The bans are
+// the same as the stats toggles' - this stays a client-side listener with no
+// request and no htmx attribute in the markup.
+func TestAppJSPreservesPaneScroll(t *testing.T) {
+	data, err := staticFS.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatalf("read embedded app.js: %v", err)
+	}
+	js := string(data)
+	for _, w := range []string{
+		"data-pane", "scrollTop",
+		`"htmx:beforeSwap"`, `"htmx:afterSwap"`, `"htmx:afterSettle"`,
+	} {
+		if !strings.Contains(js, w) {
+			t.Errorf("app.js lacks %s", w)
+		}
+	}
+	for _, bad := range []string{"fetch(", "XMLHttpRequest", "htmx.ajax", "hx-", "htmx-history-cache"} {
+		if strings.Contains(js, bad) {
+			t.Errorf("app.js uses %s", bad)
+		}
+	}
+}

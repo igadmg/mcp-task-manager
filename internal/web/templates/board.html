@@ -1,13 +1,2 @@
-{{ define "content" }}
-<div class="grid gap-5 lg:grid-cols-[minmax(0,1fr)_22rem]">
-  <div class="min-w-0">
-    {{ if .Project.Resolved }}{{ template "_board.html" . }}{{ else }}{{ template "_unresolved.html" . }}{{ end }}
-  </div>
-
-  <aside id="panel" class="lg:sticky lg:top-20 lg:self-start">
-    <div class="rounded-xl border border-dashed border-white/10 p-6 text-sm text-neutral-500">
-      Pick a card to see its description, relations and attached files.
-    </div>
-  </aside>
-</div>
-{{ end }}
+{{ define "title" }}{{ if .Title }}{{ .Title }}{{ else }}Task board{{ end }}{{ end }}
+{{ define "content" }}{{ template "_workspace.html" . }}{{ end }}

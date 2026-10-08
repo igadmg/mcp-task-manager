@@ -1,0 +1,9 @@
+version: 1
+phase: implementation
+runs:
+  - started_at: "2026-10-07T21:07:32Z"
+    started_by: igor.cwer
+    finished_at: "2026-10-07T21:23:43Z"
+    finished_by: igor.cwer
+    tokens: 96000
+    note: 'internal/markdown: Render + inline + safeURL, 1884 lines with tests; corpus and fuzz gates green, go.mod untouched'

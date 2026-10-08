@@ -53,6 +53,10 @@ func TestHandlerRaceAgainstWrites(t *testing.T) {
 	run(func(int) { fetch("/board") })
 	run(func(int) { fetch("/tasks/1/panel") })
 	run(func(int) { fetch("/tasks/5") })
+	// A workspace chain reads the board, a task and a file in one request,
+	// while the writers below are changing all three.
+	run(func(int) { fetch("/tasks/3/w/f/research") })
+	run(func(int) { fetch("/strip/tasks/3/w/t/2") })
 
 	run(func(i int) {
 		svc.Create(fmt.Sprintf("created %d", i), "", task.PriorityMedium, "feature", "", "")

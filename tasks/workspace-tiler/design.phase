@@ -1,0 +1,8 @@
+version: 1
+phase: design
+runs:
+  - started_at: "2026-10-08T06:30:09Z"
+    started_by: igor.cwer
+    finished_at: "2026-10-08T06:34:40Z"
+    finished_by: igor.cwer
+    note: 'design.md: chain value + kind registry + rail/stage/strip shell; ADR supersedes the server-set translateX step and the /w/ zero-column state'

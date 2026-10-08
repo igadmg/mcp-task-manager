@@ -1,0 +1,9 @@
+version: 1
+phase: planning
+runs:
+  - started_at: "2026-10-07T21:05:08Z"
+    started_by: igor.cwer
+    finished_at: "2026-10-07T21:06:59Z"
+    finished_by: igor.cwer
+    tokens: 22000
+    note: 'six bottom-up phases: skeleton+escaper, safeURL, inline, leaf blocks, containers+tables, corpus/fuzz gates'

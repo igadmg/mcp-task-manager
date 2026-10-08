@@ -1,0 +1,5 @@
+{{/* A task column is the same plate as the side panel: the task's detail
+     view, unchanged. Moving a task to the left of the strip must not change
+     how it looks, and its links are already rebased onto this column's place
+     in the chain by resolveTaskColumn. */}}
+{{ template "_detail.html" .Detail }}

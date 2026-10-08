@@ -1,0 +1,9 @@
+version: 1
+phase: research
+runs:
+  - started_at: "2026-10-07T19:22:29Z"
+    started_by: igor.cwer
+    finished_at: "2026-10-07T19:28:14Z"
+    finished_by: igor.cwer
+    tokens: 148000
+    note: 'research.md: web routes/templates/panel+poll mechanics, file read path, escaping rule, test and CSS constraints'

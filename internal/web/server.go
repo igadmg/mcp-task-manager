@@ -60,6 +60,10 @@ func NewHandler(d Deps) http.Handler {
 	mux.HandleFunc("GET /tasks/{id}", h.detail)
 	mux.HandleFunc("GET /tasks/{id}/panel", h.detailPanel)
 	mux.HandleFunc("GET /tasks/{id}/files/{name}", h.taskFile)
+	// One pattern per family: registering "GET /tasks/{id}/w/" beside the
+	// wildcard panics, because it matches the same requests.
+	mux.HandleFunc("GET /tasks/{id}/w/{rest...}", h.workspace)
+	mux.HandleFunc("GET /strip/{rest...}", h.workspaceFragment)
 	mux.Handle("GET /static/", http.StripPrefix("/static/", staticHandler()))
 	mux.HandleFunc("GET /healthz", h.health)
 	return mux

@@ -158,3 +158,59 @@
   });
   applyAll();
 })();
+
+// Pane scroll across a swap.
+//
+// Every column scrolls inside itself - the strip's columns in their .pane, the
+// board's status columns in their .column-body - so the board's five-second
+// poll replaces #board *inside* scroll containers. While the old node is gone the
+// container has no content, the browser clamps scrollTop to 0, and the column
+// would jump back to the top on every refresh. Remember each pane's offset
+// under its data-pane key and put it back once the swap has settled, so a
+// refresh - and a step through the chain, which rebuilds the whole strip -
+// carries on from where the reader was.
+//
+// Like the stats toggles: one delegated set of listeners, no request, and no
+// htmx attribute in the markup.
+(function () {
+  var offsets = {};
+
+  // Keyed on the attribute alone, so any scroll container that carries a
+  // data-pane joins in: a .pane of the strip or a board column's body.
+  function panes() {
+    return document.querySelectorAll("[data-pane]");
+  }
+
+  function remember() {
+    panes().forEach(function (pane) {
+      offsets[pane.getAttribute("data-pane")] = pane.scrollTop;
+    });
+  }
+
+  function restore() {
+    panes().forEach(function (pane) {
+      var top = offsets[pane.getAttribute("data-pane")];
+      if (top > 0 && pane.scrollTop !== top) {
+        pane.scrollTop = top;
+      }
+    });
+  }
+
+  // A pane the reader is scrolling right now, so an offset is current even if
+  // the swap is triggered from somewhere that does not bubble beforeSwap.
+  document.addEventListener(
+    "scroll",
+    function (event) {
+      var pane = event.target;
+      if (pane && pane.matches && pane.matches("[data-pane]")) {
+        offsets[pane.getAttribute("data-pane")] = pane.scrollTop;
+      }
+    },
+    true
+  );
+
+  document.addEventListener("htmx:beforeSwap", remember);
+  ["htmx:afterSwap", "htmx:afterSettle", "htmx:load"].forEach(function (name) {
+    document.addEventListener(name, restore);
+  });
+})();

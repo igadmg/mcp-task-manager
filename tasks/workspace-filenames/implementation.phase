@@ -1,0 +1,9 @@
+version: 1
+phase: implementation
+runs:
+  - started_at: "2026-10-07T20:45:42Z"
+    started_by: igor.cwer
+    finished_at: "2026-10-07T20:52:56Z"
+    finished_by: igor.cwer
+    tokens: 96000
+    note: task.ValidateAttachedName/ValidateNameSegment in internal/task/name.go; storage calls it at all six sites; dots-and-spaces names rejected; Service.files() nil guard; agreement + asymmetry tests; CLAUDE.md

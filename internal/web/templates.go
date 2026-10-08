@@ -8,9 +8,10 @@ import (
 //go:embed templates/*.html
 var templateFS embed.FS
 
-// The two page sets each pair the shared layout with one page template, so
-// both can define "content" without colliding. Fragments are parsed on their
-// own for the htmx swap targets.
+// There is one page set: board.html plus the shared layout. Every state the
+// dashboard serves - the bare board, a task's panel, a workspace chain - is
+// that one page, so a URL never switches surface. Fragments are parsed on
+// their own for the htmx swap targets.
 //
 // The only funcMap entry is asset, which maps an embedded file name to its
 // content-hashed URL. Every other field is already a plain string and is
@@ -18,10 +19,9 @@ var templateFS embed.FS
 // deliberately no safeHTML helper and no template.HTML anywhere in this
 // package - task titles and descriptions are user-controlled.
 var (
-	funcs      = template.FuncMap{"asset": assetURL}
-	fragments  = template.Must(template.New("fragments").Funcs(funcs).ParseFS(templateFS, "templates/_*.html"))
-	boardPage  = mustPage("board.html")
-	detailPage = mustPage("detail.html")
+	funcs     = template.FuncMap{"asset": assetURL}
+	fragments = template.Must(template.New("fragments").Funcs(funcs).ParseFS(templateFS, "templates/_*.html"))
+	boardPage = mustPage("board.html")
 )
 
 func mustPage(name string) *template.Template {

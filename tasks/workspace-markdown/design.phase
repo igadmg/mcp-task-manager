@@ -1,0 +1,9 @@
+version: 1
+phase: design
+runs:
+  - started_at: "2026-10-07T21:02:21Z"
+    started_by: igor.cwer
+    finished_at: "2026-10-07T21:05:05Z"
+    finished_by: igor.cwer
+    tokens: 38000
+    note: internal/markdown leaf package, no AST, one writeText escaper, safeURL; checkboxes in, underscore emphasis out

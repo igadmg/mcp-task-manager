@@ -1,0 +1,9 @@
+{{/* The kind registry's dispatch. Go templates cannot take a template name
+     from data, so this is the one place a kind's tag maps to its fragment: a
+     new kind adds an entry to columnKinds, a fragment, and one branch here -
+     and never touches the chain, the layout or the routes. */}}
+{{ if eq .Kind "t" }}{{ template "_col_task.html" .Data }}
+{{ else if eq .Kind "f" }}{{ template "_col_file.html" .Data }}
+{{ else }}
+<p class="text-sm text-neutral-500">No renderer for a {{ .Kind }} column.</p>
+{{ end }}

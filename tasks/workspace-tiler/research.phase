@@ -1,0 +1,8 @@
+version: 1
+phase: research
+runs:
+  - started_at: "2026-10-07T22:14:21Z"
+    started_by: igor.cwer
+    finished_at: "2026-10-07T22:50:49Z"
+    finished_by: igor.cwer
+    note: nine gaps closed by probes (ServeMux, escaping, Tailwind compile, htmx history); research.md + clarifications.md

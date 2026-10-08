@@ -2,6 +2,7 @@ package web
 
 import (
 	"fmt"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,6 +33,14 @@ type BoardView struct {
 	DangerZone  []DangerItem
 	PollSeconds int
 	Generated   string
+	// Panel is the task whose side panel is open, nil on the bare board.
+	// /tasks/{id} is that state: the board with a panel, which is also
+	// where the workspace rail ends.
+	Panel *DetailView
+	// Title is the document title: "#id Title" with a panel open, else
+	// the board's own. htmx caches and restores document.title, so a
+	// history entry stays distinguishable.
+	Title string
 }
 
 // ColumnView is one status column.
@@ -136,8 +145,14 @@ type PhaseLaneView struct {
 
 // CardView is one task on the board.
 type CardView struct {
-	ID           string
-	Title        string
+	ID    string
+	Title string
+	// Href and HXGet open this card as a workspace column. They are filled
+	// for a detail view's subtask rows, so a subtask opens beside its
+	// parent instead of leaving the workspace; board cards leave them
+	// empty and _card.html builds its own panel link.
+	Href         string
+	HXGet        string
 	Priority     string
 	Type         string
 	Status       string
@@ -203,7 +218,7 @@ type DetailView struct {
 	Relations   []RelationView
 	// Files are the attached files, without the phase records that
 	// Phases shows.
-	Files          []string
+	Files          []FileLinkView
 	Phases         []PhaseView
 	TotalTokens    string
 	UpdatedAt      string
@@ -220,6 +235,72 @@ type DetailView struct {
 	StartCommitShort  string
 	SquashCommit      string
 	SquashCommitShort string
+}
+
+// WorkspaceView is one workspace state: the rail, then the strip. The board
+// is the strip's first unit and stays in the DOM at every depth, so it keeps
+// polling while it is off-screen.
+type WorkspaceView struct {
+	Project     ProjectView
+	Title       string
+	PollSeconds int
+	Board       BoardView
+	Rail        []RailEntryView
+	Columns     []ColumnUnitView
+	// Root is the root task's own column, rendered as the strip's second
+	// unit whenever anything is open. The chain does not name it - the
+	// root is already in the URL - but it is what takes the board's
+	// leftmost slot once the board slides away, so everything else is
+	// placed from it.
+	Root *ColumnUnitView
+	// Shifted says the board has slid off the left, which is exactly the
+	// case when something is open. Only ever one unit leaves, so the
+	// offset is a single width rather than a sum over kinds, and the strip
+	// can carry it in one custom property and transition it.
+	Shifted bool
+}
+
+// RailEntryView is one rung of the nesting rail. Href is the chain truncated
+// to this entry, which is what makes the rail the primary Back: every rung is
+// a real URL and browser Back does the same thing.
+type RailEntryView struct {
+	Kind    string
+	Label   string
+	Ref     string
+	Href    string
+	HXGet   string
+	Current bool
+}
+
+// ColumnUnitView is one column in the strip. Class comes from the kind
+// registry and is declared in input.css, Template draws the body, and Data is
+// whatever that kind resolved.
+type ColumnUnitView struct {
+	Kind     string
+	Class    string
+	Label    string
+	Ref      string
+	Template string
+	Working  bool
+	Href     string
+	Data     any
+}
+
+// FileLinkView is one attached file: its name as the backlog spells it, and
+// the URL that serves it. Href is built here rather than in a template
+// because html/template's URL normalizer escapes a space but leaves '#' and
+// '?' alone, which would turn the rest of a name like "a#b.md" into a
+// fragment and make the file unreachable.
+type FileLinkView struct {
+	Name string
+	// Href opens the file as a workspace column; HXGet is the same state
+	// as a fragment. The panel is the depth-0 workspace, so a file chip
+	// there is the chain's entry point.
+	Href  string
+	HXGet string
+	// RawHref serves the bytes as text/plain, which is what the file
+	// column's "raw" link and anything outside the workspace uses.
+	RawHref string
 }
 
 // PhaseView is one phase's run history in the detail view.
@@ -561,6 +642,29 @@ func newBlockerViews(blockers []task.BlockingInfo) []BlockerView {
 
 // newDetailView maps one task's detail. titles resolves relation targets to
 // their titles; a missing entry simply renders as the bare id.
+// newFileLinkViews pairs every attached file with its URL. Both segments are
+// percent-encoded here, so the template emits a finished string and a name
+// holding '#', '?' or '%' survives the trip to the browser.
+func newFileLinkViews(id string, names []string) []FileLinkView {
+	base := Chain{Root: id}
+	links := make([]FileLinkView, 0, len(names))
+	for _, name := range names {
+		open := base.Append(KindFile, name)
+		links = append(links, FileLinkView{
+			Name:    name,
+			Href:    open.Path(),
+			HXGet:   open.Fragment(),
+			RawHref: taskFileHref(id, name),
+		})
+	}
+	return links
+}
+
+// taskFileHref is the one place the /tasks/{id}/files/{name} URL is spelled.
+func taskFileHref(id, name string) string {
+	return "/tasks/" + url.PathEscape(id) + "/files/" + url.PathEscape(name)
+}
+
 func newDetailView(d *task.TaskDetail, cfg *config.Config, titles map[string]string, now time.Time) DetailView {
 	t := d.Task
 	card := CardView{
@@ -588,8 +692,11 @@ func newDetailView(d *task.TaskDetail, cfg *config.Config, titles map[string]str
 		if sub.Status == task.StatusDone {
 			card.SubtaskDone++
 		}
+		open := Chain{Root: t.ID}.Append(KindTask, sub.ID)
 		card.Subtasks = append(card.Subtasks, CardView{
 			ID:         sub.ID,
+			Href:       open.Path(),
+			HXGet:      open.Fragment(),
 			Title:      sub.Title,
 			Priority:   string(sub.Priority),
 			Type:       sub.Type,
@@ -607,7 +714,7 @@ func newDetailView(d *task.TaskDetail, cfg *config.Config, titles map[string]str
 		Card:           card,
 		Description:    t.Description,
 		Archived:       d.Archived,
-		Files:          d.Files,
+		Files:          newFileLinkViews(t.ID, d.Files),
 		UpdatedAt:      t.UpdatedAt.Format(timeFormat),
 		ResolutionNote: t.ResolutionNote,
 

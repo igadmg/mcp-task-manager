@@ -1,0 +1,9 @@
+version: 1
+phase: planning
+runs:
+  - started_at: "2026-10-07T20:37:17Z"
+    started_by: igor.cwer
+    finished_at: "2026-10-07T20:37:42Z"
+    finished_by: igor.cwer
+    tokens: 18000
+    note: 'one commit, four steps: name.go, storage call sites, Service.files() guard, tests + CLAUDE.md'

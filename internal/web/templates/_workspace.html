@@ -1,0 +1,54 @@
+{{/* The whole workspace: the rail, then the strip. #strip is the swap target,
+     so one request replaces every column at once and browser Back replays the
+     same markup. The board is the strip's first unit at every depth, so it
+     keeps polling itself while it is off-screen. */}}
+<div id="strip" class="workspace">
+  {{ if .Rail }}
+  <nav class="rail" aria-label="Open columns">
+    {{ range .Rail }}
+    <a class="rail-step{{ if .Current }} rail-current{{ end }}"
+       href="{{ .Href }}"
+       hx-get="{{ .HXGet }}"
+       hx-target="#strip"
+       hx-swap="outerHTML"
+       hx-push-url="{{ .Href }}"
+       {{ if .Current }}aria-current="true"{{ end }}
+       title="{{ .Label }} {{ .Ref }}">
+      <span class="rail-label">{{ .Label }}</span>
+      <span class="rail-ref">{{ .Ref }}</span>
+    </a>
+    {{ end }}
+  </nav>
+  {{ end }}
+
+  <div class="stage">
+    <div class="strip{{ if .Shifted }} strip-shifted{{ end }}">
+      <section class="unit kind-board">
+        <div class="grid h-full min-h-0 gap-5 lg:grid-cols-[minmax(0,1fr)_22rem]">
+          <div class="pane pane-board min-w-0" data-pane="board">
+            {{ if .Project.Resolved }}{{ template "_board.html" .Board }}{{ else }}{{ template "_unresolved.html" .Board }}{{ end }}
+          </div>
+          <aside id="panel" class="pane" data-pane="panel">
+            {{ if .Board.Panel }}{{ template "_detail.html" .Board.Panel }}{{ else }}
+            <div class="rounded-xl border border-dashed border-white/10 p-6 text-sm text-neutral-500">
+              Pick a card to see its description, relations and attached files.
+            </div>
+            {{ end }}
+          </aside>
+        </div>
+      </section>
+
+      {{ with .Root }}
+      <section class="unit {{ .Class }} unit-root" data-column="root" data-ref="{{ .Ref }}">
+        <div class="pane" data-pane="root">{{ template "_col.html" . }}</div>
+      </section>
+      {{ end }}
+
+      {{ range .Columns }}
+      <section class="unit {{ .Class }}{{ if .Working }} unit-working{{ end }}" data-column="{{ .Kind }}" data-ref="{{ .Ref }}">
+        <div class="pane" data-pane="{{ .Kind }}:{{ .Ref }}">{{ template "_col.html" . }}</div>
+      </section>
+      {{ end }}
+    </div>
+  </div>
+</div>

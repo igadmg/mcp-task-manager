@@ -1,0 +1,9 @@
+version: 1
+phase: research
+runs:
+  - started_at: "2026-10-07T20:58:34Z"
+    started_by: igor.cwer
+    finished_at: "2026-10-07T21:02:07Z"
+    finished_by: igor.cwer
+    tokens: 46000
+    note: corpus inventory over 173 artifacts, escaping/URL/termination rules, package-location evidence

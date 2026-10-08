@@ -395,6 +395,11 @@ func TestDetailViewArchivedShape(t *testing.T) {
 	}
 	if len(v.Files) != 1 {
 		t.Errorf("Files = %v, want the one attached file", v.Files)
+	} else if f := v.Files[0]; f.Name != "design.md" ||
+		f.Href != "/tasks/7/w/f/design.md" ||
+		f.HXGet != "/strip/tasks/7/w/f/design.md" ||
+		f.RawHref != "/tasks/7/files/design.md" {
+		t.Errorf("Files[0] = %+v, want design.md with its workspace and raw URLs", f)
 	}
 }
 

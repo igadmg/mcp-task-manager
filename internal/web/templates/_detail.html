@@ -51,7 +51,8 @@
     <h2 class="text-xs font-semibold uppercase tracking-wider text-neutral-400">Subtasks {{ .Card.SubtaskDone }}/{{ .Card.SubtaskTotal }}</h2>
     <ul class="mt-2 space-y-1">
       {{ range .Card.Subtasks }}
-      <li><a class="flex items-center gap-2 rounded px-1 py-1 hover:bg-white/5" href="/tasks/{{ .ID }}">
+      <li><a class="flex items-center gap-2 rounded px-1 py-1 hover:bg-white/5"
+             href="{{ .Href }}" hx-get="{{ .HXGet }}" hx-target="#strip" hx-swap="outerHTML" hx-push-url="{{ .Href }}">
         <span class="meta">#{{ .ID }}</span>
         <span class="truncate text-xs text-neutral-300">{{ .Title }}</span>
         <span class="chip chip-muted ml-auto">{{ .Status }}</span>
@@ -118,8 +119,7 @@
   <section class="mt-5">
     <h2 class="text-xs font-semibold uppercase tracking-wider text-neutral-400">Attached files</h2>
     <ul class="mt-2 flex flex-wrap gap-1.5">
-      {{ $id := .Card.ID }}
-      {{ range .Files }}<li><a class="chip chip-muted" href="/tasks/{{ $id }}/files/{{ . }}" target="_blank" rel="noopener">{{ . }}</a></li>{{ end }}
+      {{ range .Files }}<li><a class="chip chip-muted" href="{{ .Href }}" hx-get="{{ .HXGet }}" hx-target="#strip" hx-swap="outerHTML" hx-push-url="{{ .Href }}">{{ .Name }}</a></li>{{ end }}
     </ul>
   </section>
   {{ end }}

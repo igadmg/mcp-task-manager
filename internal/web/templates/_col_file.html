@@ -1,0 +1,8 @@
+{{/* Stub file column: the name, a link to the raw bytes, and the content as
+     escaped preformatted text. workspace-file-column renders it as markdown
+     (internal/markdown) and adds the file list and the selected-file mark. */}}
+<div class="col-head">
+  <span class="meta truncate" title="{{ .Name }}">{{ .Name }}</span>
+  <a class="copy-btn ml-auto" href="{{ .RawHref }}" target="_blank" rel="noopener">raw</a>
+</div>
+<pre class="col-file-body">{{ .Content }}</pre>

@@ -44,8 +44,21 @@
   .card-blocked { @apply border-red-500/30; }
 
   .column {
-    @apply flex min-w-0 flex-col rounded-xl border border-white/5 bg-white/[0.02] p-2;
+    @apply flex min-h-0 min-w-0 flex-col rounded-xl border border-white/5
+           bg-white/[0.02] p-2;
   }
+
+  /* The board is one screen tall like every other column of the strip, but it
+   * is not itself the scroll container: the danger banner and the footer stay
+   * put, and each status column scrolls its own cards, so a long To do queue
+   * cannot push In progress off the screen. Hence overflow:hidden on the
+   * board's pane - the scrolling happens one level further in, in .column-body,
+   * which carries a data-pane of its own so app.js keeps its offset across the
+   * five-second poll. */
+  .pane-board { @apply overflow-hidden; }
+  .board { @apply flex h-full min-h-0 flex-col; }
+  .board-grid { @apply min-h-0 flex-1; }
+  .column-body { @apply min-h-0 flex-1 overflow-y-auto; }
 
   /* In progress phase lanes: one vertical stack, each later lane shifted
    * right by one step. The step is a half card (20% of the stack, card 40%)
@@ -129,6 +142,121 @@
   .series-6 { --series: var(--color-orange-400); }
   .series-7 { --series: var(--color-fuchsia-400); }
   .meta { @apply font-mono text-[11px] text-neutral-500; }
+
+  /* Task workspace. Opening anything slides the board off the left and the
+   * root task's own column takes its leftmost slot, so everything is placed
+   * from the task column rightwards and free space may remain on the right.
+   *
+   * Because exactly one unit ever leaves, the offset is a single width - the
+   * board's - and not a sum over the kinds scrolled past. One custom property
+   * carries it, the geometry stays in CSS and Go sets no pixels: it only says
+   * whether the board is away (.strip-shifted).
+   *
+   * The slide is a keyframe animation, not a transition: htmx replaces the
+   * whole #strip, and a freshly inserted element has no previous value to
+   * transition from, so a transition would never run. The transition below
+   * still covers a change in place.
+   *
+   * overflow-x: clip, not hidden: hidden would make the stage a scroll
+   * container and drag the vertical axis away from visible. clip also means
+   * there is nothing to pan, so "the strip cannot be scrolled sideways" is
+   * structural rather than a handler that cancels wheel events. */
+  .workspace {
+    --shell-chrome: 5.75rem;
+    --strip-gap: 1.25rem;
+    --board-w: 100%;
+    @apply flex min-w-0 items-start gap-3;
+    height: calc(100dvh - var(--shell-chrome));
+  }
+  .stage {
+    @apply h-full min-w-0 flex-1;
+    overflow-x: clip;
+    overflow-y: visible;
+  }
+  .strip {
+    @apply flex h-full min-w-0 items-stretch justify-start;
+    gap: var(--strip-gap);
+    transform: translateX(calc(-1 * var(--shift, 0px)));
+    transition: transform 260ms ease-out;
+  }
+  .strip-shifted {
+    --shift: calc(var(--board-w) + var(--strip-gap));
+    animation: strip-slide 260ms ease-out;
+  }
+  @keyframes strip-slide {
+    from { transform: translateX(0); }
+    to   { transform: translateX(calc(-1 * var(--shift))); }
+  }
+
+  /* Every column is one screen tall and scrolls inside itself, so the page
+   * never scrolls and no column can drift out of line with its neighbour. */
+  .unit { @apply flex h-full min-w-0 flex-col; }
+  .pane { @apply h-full min-h-0 overflow-y-auto; }
+
+  /* A kind's width. Named classes, because Tailwind scans only the
+   * templates and a class assembled in Go would be dropped from app.css. */
+  /* The board fills the stage, so nothing opened makes it narrower than the
+   * page shell allows, and shifting it by its own width plus the gap puts
+   * the next column flush against the left edge. */
+  .kind-board { flex: 0 0 var(--board-w); }
+  .kind-task  { flex: 0 0 min(100%, 22rem); }
+  .kind-file  { flex: 0 0 min(100%, 44rem); }
+
+  /* The newest column fades in over the slide. */
+  @keyframes unit-in {
+    from { opacity: 0; transform: translateX(1.5rem); }
+    to   { opacity: 1; transform: translateX(0); }
+  }
+  .unit-working { animation: unit-in 220ms ease-out; }
+
+  .rail { @apply flex w-28 shrink-0 flex-col gap-1 self-start; }
+  .rail-step {
+    @apply flex min-w-0 flex-col rounded-md px-2 py-1 text-[11px] leading-tight
+           text-neutral-400 ring-1 ring-inset ring-white/10 transition
+           hover:bg-white/5 hover:text-neutral-200;
+  }
+  .rail-current { @apply bg-white/5 text-neutral-200 ring-white/25; }
+  .rail-label { @apply font-mono text-[10px] uppercase tracking-wider text-neutral-500; }
+  .rail-ref   { @apply truncate; }
+
+  .col-head { @apply flex items-baseline gap-2; }
+  .col-section {
+    @apply mt-4 text-xs font-semibold uppercase tracking-wider text-neutral-400;
+  }
+  .col-link {
+    @apply block truncate rounded px-1.5 py-1 text-xs text-neutral-300 transition
+           hover:bg-white/5 hover:text-neutral-100;
+  }
+  .col-file-body {
+    @apply mt-3 whitespace-pre-wrap rounded-lg bg-black/30 p-3 font-mono text-xs
+           leading-relaxed text-neutral-300;
+  }
+
+  /* Below lg nothing slides and nothing is pinned to the viewport: the strip
+   * stacks, the panes grow to their content and the page scrolls normally. */
+  @media (width < 64rem) {
+    .workspace { @apply h-auto flex-col; }
+    .stage { @apply h-auto; overflow-x: visible; }
+    .strip {
+      @apply h-auto flex-col justify-start;
+      transform: none;
+      animation: none;
+    }
+    .unit { @apply h-auto; }
+    .pane { @apply h-auto overflow-y-visible; }
+    .pane-board { @apply overflow-visible; }
+    .board { @apply h-auto; }
+    .board-grid, .column-body { @apply flex-none; }
+    .column-body { @apply overflow-y-visible; }
+    .kind-board, .kind-task, .kind-file { flex: 0 0 auto; }
+    .rail { @apply w-full flex-row flex-wrap; }
+  }
+
+  /* The first reduced-motion rule in this project: the slide and the column
+   * entrance are the only motion the workspace adds, and both go. */
+  @media (prefers-reduced-motion: reduce) {
+    .strip, .strip-shifted, .unit-working { animation: none; transition: none; }
+  }
 
   .copy-btn {
     @apply shrink-0 cursor-pointer rounded px-1.5 py-0.5 font-mono text-[11px] leading-none
