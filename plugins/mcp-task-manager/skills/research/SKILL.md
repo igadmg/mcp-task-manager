@@ -12,7 +12,8 @@ Use this skill for evidence-only analysis of this project.
 1. Read `CLAUDE.md`.
 2. Read `README.md` and any module-level README.
 3. Read only the task-relevant notes under `doc/` (or this project's equivalent notes location).
-4. Inspect only the code and tests needed for the requested scope.
+4. If the task is a subtask (`get_task` shows a `parent_id`), read the parent's artifacts as context: `list_task_files(parent_id)`, then `read_task_file(parent_id, …)` for `research` when present. Do not repeat what the parent's research already establishes; cite it and research only this subtask's slice. Never write files to the parent.
+5. Inspect only the code and tests needed for the requested scope.
 
 ## Output Rules
 
