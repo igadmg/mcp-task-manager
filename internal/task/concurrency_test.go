@@ -141,6 +141,7 @@ func TestServiceNoSelfDeadlock(t *testing.T) {
 	svc.IsBlocked("fresh")
 	svc.BlockedMap([]string{"fresh", "p0"})
 	svc.BoardSnapshot()
+	svc.BacklogGraph()
 	svc.Detail("fresh")
 	svc.RemoveRelation("fresh", "relates_to", "p0")
 	svc.StartPhase("p2", PhaseResearch)

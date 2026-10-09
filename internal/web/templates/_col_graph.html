@@ -1,0 +1,53 @@
+{{/* The backlog relations graph. Every coordinate is a viewBox unit computed
+     in Go (graph.go), so there is no geometry here and no inline style: the
+     browser scales the whole picture to the column's width, which is also why
+     there is nothing to pan or zoom. The one <defs> marker is the arrowhead
+     that the directed relation types use; a symmetric edge has no Marker and
+     so draws none. */}}
+{{ with .Graph }}
+<div class="col-head">
+  <span class="meta">backlog graph</span>
+  {{ if .Highlight }}<span class="meta truncate" title="{{ .Highlight }}">#{{ .Highlight }}</span>{{ end }}
+</div>
+
+{{ if .Empty }}
+<p class="mt-4 text-xs text-neutral-600">No tasks in this backlog yet.</p>
+{{ else }}
+<ul class="graph-legend">
+  {{ range .Legend }}
+  <li class="graph-legend-item"><span class="graph-swatch {{ .Class }}"></span><span class="truncate">{{ .Label }}</span></li>
+  {{ end }}
+</ul>
+
+<svg class="graph-svg" viewBox="0 0 {{ .Width }} {{ .Height }}" role="img"
+     aria-label="Backlog relations graph">
+  <defs>
+    <marker id="graph-arrow" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+      <path class="graph-arrow" d="M 0 0 L 10 5 L 0 10 z"/>
+    </marker>
+  </defs>
+
+  {{ range .Edges }}
+  <line class="{{ .Class }}" x1="{{ .X1 }}" y1="{{ .Y1 }}" x2="{{ .X2 }}" y2="{{ .Y2 }}"
+        {{ if .Marker }}marker-end="{{ .Marker }}"{{ end }}><title>{{ .Title }}</title></line>
+  {{ end }}
+
+  {{ if .Isolated }}
+  <line class="graph-divider" x1="0" y1="{{ .Isolated }}" x2="{{ .Width }}" y2="{{ .Isolated }}"/>
+  <text class="graph-divider-label" x="4" y="{{ .Isolated }}" dy="-6">{{ .IsolatedLabel }}</text>
+  {{ end }}
+
+  {{ range .Nodes }}
+  <a href="{{ nav .Href }}" hx-get="{{ nav .HXGet }}" hx-target="#strip" hx-swap="outerHTML" hx-push-url="{{ nav .Href }}">
+    <g class="{{ .Class }}">
+      <title>{{ .Title }}</title>
+      <rect class="graph-box" x="{{ .X }}" y="{{ .Y }}" width="{{ .W }}" height="{{ .H }}" rx="6"/>
+      <text class="graph-id" x="{{ .X }}" y="{{ .Y }}" dx="10" dy="17">{{ .IDText }}</text>
+      <text class="graph-label" x="{{ .X }}" y="{{ .Y }}" dx="10" dy="33">{{ .Label }}</text>
+    </g>
+  </a>
+  {{ end }}
+</svg>
+{{ end }}
+{{ end }}

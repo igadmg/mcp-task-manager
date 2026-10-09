@@ -246,6 +246,9 @@
   .kind-task  { flex: 0 0 min(100%, 22rem); }
   .kind-file  { flex: 0 0 min(100%, 44rem); }
   .kind-desc  { flex: 0 0 min(100%, 44rem); }
+  /* The graph is the one column that grows: it is usually the only thing
+   * open, and the layout scales to whatever width it gets. */
+  .kind-graph { flex: 1 1 min(100%, 60rem); }
 
   /* The newest column fades in over the slide. */
   @keyframes unit-in {
@@ -333,6 +336,57 @@
   .notes td { @apply border-b border-white/5 px-2 py-1.5 align-top break-words; }
   .notes img { @apply my-3 max-w-full rounded-lg; }
 
+  /* The backlog relations graph. Every coordinate is a viewBox unit computed
+   * in Go, so the browser scales the whole picture to the column's width and
+   * the pane scrolls it vertically: there is nothing to pan and no second
+   * scroll container. Node state is named classes on the group, like the
+   * board's dots, and an edge's colour is a positional class so a custom
+   * relation type is never invisible. */
+  .graph-svg { @apply mt-3 block h-auto w-full; }
+  .graph-box {
+    @apply fill-neutral-900 stroke-white/15;
+    stroke-width: 1;
+    vector-effect: non-scaling-stroke;
+  }
+  .graph-id    { @apply fill-neutral-500 font-mono text-[11px]; }
+  .graph-label { @apply fill-neutral-200 text-[12px]; }
+  .graph-todo        .graph-box { @apply stroke-neutral-500/40; }
+  .graph-in_progress .graph-box { @apply stroke-amber-400/60 fill-amber-400/[0.06]; }
+  .graph-done        .graph-box { @apply stroke-emerald-500/30; }
+  .graph-done  .graph-label { @apply fill-neutral-500; }
+  .graph-done  .graph-id    { @apply fill-neutral-600; }
+  .graph-blocked .graph-box { @apply stroke-rose-400/60; }
+  .graph-current .graph-box { @apply stroke-white/70 fill-neutral-800; }
+  .graph-current .graph-label { @apply fill-neutral-50; }
+  a:hover .graph-box { @apply stroke-white/50; }
+
+  .graph-edge {
+    @apply fill-none;
+    stroke-width: 1.5;
+    vector-effect: non-scaling-stroke;
+  }
+  .graph-arrow { @apply fill-neutral-500; }
+  .graph-edge-parent { @apply stroke-neutral-600; stroke-dasharray: none; }
+  .graph-rel-0 { @apply stroke-rose-400/70; }
+  .graph-rel-1 { @apply stroke-sky-400/70; }
+  .graph-rel-2 { @apply stroke-violet-400/70; }
+  .graph-rel-3 { @apply stroke-lime-400/70; }
+  .graph-rel-4 { @apply stroke-amber-400/70; }
+  .graph-rel-5 { @apply stroke-teal-400/70; }
+  .graph-divider { @apply stroke-white/10; stroke-dasharray: 4 4; }
+  .graph-divider-label { @apply fill-neutral-600 text-[11px]; }
+
+  .graph-legend { @apply mt-3 flex flex-wrap gap-x-3 gap-y-1; }
+  .graph-legend-item { @apply flex min-w-0 items-center gap-1.5 text-[11px] text-neutral-400; }
+  .graph-swatch { @apply inline-block h-0 w-4 shrink-0 border-t-2; }
+  .graph-legend-item .graph-edge-parent { @apply border-neutral-600; }
+  .graph-legend-item .graph-rel-0 { @apply border-rose-400/70; }
+  .graph-legend-item .graph-rel-1 { @apply border-sky-400/70; }
+  .graph-legend-item .graph-rel-2 { @apply border-violet-400/70; }
+  .graph-legend-item .graph-rel-3 { @apply border-lime-400/70; }
+  .graph-legend-item .graph-rel-4 { @apply border-amber-400/70; }
+  .graph-legend-item .graph-rel-5 { @apply border-teal-400/70; }
+
   .col-file-body {
     @apply mt-3 whitespace-pre-wrap rounded-lg bg-black/30 p-3 font-mono text-xs
            leading-relaxed text-neutral-300;
@@ -354,7 +408,7 @@
     .board { @apply h-auto; }
     .board-grid, .column-body { @apply flex-none; }
     .column-body { @apply overflow-y-visible; }
-    .kind-board, .kind-task, .kind-file, .kind-desc { flex: 0 0 auto; }
+    .kind-board, .kind-task, .kind-file, .kind-desc, .kind-graph { flex: 0 0 auto; }
     .rail { @apply w-full flex-row flex-wrap; }
   }
 

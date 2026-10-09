@@ -96,6 +96,13 @@ func NewHandler(d Deps) http.Handler {
 	// One pattern per family: registering "GET /{token}/tasks/{id}/w/"
 	// beside the wildcard panics, because it matches the same requests.
 	sessions.HandleFunc("GET /{token}/tasks/{id}/w/{rest...}", h.workspace)
+	// The one workspace state a chain cannot name: the backlog graph with
+	// no task highlighted, opened from the board. A chain always starts
+	// /tasks/{root} (chain.go), and from the board there is no task to
+	// root at. Its fragment needs no pattern of its own - the strip
+	// wildcard below carries it, as it already carries "/" for the bare
+	// board.
+	sessions.HandleFunc("GET /{token}/graph", h.graph)
 	sessions.HandleFunc("GET /{token}/strip/{rest...}", h.workspaceFragment)
 
 	mux := http.NewServeMux()

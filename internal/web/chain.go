@@ -40,6 +40,12 @@ const (
 	// for writes, so a task may legitimately have a file called
 	// "description.md" (internal/task/name.go, internal/task/phase.go).
 	KindDesc ColumnKind = "d"
+	// KindGraph is the backlog relations graph. Its ref is the task to
+	// highlight, which is why it is a real id and never a sentinel: the
+	// one state with no task to highlight is the graph opened from the
+	// board, and that is a route of its own rather than a chain (a chain
+	// always has a root, see ParseChain).
+	KindGraph ColumnKind = "g"
 )
 
 // maxChainDepth caps the columns in one chain. The cap is about cost, not URL

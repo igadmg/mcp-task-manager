@@ -30,11 +30,15 @@
   {{/* The heading is the link that opens this task's text in the working
        area. From the panel, which is the depth-0 workspace, it is also the
        control that enters the workspace at this task. */}}
-  <div class="mt-4">
-    <a class="col-link{{ if .DescSelected }} col-selected{{ end }}"
+  <div class="mt-4 flex flex-wrap items-center gap-2">
+    <a class="col-link w-auto shrink-0{{ if .DescSelected }} col-selected{{ end }}"
        href="{{ nav .DescHref }}" hx-get="{{ nav .DescHXGet }}" hx-target="#strip" hx-swap="outerHTML" hx-push-url="{{ nav .DescHref }}"
        title="Open the description in the workspace"
        {{ if .DescSelected }}aria-current="true"{{ end }}>Description &#8599;</a>
+    <a class="col-link w-auto shrink-0{{ if .GraphSelected }} col-selected{{ end }}"
+       href="{{ nav .GraphHref }}" hx-get="{{ nav .GraphHXGet }}" hx-target="#strip" hx-swap="outerHTML" hx-push-url="{{ nav .GraphHref }}"
+       title="Open the backlog graph with this task highlighted"
+       {{ if .GraphSelected }}aria-current="true"{{ end }}>Graph &#8599;</a>
   </div>
   {{ if .Description }}
   <pre class="mt-2 whitespace-pre-wrap break-words rounded-lg bg-black/30 p-3 font-mono text-xs leading-relaxed text-neutral-300">{{ .Description }}</pre>

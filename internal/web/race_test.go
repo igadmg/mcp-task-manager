@@ -69,6 +69,10 @@ func TestHandlerRaceAgainstWrites(t *testing.T) {
 		// request, while the writers below are changing all three.
 		run(func(int) { fetch(base + "/tasks/3/w/f/research") })
 		run(func(int) { fetch(base + "/strip/tasks/3/w/t/2") })
+		// The graph reads every task and every edge in one pass while
+		// the writers below are adding and removing both.
+		run(func(int) { fetch(base + "/graph") })
+		run(func(int) { fetch(base + "/strip/tasks/3/w/g/3") })
 	}
 	run(func(int) { fetch("/") })
 	run(func(int) { fetch("/nosuchtoken/board") })

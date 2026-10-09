@@ -85,6 +85,13 @@ var columnKinds = map[ColumnKind]columnKind{
 		Template: "_col_desc.html",
 		Resolve:  resolveDescColumn,
 	},
+	KindGraph: {
+		Tag:      KindGraph,
+		Class:    "kind-graph",
+		Label:    "graph",
+		Template: "_col_graph.html",
+		Resolve:  resolveGraphColumn,
+	},
 }
 
 // TaskColumnView is a task column's body. A task column is the same plate the
@@ -135,6 +142,43 @@ func resolveTaskColumn(c colCtx) (any, bool) {
 	// column to its right shows.
 	v.Detail.chainLinks(c.here(), c.Next)
 	return v, true
+}
+
+// GraphColumnView is a graph column's body: the laid-out graph, and which
+// task it was asked to highlight.
+type GraphColumnView struct {
+	Graph GraphView
+}
+
+// resolveGraphColumn reads the whole active backlog as a graph and lays it
+// out with this column's ref highlighted. The ref is a task id - the one
+// state with nothing to highlight is the graph opened from the board, which
+// is a route of its own (handlers.go) because a chain always has a root.
+//
+// A ref that is not a node is 404, like every other ref that names nothing:
+// the highlight is part of the URL, so a URL naming a task that is not in the
+// backlog names nothing.
+func resolveGraphColumn(c colCtx) (any, bool) {
+	g, err := c.Svc.BacklogGraph()
+	if err != nil {
+		return nil, false
+	}
+	// An empty ref is the rootless graph, which highlights nothing: a
+	// chain column always has a ref (ParseChain refuses an empty segment),
+	// so this can only be the board's entry point.
+	if c.Ref != "" {
+		found := false
+		for _, n := range g.Nodes {
+			if n.ID == c.Ref {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, false
+		}
+	}
+	return GraphColumnView{Graph: newGraphView(g, c.Cfg, c.Ref)}, true
 }
 
 // resolveDescColumn reads the task whose description the column shows. An

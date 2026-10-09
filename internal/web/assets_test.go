@@ -157,6 +157,17 @@ func TestAppCSSDefinesWorkspaceClasses(t *testing.T) {
 		".col-file-body{",
 		// The rendered-artifact scope. Element selectors inside .notes, so
 		// a missing rebuild shows a task's design as unstyled HTML.
+		// The backlog graph: the node box, the two text styles, the
+		// positional edge colours and the legend swatch.
+		".graph-svg{",
+		".graph-box{",
+		".graph-label{",
+		".graph-edge{",
+		".graph-edge-parent{",
+		".graph-rel-0{",
+		".graph-rel-5{",
+		".graph-legend{",
+		".graph-divider{",
 		".notes{",
 		".notes h1{",
 		".notes h3,",

@@ -52,6 +52,11 @@ type BoardView struct {
 	// whole, and a second trigger would mean a second request and a second
 	// BoardSnapshot for the same markup every interval.
 	Polled bool
+	// GraphHref/GraphHXGet open the backlog graph with nothing
+	// highlighted. It is the board's own entry point, so it is not a chain
+	// URL: see the graph handler.
+	GraphHref  string
+	GraphHXGet string
 }
 
 // ColumnView is one status column.
@@ -334,6 +339,12 @@ type DetailView struct {
 	DescHref       string
 	DescHXGet      string
 	DescSelected   bool
+	// GraphHref/GraphHXGet open the backlog graph with this task
+	// highlighted, and GraphSelected marks it when that is the next
+	// column. chainLinks fills them like every other chain URL here.
+	GraphHref     string
+	GraphHXGet    string
+	GraphSelected bool
 }
 
 // WorkspaceView is one workspace state: the rail, then the strip. The board
@@ -804,6 +815,10 @@ func (v *DetailView) chainLinks(base Chain, next *Column) {
 	desc := base.Append(KindDesc, v.Card.ID)
 	v.DescHref, v.DescHXGet = desc.Path(), desc.Fragment()
 	v.DescSelected = next != nil && next.Kind == KindDesc && next.Ref == v.Card.ID
+
+	graph := base.Append(KindGraph, v.Card.ID)
+	v.GraphHref, v.GraphHXGet = graph.Path(), graph.Fragment()
+	v.GraphSelected = next != nil && next.Kind == KindGraph && next.Ref == v.Card.ID
 
 	if v.Card.ParentID != "" {
 		parent := base.Append(KindTask, v.Card.ParentID)

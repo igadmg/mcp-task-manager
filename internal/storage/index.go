@@ -682,3 +682,63 @@ func (idx *Index) RemoveAllRelationsForTask(taskID string) []task.RelationEdge {
 	idx.builtAt = time.Now()
 	return removed
 }
+
+// AllRelations returns every stored relation of the whole index, once each,
+// as graph edges. It exists for the backlog graph, which needs all the edges
+// in one pass - GetRelationsForTask would mean one pass per task - and it is
+// where two index facts are resolved rather than exported:
+//
+//   - A symmetric type is stored in both directions (addEdge generates the
+//     reverse, see rebuildFromTasks and AddRelation), so a whole-graph read
+//     would see every relates_to twice. Only the edge with the smaller
+//     endpoint by compareTaskIDs is returned, and it is flagged Symmetric so
+//     a renderer knows it has no direction. The rule lives here because
+//     SymmetricRelationType does.
+//   - An edge may dangle: AddRelation validates its target, but a rebuild
+//     takes a record's frontmatter as it is, so a hand-edited relation can
+//     name a task that does not exist - and the generated reverse then has a
+//     source that does not exist either. An edge with an endpoint that is not
+//     an entry is skipped, so a consumer never has to handle a node that is
+//     not there.
+//
+// The order is deterministic (source, then target, then type) so two reads of
+// an unchanged backlog are identical and a polling renderer does not reshuffle.
+func (idx *Index) AllRelations() []task.GraphEdge {
+	idx.syncIfStale()
+	var out []task.GraphEdge
+	for source, edges := range idx.relationsBySource {
+		if _, ok := idx.entries[source]; !ok {
+			continue
+		}
+		for _, e := range edges {
+			if _, ok := idx.entries[e.Target]; !ok {
+				continue
+			}
+			symmetric := e.Type == SymmetricRelationType
+			// Of the two stored directions keep one. An edge to
+			// itself cannot happen (AddRelation refuses a
+			// self-reference), and compareTaskIDs is a strict
+			// order, so exactly one of the pair passes.
+			if symmetric && !compareTaskIDs(e.Source, e.Target) {
+				continue
+			}
+			out = append(out, task.GraphEdge{
+				Type:      e.Type,
+				Source:    e.Source,
+				Target:    e.Target,
+				Symmetric: symmetric,
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.Source != b.Source {
+			return compareTaskIDs(a.Source, b.Source)
+		}
+		if a.Target != b.Target {
+			return compareTaskIDs(a.Target, b.Target)
+		}
+		return a.Type < b.Type
+	})
+	return out
+}

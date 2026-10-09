@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -313,6 +314,39 @@ func (m *mockIndex) GetRelationsForTask(taskID string) []RelationEdge {
 		}
 	}
 	return result
+}
+
+// AllRelations mirrors the real index: each symmetric edge once, nothing
+// dangling, deterministic order.
+func (m *mockIndex) AllRelations() []GraphEdge {
+	var out []GraphEdge
+	for _, edges := range m.relationsBySource {
+		for _, e := range edges {
+			if _, ok := m.tasks[e.Source]; !ok {
+				continue
+			}
+			if _, ok := m.tasks[e.Target]; !ok {
+				continue
+			}
+			symmetric := e.Type == "relates_to"
+			if symmetric && e.Source > e.Target {
+				continue
+			}
+			out = append(out, GraphEdge{
+				Type: e.Type, Source: e.Source, Target: e.Target, Symmetric: symmetric,
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Source != out[j].Source {
+			return out[i].Source < out[j].Source
+		}
+		if out[i].Target != out[j].Target {
+			return out[i].Target < out[j].Target
+		}
+		return out[i].Type < out[j].Type
+	})
+	return out
 }
 
 func (m *mockIndex) AllBlockers() map[string][]string {

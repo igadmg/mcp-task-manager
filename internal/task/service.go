@@ -80,6 +80,12 @@ type Index interface {
 	// any, keyed by the blocked task's id. Board-wide blocked lookups go
 	// through it so a whole render costs one index pass, not one per card.
 	AllBlockers() map[string][]string
+	// AllRelations returns every stored relation of the whole index once,
+	// as graph edges: a symmetric type's two stored directions collapse to
+	// one flagged edge, and an edge whose endpoints are not both indexed is
+	// dropped. The backlog graph reads it, for the same reason AllBlockers
+	// exists - one index pass for a whole render.
+	AllRelations() []GraphEdge
 	RemoveAllRelationsForTask(taskID string) []RelationEdge
 }
 

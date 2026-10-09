@@ -126,6 +126,23 @@ func (h *handler) workspace(w http.ResponseWriter, r *http.Request) {
 	h.render(w, http.StatusOK, sess.tpl.board, "layout.html", view)
 }
 
+// graph serves /<token>/graph: the backlog graph with nothing highlighted.
+// It is the one workspace state outside the chain model, because a chain
+// always has a root task and the board has none to offer - see KindGraph.
+func (h *handler) graph(w http.ResponseWriter, r *http.Request) {
+	sess, ok := h.session(r)
+	if !ok {
+		h.renderGone(w, r, http.StatusNotFound, rootTpl.gone, "layout.html")
+		return
+	}
+	view, ok := h.graphWorkspaceView(sess)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	h.render(w, http.StatusOK, sess.tpl.board, "layout.html", view)
+}
+
 // workspaceFragment is the htmx swap target, paired with workspace the way
 // /board is paired with /{$}. Its path is the page path behind the strip
 // prefix, so one parser serves both.
@@ -143,6 +160,16 @@ func (h *handler) workspaceFragment(w http.ResponseWriter, r *http.Request) {
 	// back to the board with no panel.
 	if page == "/" {
 		h.render(w, http.StatusOK, sess.tpl.fragments, "_workspace.html", h.bareWorkspaceView(sess))
+		return
+	}
+	// And the rootless graph is the second state that is not a chain.
+	if page == graphPath {
+		view, ok := h.graphWorkspaceView(sess)
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		h.render(w, http.StatusOK, sess.tpl.fragments, "_workspace.html", view)
 		return
 	}
 	view, ok := h.workspaceView(sess, page)
@@ -271,6 +298,54 @@ func (h *handler) workspaceView(sess *Session, escapedPath string) (WorkspaceVie
 	return view, true
 }
 
+// graphPath is the rootless graph's page path, root-relative like every chain
+// path: the token goes back on through nav, and the fragment is the strip
+// prefix plus this.
+const graphPath = "/graph"
+
+// graphWorkspaceView is the strip with the backlog graph open and no task
+// highlighted. It has no root column - there is no root task - so the graph is
+// the only column, and the rail's one rung steps back to the board.
+func (h *handler) graphWorkspaceView(sess *Session) (WorkspaceView, bool) {
+	resolved := sess.Project()
+	// No ref: nothing is highlighted. The rest of colCtx is what a chain
+	// column needs to place its links, and a graph node's link re-roots
+	// rather than appending, so there is nothing here to place it against.
+	data, ok := columnKinds[KindGraph].Resolve(colCtx{
+		Svc: resolved.Service,
+		Cfg: resolved.Config,
+		Now: h.Now(),
+	})
+	if !ok {
+		return WorkspaceView{}, false
+	}
+	board := h.boardView(sess)
+	board.Polled = true
+	view := WorkspaceView{
+		Project:     board.Project,
+		Title:       "Backlog graph",
+		PollSeconds: h.PollSeconds,
+		PollHref:    stripPrefix + graphPath,
+		Board:       board,
+		Shifted:     true,
+		Columns: []ColumnUnitView{{
+			Kind:     string(KindGraph),
+			Class:    columnKinds[KindGraph].Class,
+			Label:    columnKinds[KindGraph].Label,
+			Key:      "0:g:",
+			Template: columnKinds[KindGraph].Template,
+			Working:  true,
+			Href:     graphPath,
+			Data:     data,
+		}},
+		Rail: []RailEntryView{
+			{Kind: string(KindTask), Label: "board", Href: "/", HXGet: stripPrefix + "/"},
+			{Kind: string(KindGraph), Label: "graph", Ref: "backlog", Href: graphPath, HXGet: stripPrefix + graphPath, Current: true},
+		},
+	}
+	return view, true
+}
+
 // bareWorkspaceView is the strip with nothing open: the board alone, no rail.
 // It is what /<token>/strip/ answers, so a rail entry can step all the way
 // out.
@@ -380,7 +455,9 @@ func (h *handler) boardView(sess *Session) BoardView {
 		h.Logger.Printf("board snapshot for %s: %v", sess.TasksDir, err)
 		return BoardView{Project: newProjectView(resolved.Config, 0), PollSeconds: h.PollSeconds}
 	}
-	return newBoardView(snap, resolved.Config, h.Now(), h.PollSeconds)
+	view := newBoardView(snap, resolved.Config, h.Now(), h.PollSeconds)
+	view.GraphHref, view.GraphHXGet = graphPath, stripPrefix+graphPath
+	return view
 }
 
 func (h *handler) detailView(sess *Session, id string) (DetailView, bool) {

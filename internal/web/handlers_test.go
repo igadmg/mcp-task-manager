@@ -320,7 +320,8 @@ func TestNoMutatingRoutes(t *testing.T) {
 	sessionPaths := []string{
 		"/", "/board", "/tasks/1", "/tasks/1/panel", "/tasks/1/files/research.md",
 		"/tasks/1/w/f/research.md", "/tasks/1/w/t/2", "/tasks/1/w/d/1",
-		"/strip/tasks/1", "/strip/",
+		"/tasks/1/w/g/1", "/graph",
+		"/strip/tasks/1", "/strip/", "/strip/graph",
 	}
 	for _, path := range sessionPaths {
 		for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
@@ -379,6 +380,8 @@ func TestEscaping(t *testing.T) {
 		// The description column renders the task's text as its whole
 		// body, so it is the surface with the most payload on it.
 		"/tasks/1/w/d/1", "/strip/tasks/1/w/d/1",
+		// A node of the graph carries every task's title and id.
+		"/graph", "/tasks/1/w/g/1", "/strip/graph",
 	} {
 		body := get(t, h, path).Body.String()
 		if strings.Contains(body, payload) || strings.Contains(body, branchPayload) {
@@ -1361,8 +1364,11 @@ func TestNoTemplateErrors(t *testing.T) {
 		"/tasks/1/w/d/1",
 		"/tasks/1/w/t/2/d/2",
 		"/tasks/1/w/t/2/t/2",
+		"/tasks/1/w/g/1",
+		"/tasks/1/w/t/2/g/2",
+		"/graph",
 		"/strip/", "/strip/tasks/1", "/strip/tasks/1/w/f/research.md",
-		"/strip/tasks/1/w/d/1",
+		"/strip/tasks/1/w/d/1", "/strip/graph",
 	}
 	for _, path := range paths {
 		rec := get(t, h, path)
@@ -1965,6 +1971,157 @@ func TestWorkspaceGoneAtTheNextPoll(t *testing.T) {
 		t.Errorf("an unknown token on the strip route = %d, want 200", gone.Code)
 	}
 	if strings.Contains(gone.Body.String(), "hx-trigger") {
+		t.Error("the gone fragment keeps polling")
+	}
+}
+
+// TestGraphFromTheBoard is the rootless entry point: the board's own button
+// opens the whole backlog with nothing highlighted, which is the one workspace
+// state a chain cannot name.
+func TestGraphFromTheBoard(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedWorkspace(t, svc)
+
+	// The button is on the board, inside #board so a poll keeps it.
+	board := get(t, h, "/").Body.String()
+	if !strings.Contains(board, `href="`+h.base+`/graph"`) {
+		t.Error("the board has no Graph button")
+	}
+	if !strings.Contains(board, `hx-get="`+h.base+`/strip/graph"`) {
+		t.Error("the board's Graph button has no fragment URL")
+	}
+
+	page := get(t, h, "/graph")
+	if page.Code != http.StatusOK {
+		t.Fatalf("GET /graph = %d, want 200", page.Code)
+	}
+	body := page.Body.String()
+	for _, want := range []string{
+		`data-column="g"`, "kind-graph", "<svg", "graph-legend",
+		// The board is still the strip's first unit, and it is slid away.
+		`id="board"`, "strip-shifted",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the graph page is missing %q", want)
+		}
+	}
+	// Nothing is highlighted.
+	if strings.Contains(body, "graph-current") {
+		t.Error("the rootless graph highlighted a node")
+	}
+	// The rail steps back to the board.
+	if !strings.Contains(body, `href="`+h.base+`/"`) {
+		t.Error("the graph's rail does not step back to the board")
+	}
+
+	// The fragment form is the same state without the layout shell.
+	frag := get(t, h, "/strip/graph")
+	if frag.Code != http.StatusOK {
+		t.Fatalf("GET /strip/graph = %d, want 200", frag.Code)
+	}
+	if strings.Contains(frag.Body.String(), "<!doctype html>") {
+		t.Error("/strip/graph answered a whole page")
+	}
+	// One poll, on the strip, at its own URL.
+	if n := strings.Count(frag.Body.String(), "hx-trigger="); n != 1 {
+		t.Errorf("the graph fragment has %d triggers, want 1", n)
+	}
+	if !strings.Contains(frag.Body.String(), `hx-get="`+h.base+`/strip/graph" hx-trigger=`) {
+		t.Error("the graph does not poll its own URL")
+	}
+}
+
+// TestGraphFromATask is the other entry point: the same graph with that task
+// marked, as a column of the chain.
+func TestGraphFromATask(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedWorkspace(t, svc)
+
+	// The panel offers it.
+	panel := get(t, h, "/tasks/2/panel").Body.String()
+	if !strings.Contains(panel, `href="`+h.base+`/tasks/2/w/g/2"`) {
+		t.Error("the panel does not open the graph with its task highlighted")
+	}
+
+	body := get(t, h, "/tasks/1/w/g/1").Body.String()
+	if !strings.Contains(body, "graph-current") {
+		t.Error("the graph does not mark the highlighted task")
+	}
+	if n := strings.Count(body, "graph-current"); n != 1 {
+		t.Errorf("%d nodes carry graph-current, want 1", n)
+	}
+	// The root column to its left marks the graph as the open item.
+	root := columnBody(t, body, `data-column="root"`)
+	if !strings.Contains(root, "col-selected") {
+		t.Error("the task column does not mark the graph it opened")
+	}
+
+	// From a task column the graph appends at that column's place.
+	deep := get(t, h, "/tasks/1/w/t/2").Body.String()
+	if !strings.Contains(deep, `href="`+h.base+`/tasks/1/w/t/2/g/2"`) {
+		t.Error("a task column does not append the graph to the chain")
+	}
+
+	// A highlight that is not in the backlog is one 404, like every other
+	// ref that names nothing.
+	if got := get(t, h, "/tasks/1/w/g/nope").Code; got != http.StatusNotFound {
+		t.Errorf("GET a graph highlighting a missing task = %d, want 404", got)
+	}
+}
+
+// TestGraphNodesAreLinksAndCarryState checks what a reader actually sees: a
+// node per task, done ones dimmed, blocked ones marked, and a click that opens
+// that task's own graph state.
+func TestGraphNodesAreLinksAndCarryState(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedWorkspace(t, svc)
+
+	body := get(t, h, "/graph").Body.String()
+	// seedBoard: 1 parent, 2 subtask, 3 in progress, 4 done, 5 blocked by 3.
+	for _, want := range []string{
+		`href="` + h.base + `/tasks/1/w/g/1"`, // a node link re-roots on its task
+		"graph-done",                          // task 4
+		"graph-blocked",                       // task 5
+		"graph-in_progress",                   // task 3
+		"graph-edge-parent",                   // 1 -> 2
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the graph is missing %q", want)
+		}
+	}
+	// Every task is a node.
+	if n := strings.Count(body, `class="graph-node`); n != 5 {
+		t.Errorf("%d nodes drawn, want the 5 seeded tasks", n)
+	}
+}
+
+// TestGraphEmptyBacklog says so rather than drawing an empty frame.
+func TestGraphEmptyBacklog(t *testing.T) {
+	h, _, _ := newTestHandler(t)
+
+	body := get(t, h, "/graph").Body.String()
+	if !strings.Contains(body, "No tasks in this backlog yet.") {
+		t.Error("an empty backlog does not say so")
+	}
+	if strings.Contains(body, "<svg class=\"graph-svg\"") {
+		t.Error("an empty backlog drew a graph")
+	}
+}
+
+// TestGraphUnknownToken follows the rule its route family already has: 404 on
+// the page, the trigger-less gone fragment on the strip route.
+func TestGraphUnknownToken(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedWorkspace(t, svc)
+
+	if got := getRaw(t, h, "/nosuchtoken/graph").Code; got != http.StatusNotFound {
+		t.Errorf("GET an unknown token's graph page = %d, want 404", got)
+	}
+	frag := getRaw(t, h, "/nosuchtoken/strip/graph")
+	if frag.Code != http.StatusOK {
+		t.Errorf("GET an unknown token's graph fragment = %d, want 200", frag.Code)
+	}
+	if strings.Contains(frag.Body.String(), "hx-trigger") {
 		t.Error("the gone fragment keeps polling")
 	}
 }
