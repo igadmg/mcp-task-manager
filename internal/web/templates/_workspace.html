@@ -1,8 +1,17 @@
 {{/* The whole workspace: the rail, then the strip. #strip is the swap target,
      so one request replaces every column at once and browser Back replays the
-     same markup. The board is the strip's first unit at every depth, so it
-     keeps polling itself while it is off-screen. */}}
-<div id="strip" class="workspace">
+     same markup.
+
+     With a workspace open the strip also polls itself, from the very URL it
+     is at: one request brings back the board, the panel, the rail and every
+     column from one consistent render, so a file an agent is writing updates
+     on screen and no two columns can disagree about a write. The board is the
+     strip's first unit at every depth, so it stays live while off-screen
+     without a trigger of its own - .Polled suppresses that one. There is no
+     hx-push-url here: a poll must not touch history, and in this package
+     pushing is opt-in per link. */}}
+<div id="strip" class="workspace"
+     {{ if .PollHref }}hx-get="{{ nav .PollHref }}" hx-trigger="every {{ .PollSeconds }}s" hx-swap="outerHTML"{{ end }}>
   {{ if .Rail }}
   <nav class="rail" aria-label="Open columns">
     {{ range .Rail }}

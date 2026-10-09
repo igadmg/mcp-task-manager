@@ -170,9 +170,14 @@
 // refresh - and a step through the chain, which rebuilds the whole strip -
 // carries on from where the reader was.
 //
-// #panel is the one exception, and it is deliberate: the panel is replaced
-// only when a card is clicked, so its new content is a different task and
-// belongs at its top. It is left out of the offset map and reset instead.
+// The panel is in the map too, which it was not while only #board polled. An
+// open workspace polls the whole strip, so the panel is now replaced every
+// interval with the SAME task's content and has to keep its place. What still
+// belongs at the top is a panel whose content is a DIFFERENT task, and that is
+// exactly a card click: an htmx swap whose target is #panel. So the rule is
+// keyed on the swap target rather than on leaving the panel out, and the reset
+// clears the stored offset as well - afterSwap fires before afterSettle, so a
+// reset that left the old offset behind would be undone one event later.
 //
 // Like the stats toggles: one delegated set of listeners, no request, and no
 // htmx attribute in the markup.
@@ -182,10 +187,10 @@
   var offsets = {};
 
   // Keyed on the attribute alone, so any scroll container that carries a
-  // data-pane joins in: a .pane of the strip or a board column's body. The
-  // panel is skipped - a fresh panel opens at its top.
+  // data-pane joins in: a .pane of the strip, the panel, or a board column's
+  // body.
   function panes() {
-    return document.querySelectorAll("[data-pane]:not(#panel)");
+    return document.querySelectorAll("[data-pane]");
   }
 
   function remember() {
@@ -209,7 +214,7 @@
     "scroll",
     function (event) {
       var pane = event.target;
-      if (pane && pane.matches && pane.matches("[data-pane]:not(#panel)")) {
+      if (pane && pane.matches && pane.matches("[data-pane]")) {
         offsets[pane.getAttribute("data-pane")] = pane.scrollTop;
       }
     },
@@ -218,11 +223,13 @@
 
   // A fresh panel starts at its top: an innerHTML swap keeps the container's
   // own scrollTop, so without this the next card's description opens wherever
-  // the previous one was scrolled to.
+  // the previous one was scrolled to. The stored offset goes with it, or the
+  // restore on the next afterSettle would put it straight back.
   document.addEventListener("htmx:afterSwap", function (event) {
     var target = event.detail && event.detail.target;
     if (target && target.id === "panel") {
       target.scrollTop = 0;
+      offsets[target.getAttribute("data-pane")] = 0;
     }
   });
 

@@ -1,4 +1,4 @@
-<div id="board" class="board" hx-get="{{ nav "/board" }}" hx-trigger="every {{ .PollSeconds }}s" hx-swap="outerHTML">
+<div id="board" class="board"{{ if not .Polled }} hx-get="{{ nav "/board" }}" hx-trigger="every {{ .PollSeconds }}s" hx-swap="outerHTML"{{ end }}>
   {{ if .DangerZone }}
   <div class="mb-4 shrink-0 rounded-xl border border-amber-400/30 bg-amber-400/[0.06] px-4 py-3">
     <p class="text-sm font-medium text-amber-200">An agent may be working right now</p>
