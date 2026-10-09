@@ -15,6 +15,10 @@ const DefaultPollSeconds = 5
 
 // Deps is everything the web module needs from the rest of the process.
 type Deps struct {
+	// BasePath is the trusted external mount path. The proxy strips it before
+	// forwarding requests; internal routes remain rooted at /. Set a canonical
+	// value from NormalizeBasePath at the composition boundary, never from headers.
+	BasePath string
 	// Sessions is the workspace registry. Handlers only ever Lookup() in
 	// it: a session's project was built by whoever registered it - the MCP
 	// resolver, or the one POST on the registry - never by a request.
@@ -101,7 +105,8 @@ func (d Deps) withDefaults() Deps {
 // "GET /{token}/" pattern would answer 404 instead, and the structural
 // read-only claim would quietly weaken to a convention.
 func NewHandler(d Deps) http.Handler {
-	h := &handler{Deps: d.withDefaults()}
+	h := &handler{Deps: d.withDefaults(), templates: make(map[string]sessionTemplates)}
+	h.rootTpl = newMountedTemplates("", h.BasePath)
 
 	sessions := http.NewServeMux()
 	sessions.HandleFunc("GET /{token}/{$}", h.board)
@@ -127,5 +132,10 @@ func NewHandler(d Deps) http.Handler {
 	mux.Handle("GET /static/{file...}", http.StripPrefix("/static/", staticHandler()))
 	mux.HandleFunc("GET /healthz", h.health)
 	mux.Handle("/{token}/", sessions)
-	return mux
+	if h.BasePath == "" {
+		return mux
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mux.ServeHTTP(&mountRedirectWriter{ResponseWriter: w, base: h.BasePath}, r)
+	})
 }

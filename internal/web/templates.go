@@ -13,13 +13,12 @@ var templateFS embed.FS
 // that one page, so a URL never switches surface. Fragments are parsed on
 // their own for the htmx swap targets.
 //
-// There are two funcMap entries. asset maps an embedded file name to its
-// content-hashed URL and is the same for every session, because /static/ is
-// one global URL space. nav prefixes a session route with the session's
-// token; the entry here is bound to the root prefix, which is what the
-// welcome and unknown-token pages need, and each session rebinds it on its
-// own clones (see sessiontpl.go). Parsing needs the name to exist, which is
-// the other reason it is in this map.
+// The template functions are rebound on immutable clones. nav prefixes a
+// session route with its token and the external mount; root prefixes a global
+// route with only that mount; asset prefixes the content-hashed global asset
+// URL. These prototype entries exist for parsing and for unmounted sessions.
+// Handlers own mounted root clones and cache mounted session clones (see
+// sessiontpl.go and handlers.go).
 //
 // Every other field is a plain string and is rendered with {{ . }}, so
 // html/template escapes all task text. There is deliberately no safeHTML
@@ -37,7 +36,7 @@ var templateFS embed.FS
 // per session, and once for the root pages. Render through rootTpl or a
 // session's own clones, never through these.
 var (
-	funcs       = template.FuncMap{"asset": assetURL, "nav": navFor("")}
+	funcs       = template.FuncMap{"asset": assetURL, "nav": navFor(""), "root": navFor("")}
 	fragments   = template.Must(template.New("fragments").Funcs(funcs).ParseFS(templateFS, "templates/_*.html"))
 	boardPage   = mustPage("board.html")
 	welcomePage = mustPage("welcome.html")

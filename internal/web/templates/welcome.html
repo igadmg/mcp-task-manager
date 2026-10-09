@@ -24,9 +24,9 @@
             {{ if .Problem }}
             <span class="chip chip-blocked" title="{{ .Problem }}">unavailable</span>
             {{ else if .Live }}
-            <a class="chip chip-live" href="{{ .Href }}">open board</a>
+            <a class="chip chip-live" href="{{ root .Href }}">open board</a>
             {{ else }}
-            <form method="post" action="/sessions">
+            <form method="post" action="{{ root "/sessions" }}">
               <input type="hidden" name="workspace" value="{{ .Name }}">
               <button type="submit" class="chip chip-muted hover:text-neutral-100">open</button>
             </form>
@@ -57,7 +57,7 @@
     <ul class="mt-2 flex flex-col gap-1.5">
       {{ range .Sessions }}
       <li>
-        <a class="flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded px-1 py-1 hover:bg-white/5" href="{{ .Href }}">
+        <a class="flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded px-1 py-1 hover:bg-white/5" href="{{ root .Href }}">
           <span class="text-sm text-neutral-200">{{ .Name }}</span>
           <span class="meta truncate">{{ .TasksDir }}</span>
           <span class="chip chip-muted ml-auto">{{ .Source }}</span>

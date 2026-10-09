@@ -21,7 +21,7 @@
         {{ if .Project.TasksDir }}read-only &middot; {{ .Project.TaskCount }} tasks &middot; {{ end }}
         <!-- / is a global route, not a session one: it is the one page every
              session can link without a token. -->
-        <a class="hover:text-neutral-300" href="/">workspaces</a>
+        <a class="hover:text-neutral-300" href="{{ root "/" }}">workspaces</a>
       </span>
     </div>
   </header>

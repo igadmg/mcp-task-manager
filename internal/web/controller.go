@@ -87,7 +87,11 @@ func (c *Controller) URL() (string, bool) {
 // caller holding the listener's base URL can report a usable link. It works
 // whether or not the listener is up: the registry is independent of it.
 func (c *Controller) SessionPath(tasksDir string) (string, bool) {
-	return c.deps.Sessions.PathFor(tasksDir)
+	path, ok := c.deps.Sessions.PathFor(tasksDir)
+	if !ok {
+		return "", false
+	}
+	return c.deps.BasePath + path, true
 }
 
 // Shutdown stops the listener and waits for in-flight requests. Idempotent:

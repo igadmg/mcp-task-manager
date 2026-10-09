@@ -54,9 +54,14 @@ func TestIsValidTaskType(t *testing.T) {
 
 func TestTasksDir_Absolute(t *testing.T) {
 	isolateEnv(t)
-	cfg := &Config{DataDir: "/absolute/path"}
-	if got := cfg.TasksDir(); got != "/absolute/path" {
-		t.Errorf("TasksDir() = %q, want %q", got, "/absolute/path")
+	absolutePath := filepath.Join(t.TempDir(), "tasks")
+	if !filepath.IsAbs(absolutePath) {
+		t.Fatalf("test fixture = %q, want an absolute path", absolutePath)
+	}
+
+	cfg := &Config{DataDir: absolutePath}
+	if got := cfg.TasksDir(); got != absolutePath {
+		t.Errorf("TasksDir() = %q, want %q", got, absolutePath)
 	}
 }
 
