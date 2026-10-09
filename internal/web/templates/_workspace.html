@@ -10,6 +10,9 @@
      without a trigger of its own - .Polled suppresses that one. There is no
      hx-push-url here: a poll must not touch history, and in this package
      pushing is opt-in per link. */}}
+{{/* When this strip IS the htmx response it carries the header's indicator
+     out of band; inside a whole page the real header is there already. */}}
+{{ if .Fragment }}{{ template "_shell_danger_oob.html" .Project }}{{ end }}
 <div id="strip" class="workspace"
      {{ if .PollHref }}hx-get="{{ nav .PollHref }}" hx-trigger="every {{ .PollSeconds }}s" hx-swap="outerHTML"{{ end }}>
   {{ if .Rail }}

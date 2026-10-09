@@ -1,0 +1,20 @@
+{{/* The same indicator, marked for an out-of-band swap. This is the one
+     hx-swap-oob in the package, and it is what keeps the header fresh without
+     a second request: whichever fragment polls - _board.html for a bare
+     board, _workspace.html when a workspace is open - carries this copy, and
+     htmx swaps it into the header while swapping the fragment into its own
+     target. The carrying condition is the very condition that gives that
+     fragment its hx-trigger, so the two cannot drift apart.
+
+     It carries no trigger of its own, so the "exactly one hx-trigger per
+     response" contract (TestOnlyOneThingPolls) is untouched. */}}
+<span id="shell-danger" class="shell-danger" hx-swap-oob="true">
+  {{ if .Danger }}
+  <span class="chip chip-live"><span class="dot dot-in_progress"></span>{{ .DangerCount }} in progress</span>
+  {{ range .Danger }}
+  <a class="shell-danger-item" href="{{ nav "/tasks/" .ID }}"
+     title="#{{ .ID }} {{ .Title }} ({{ .Type }}, updated {{ .UpdatedAgo }})">#{{ .ID }}</a>
+  {{ end }}
+  {{ if .DangerMore }}<span class="chip chip-muted" title="{{ .DangerRest }}">+{{ .DangerMore }}</span>{{ end }}
+  {{ end }}
+</span>

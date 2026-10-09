@@ -1,14 +1,11 @@
 <div id="board" class="board"{{ if not .Polled }} hx-get="{{ nav "/board" }}" hx-trigger="every {{ .PollSeconds }}s" hx-swap="outerHTML"{{ end }}>
-  {{ if .DangerZone }}
-  <div class="mb-4 shrink-0 rounded-xl border border-amber-400/30 bg-amber-400/[0.06] px-4 py-3">
-    <p class="text-sm font-medium text-amber-200">An agent may be working right now</p>
-    <p class="mt-1 text-sm text-amber-100/70">
-      In progress:
-      {{ range $i, $d := .DangerZone }}{{ if $i }}, {{ end }}<a class="underline decoration-amber-400/40 underline-offset-2 hover:decoration-amber-300" href="{{ nav "/tasks/" $d.ID }}">#{{ $d.ID }} {{ $d.Title }}</a>{{ end }}.
-      Files in these areas can change under you.
-    </p>
-  </div>
-  {{ end }}
+  {{/* When this board IS the htmx response, it carries the header's
+       indicator out of band - the header sits outside every polled node, so
+       this is what keeps it fresh without a second request. A whole page
+       needs no copy: the real header is in it already, and a second element
+       with the same id would be a duplicate id. The banner that used to be
+       here is gone; the header is the one place the information lives. */}}
+  {{ if .Fragment }}{{ template "_shell_danger_oob.html" .Project }}{{ end }}
 
   {{ if .GraphHref }}
   {{/* The board's own entry into the workspace: the whole backlog as a

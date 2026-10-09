@@ -24,18 +24,33 @@ import (
 // flag used to stand for - the dashboard is up but nothing named a project
 // yet - is now the welcome page, which is a better answer because it does
 // not pretend a board exists.
+// ProjectView is what the page shell shows: which backlog this is, how big
+// it is, and whether an agent is working in it right now. It is the shell's
+// model rather than the project's identity - TaskCount has always been a
+// backlog fact - and it is the one field every model that executes
+// layout.html carries (WorkspaceView, WelcomeView, GoneView), which is why
+// the header can read it with no guard. A field only some of them had would
+// be an execution error, i.e. a 500, on the others.
 type ProjectView struct {
 	Root      string
 	TasksDir  string
 	Source    string
 	TaskCount int
+	// Danger is the in-progress tasks the header names, capped at
+	// maxShellDanger; DangerCount is how many there are altogether,
+	// DangerMore how many are not named and DangerRest their names for the
+	// +N tooltip. The welcome and gone pages have no snapshot behind them,
+	// so all four stay empty there and the header shows nothing.
+	Danger      []DangerItem
+	DangerCount int
+	DangerMore  int
+	DangerRest  string
 }
 
 // BoardView is one whole kanban render.
 type BoardView struct {
 	Project     ProjectView
 	Columns     []ColumnView
-	DangerZone  []DangerItem
 	PollSeconds int
 	Generated   string
 	// Panel is the task whose side panel is open, nil on the bare board.
@@ -57,6 +72,12 @@ type BoardView struct {
 	// URL: see the graph handler.
 	GraphHref  string
 	GraphHXGet string
+	// Fragment says this view is the htmx response itself rather than part
+	// of a whole page. It is what decides whether the response carries the
+	// header's out-of-band copy: a page has the real header in it already,
+	// and a second element with the same id would be a duplicate id in the
+	// document. Only the two fragment handlers set it.
+	Fragment bool
 }
 
 // ColumnView is one status column.
@@ -369,6 +390,9 @@ type WorkspaceView struct {
 	// a file an agent is writing updates on screen. Empty means nothing is
 	// open and the board polls itself instead, as it always has.
 	PollHref string
+	// Fragment says this view is the htmx response itself rather than part
+	// of a whole page - see BoardView.Fragment, which it is set alongside.
+	Fragment bool
 	// Shifted says the board has slid off the left, which is exactly the
 	// case when something is open. Only ever one unit leaves, so the
 	// offset is a single width rather than a sum over kinds, and the strip
@@ -545,20 +569,45 @@ func newBoardView(snap *task.BoardSnapshot, cfg *config.Config, now time.Time, p
 		v.Columns = append(v.Columns, cv)
 	}
 
+	v.Project.Danger, v.Project.DangerCount, v.Project.DangerMore, v.Project.DangerRest =
+		shellDanger(snap, now)
+
+	return v
+}
+
+// maxShellDanger is how many in-progress tasks the header names before it
+// collapses the rest into a +N chip, the way a card caps its field chips. The
+// header is one line, and the strip's one-screen-tall math subtracts a
+// hard-coded header height (--shell-chrome in input.css), so a group that can
+// wrap would make every column slightly too tall.
+const maxShellDanger = 2
+
+// shellDanger is the header's in-progress indicator: every in_progress task
+// of the snapshot, subtasks included and sorted by id - the same set the
+// board's banner used to show - capped for the header, with the names that
+// did not fit collected for the +N tooltip.
+func shellDanger(snap *task.BoardSnapshot, now time.Time) (shown []DangerItem, count, more int, rest string) {
+	var all []DangerItem
 	for _, t := range snap.Tasks {
 		if t.Status != task.StatusInProgress {
 			continue
 		}
-		v.DangerZone = append(v.DangerZone, DangerItem{
+		all = append(all, DangerItem{
 			ID:         t.ID,
 			Title:      t.Title,
 			Type:       t.Type,
 			UpdatedAgo: humanizeAgo(now, t.UpdatedAt),
 		})
 	}
-	sort.SliceStable(v.DangerZone, func(i, j int) bool { return v.DangerZone[i].ID < v.DangerZone[j].ID })
-
-	return v
+	sort.SliceStable(all, func(i, j int) bool { return all[i].ID < all[j].ID })
+	if len(all) <= maxShellDanger {
+		return all, len(all), 0, ""
+	}
+	var names []string
+	for _, d := range all[maxShellDanger:] {
+		names = append(names, "#"+d.ID+" "+d.Title)
+	}
+	return all[:maxShellDanger], len(all), len(all) - maxShellDanger, strings.Join(names, ", ")
 }
 
 // newPhaseLanes buckets the In progress root cards, already sorted, into

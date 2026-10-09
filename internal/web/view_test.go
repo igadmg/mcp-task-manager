@@ -3,6 +3,7 @@ package web
 import (
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -358,6 +359,10 @@ func TestSubtaskStandsAloneAcrossColumns(t *testing.T) {
 	}
 }
 
+// TestDangerZoneIsTheInProgressSet: the set is unchanged by the move into the
+// header - every in_progress task, subtasks included, sorted by id - it just
+// lives on the shell's model now, which is the one model every page that
+// draws the header carries.
 func TestDangerZoneIsTheInProgressSet(t *testing.T) {
 	snap := boardOf(
 		tk("a", "", task.StatusInProgress, task.PriorityHigh, fixedNow),
@@ -366,11 +371,57 @@ func TestDangerZoneIsTheInProgressSet(t *testing.T) {
 	)
 	v := newBoardView(snap, nil, fixedNow, 5)
 
-	if len(v.DangerZone) != 2 {
-		t.Fatalf("danger zone has %d items, want 2", len(v.DangerZone))
+	p := v.Project
+	if len(p.Danger) != 2 || p.DangerCount != 2 {
+		t.Fatalf("danger = %+v, count %d, want both a and c", p.Danger, p.DangerCount)
 	}
-	if v.DangerZone[0].ID != "a" || v.DangerZone[1].ID != "c" {
-		t.Errorf("danger zone = %+v, want a and c", v.DangerZone)
+	if p.Danger[0].ID != "a" || p.Danger[1].ID != "c" {
+		t.Errorf("danger = %+v, want a and c", p.Danger)
+	}
+	if p.DangerMore != 0 || p.DangerRest != "" {
+		t.Errorf("two items should not overflow: more=%d rest=%q", p.DangerMore, p.DangerRest)
+	}
+}
+
+// TestShellDangerCapsTheHeader: the header is one line, so past the cap it
+// names two and counts the rest - the same shape as a card's field chips.
+func TestShellDangerCapsTheHeader(t *testing.T) {
+	var tasks []*task.Task
+	for _, id := range []string{"a", "b", "c", "d", "e"} {
+		tasks = append(tasks, tk(id, "", task.StatusInProgress, task.PriorityMedium, fixedNow))
+	}
+	v := newBoardView(boardOf(tasks...), nil, fixedNow, 5)
+
+	p := v.Project
+	if len(p.Danger) != maxShellDanger {
+		t.Fatalf("named %d tasks, want %d", len(p.Danger), maxShellDanger)
+	}
+	if p.DangerCount != 5 {
+		t.Errorf("DangerCount = %d, want 5", p.DangerCount)
+	}
+	if p.DangerMore != 3 {
+		t.Errorf("DangerMore = %d, want 3", p.DangerMore)
+	}
+	// The ones that did not fit are still reachable, by name, in the
+	// tooltip - and only those.
+	for _, want := range []string{"#c", "#d", "#e"} {
+		if !strings.Contains(p.DangerRest, want) {
+			t.Errorf("DangerRest = %q, want %s in it", p.DangerRest, want)
+		}
+	}
+	for _, unwanted := range []string{"#a", "#b"} {
+		if strings.Contains(p.DangerRest, unwanted) {
+			t.Errorf("DangerRest = %q names %s, which is already shown", p.DangerRest, unwanted)
+		}
+	}
+}
+
+// TestShellDangerEmptyBacklog: nothing in progress means nothing to say, and
+// the welcome and gone pages have no snapshot at all.
+func TestShellDangerEmptyBacklog(t *testing.T) {
+	v := newBoardView(boardOf(tk("a", "", task.StatusTodo, task.PriorityHigh, fixedNow)), nil, fixedNow, 5)
+	if p := v.Project; len(p.Danger) != 0 || p.DangerCount != 0 || p.DangerMore != 0 || p.DangerRest != "" {
+		t.Errorf("an idle backlog yielded %+v", p)
 	}
 }
 

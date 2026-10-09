@@ -119,11 +119,10 @@ func TestBoardCardBadges(t *testing.T) {
 		t.Error("/board returned a full page; it is the htmx fragment target")
 	}
 	for _, want := range []string{
-		"chip-critical",                     // priority chip
-		"chip-blocked",                      // task 5 is blocked by 3
-		"chip-live",                         // task 3 is in progress
-		"An agent may be working right now", // danger zone banner
-		"0/1 subtasks",                      // the subtask tally, from the snapshot
+		"chip-critical", // priority chip
+		"chip-blocked",  // task 5 is blocked by 3
+		"chip-live",     // task 3 is in progress
+		"0/1 subtasks",  // the subtask tally, from the snapshot
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("board fragment is missing %q", want)
@@ -131,12 +130,25 @@ func TestBoardCardBadges(t *testing.T) {
 	}
 }
 
-func TestBoardWithoutInProgressHidesDangerZone(t *testing.T) {
+// TestBoardHasNoDangerBanner: the amber block above the columns is gone. The
+// information lives in the page header now, and the board only carries the
+// out-of-band copy that keeps it fresh.
+func TestBoardHasNoDangerBanner(t *testing.T) {
 	h, svc, _ := newTestHandler(t)
-	testsupport.Seed(t, svc, testsupport.TaskSpec{ID: "1", Title: "Quiet"})
+	seedBoard(t, svc) // task 3 is in progress
 
-	if body := get(t, h, "/board").Body.String(); strings.Contains(body, "An agent may be working") {
-		t.Error("danger-zone banner rendered with nothing in progress")
+	body := get(t, h, "/board").Body.String()
+	for _, gone := range []string{"An agent may be working", "Files in these areas can change"} {
+		if strings.Contains(body, gone) {
+			t.Errorf("the board still carries the banner text %q", gone)
+		}
+	}
+	// What it does carry is the header's indicator, out of band.
+	if !strings.Contains(body, `hx-swap-oob="true"`) {
+		t.Error("the board fragment does not carry the header indicator")
+	}
+	if !strings.Contains(body, "in progress</span>") {
+		t.Error("the out-of-band indicator does not name the count")
 	}
 }
 
@@ -371,6 +383,11 @@ func TestEscaping(t *testing.T) {
 	const branchPayload = `dev/wip/"><script>alert(2)</script>`
 	setBranch(t, dir(t, svc), "1", branchPayload, "")
 
+	// The payload also reaches the page header: its in-progress indicator
+	// names tasks and puts their titles in a tooltip.
+	if _, err := svc.StartTask("1"); err != nil {
+		t.Fatalf("StartTask() error = %v", err)
+	}
 	// The payload also travels in a chain URL: the file column's ref is the
 	// attacking file name, escaped on the way out and on the way back.
 	chainFile := "/tasks/1/w/f/" + url.PathEscape("x<script>.md")
@@ -2123,5 +2140,162 @@ func TestGraphUnknownToken(t *testing.T) {
 	}
 	if strings.Contains(frag.Body.String(), "hx-trigger") {
 		t.Error("the gone fragment keeps polling")
+	}
+}
+
+// TestHeaderShowsTheDangerZone is where the banner went: the page shell, on
+// every page a session serves, so it is visible from a file column as well as
+// from the board.
+func TestHeaderShowsTheDangerZone(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedWorkspace(t, svc) // task 3 is in progress
+
+	for _, path := range []string{"/", "/tasks/1", "/tasks/1/w/f/research.md", "/graph"} {
+		body := get(t, h, path).Body.String()
+		header, _, ok := strings.Cut(body, "</header>")
+		if !ok {
+			t.Fatalf("%s rendered no header", path)
+		}
+		for _, want := range []string{
+			`id="shell-danger"`,
+			"1 in progress",
+			`href="` + h.base + `/tasks/3"`,
+		} {
+			if !strings.Contains(header, want) {
+				t.Errorf("%s: the header is missing %q", path, want)
+			}
+		}
+	}
+}
+
+// TestHeaderIndicatorIsEmptyWhenIdle keeps the wrapper and drops the content:
+// an out-of-band swap can only replace an element that is there, so the empty
+// wrapper is what lets a later poll clear or fill it.
+func TestHeaderIndicatorIsEmptyWhenIdle(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	testsupport.Seed(t, svc, testsupport.TaskSpec{ID: "1", Title: "Quiet"})
+
+	body := get(t, h, "/").Body.String()
+	if !strings.Contains(body, `id="shell-danger"`) {
+		t.Error("the wrapper is gone, so a poll would have nothing to swap into")
+	}
+	if strings.Contains(body, "in progress</span>") {
+		t.Error("the indicator rendered with nothing in progress")
+	}
+}
+
+// TestHeaderIndicatorCapsAndCounts is the compact form through the route: a
+// count chip, two links and a +N whose tooltip names the rest.
+func TestHeaderIndicatorCapsAndCounts(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	for _, id := range []string{"a", "b", "c", "d"} {
+		testsupport.Seed(t, svc, testsupport.TaskSpec{ID: id, Title: "work " + id, Status: "in_progress"})
+	}
+
+	header, _, _ := strings.Cut(get(t, h, "/").Body.String(), "</header>")
+	if !strings.Contains(header, "4 in progress") {
+		t.Error("the chip does not count every in-progress task")
+	}
+	for _, want := range []string{`/tasks/a"`, `/tasks/b"`} {
+		if !strings.Contains(header, want) {
+			t.Errorf("the header does not link %s", want)
+		}
+	}
+	for _, unwanted := range []string{`/tasks/c"`, `/tasks/d"`} {
+		if strings.Contains(header, unwanted) {
+			t.Errorf("the header links %s past the cap", unwanted)
+		}
+	}
+	if !strings.Contains(header, ">+2<") {
+		t.Error("no +N chip for the tasks past the cap")
+	}
+	if !strings.Contains(header, "#c work c, #d work d") {
+		t.Error("the +N tooltip does not name the tasks it stands for")
+	}
+}
+
+// TestPagesWithoutASnapshotStillRender is the regression the data's home
+// guards against: the welcome page and an unknown token's page execute the
+// same header with models that have no backlog behind them, and a field only
+// some models carried would be an execution error, i.e. a 500, on those.
+func TestPagesWithoutASnapshotStillRender(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedBoard(t, svc)
+
+	welcome := getRaw(t, h, "/")
+	if welcome.Code != http.StatusOK {
+		t.Errorf("GET the welcome page = %d, want 200", welcome.Code)
+	}
+	gone := getRaw(t, h, "/nosuchtoken/")
+	if gone.Code != http.StatusNotFound {
+		t.Errorf("GET an unknown token = %d, want 404", gone.Code)
+	}
+	for name, rec := range map[string]*httptest.ResponseRecorder{"welcome": welcome, "gone": gone} {
+		body := rec.Body.String()
+		if strings.Contains(body, "internal error") {
+			t.Errorf("the %s page rendered a template error", name)
+		}
+		if !strings.Contains(body, `id="shell-danger"`) {
+			t.Errorf("the %s page has no indicator wrapper", name)
+		}
+		if strings.Contains(body, "in progress</span>") {
+			t.Errorf("the %s page shows an indicator although it has no snapshot", name)
+		}
+	}
+}
+
+// TestTheOobCopyRidesThePolledFragment pins the freshness mechanism: the
+// header is outside both polled nodes, so exactly the fragment that polls
+// carries a copy of it - and nothing else does, or two copies would race.
+func TestTheOobCopyRidesThePolledFragment(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedWorkspace(t, svc)
+
+	for _, path := range []string{"/board", "/strip/", "/strip/tasks/1", "/strip/graph"} {
+		body := get(t, h, path).Body.String()
+		if n := strings.Count(body, `hx-swap-oob="true"`); n != 1 {
+			t.Errorf("%s carries %d out-of-band elements, want exactly 1", path, n)
+		}
+		// And the contract it must not disturb.
+		if n := strings.Count(body, "hx-trigger="); n != 1 {
+			t.Errorf("%s has %d triggers, want still exactly 1", path, n)
+		}
+	}
+
+	// A whole page needs no copy: the header is in it already, and a
+	// second element with the same id would be a duplicate id.
+	for _, path := range []string{"/", "/tasks/1", "/graph"} {
+		body := get(t, h, path).Body.String()
+		if strings.Contains(body, `hx-swap-oob`) {
+			t.Errorf("%s is a whole page and should carry no out-of-band copy", path)
+		}
+		if n := strings.Count(body, `id="shell-danger"`); n != 1 {
+			t.Errorf("%s has %d #shell-danger elements, want exactly 1", path, n)
+		}
+	}
+
+	// The panel swap is neither the poll nor a page, so it carries none and
+	// the indicator stays as the last poll left it.
+	if body := get(t, h, "/tasks/1/panel").Body.String(); strings.Contains(body, "hx-swap-oob") {
+		t.Error("the panel fragment carries an out-of-band header copy")
+	}
+}
+
+// TestGoneFragmentClearsTheIndicator: a dead session's fragment is the last
+// response an open board will ever get, so it has to clear the header rather
+// than leave whatever was there when the session died.
+func TestGoneFragmentClearsTheIndicator(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedBoard(t, svc)
+
+	body := getRaw(t, h, "/nosuchtoken/board").Body.String()
+	if !strings.Contains(body, `hx-swap-oob="true"`) {
+		t.Error("the gone fragment does not clear the header indicator")
+	}
+	if strings.Contains(body, "in progress</span>") {
+		t.Error("the gone fragment carries an indicator for a session that is gone")
+	}
+	if strings.Contains(body, "hx-trigger") {
+		t.Error("the gone fragment started polling again")
 	}
 }

@@ -1,0 +1,20 @@
+{{/* The page shell's in-progress indicator: an agent may be editing those
+     areas right now. It replaces the amber banner the board used to carry.
+
+     The wrapper is ALWAYS rendered, empty when nothing is in progress,
+     because an out-of-band swap can only replace an element that is there -
+     an empty copy is what clears a stale indicator when the last task stops.
+
+     Executed with a ProjectView, which is the one model every page that draws
+     this header carries, so there is no page here that could be missing the
+     field. */}}
+<span id="shell-danger" class="shell-danger">
+  {{ if .Danger }}
+  <span class="chip chip-live"><span class="dot dot-in_progress"></span>{{ .DangerCount }} in progress</span>
+  {{ range .Danger }}
+  <a class="shell-danger-item" href="{{ nav "/tasks/" .ID }}"
+     title="#{{ .ID }} {{ .Title }} ({{ .Type }}, updated {{ .UpdatedAgo }})">#{{ .ID }}</a>
+  {{ end }}
+  {{ if .DangerMore }}<span class="chip chip-muted" title="{{ .DangerRest }}">+{{ .DangerMore }}</span>{{ end }}
+  {{ end }}
+</span>

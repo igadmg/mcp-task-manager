@@ -267,6 +267,17 @@
   .rail-label { @apply font-mono text-[10px] uppercase tracking-wider text-neutral-500; }
   .rail-ref   { @apply truncate; }
 
+  /* The page shell's in-progress indicator, where the board's amber banner
+   * used to be. It is one line in a header whose height --shell-chrome
+   * hard-codes, so the group is bounded - a count chip, maxShellDanger task
+   * links and a +N - and each link truncates rather than wrapping. */
+  .shell-danger { @apply flex min-w-0 items-baseline gap-1.5; }
+  .shell-danger-item {
+    @apply max-w-32 truncate font-mono text-[11px] text-amber-200/90
+           underline decoration-amber-400/30 underline-offset-2
+           hover:text-amber-100 hover:decoration-amber-300;
+  }
+
   .col-head { @apply flex items-baseline gap-2; }
   .col-section {
     @apply mt-4 text-xs font-semibold uppercase tracking-wider text-neutral-400;

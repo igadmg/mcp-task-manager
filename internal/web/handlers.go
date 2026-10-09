@@ -66,7 +66,9 @@ func (h *handler) boardFragment(w http.ResponseWriter, r *http.Request) {
 		h.renderGone(w, r, http.StatusOK, rootTpl.fragments, "_gone.html")
 		return
 	}
-	h.render(w, http.StatusOK, sess.tpl.fragments, "_board.html", h.boardView(sess))
+	board := h.boardView(sess)
+	board.Fragment = true
+	h.render(w, http.StatusOK, sess.tpl.fragments, "_board.html", board)
 }
 
 // detail serves /tasks/{id}: the board with that task's panel open. There is
@@ -159,7 +161,9 @@ func (h *handler) workspaceFragment(w http.ResponseWriter, r *http.Request) {
 	// The bare board is a chain too: /<token>/strip/ swaps the workspace
 	// back to the board with no panel.
 	if page == "/" {
-		h.render(w, http.StatusOK, sess.tpl.fragments, "_workspace.html", h.bareWorkspaceView(sess))
+		view := h.bareWorkspaceView(sess)
+		view.Fragment = true
+		h.render(w, http.StatusOK, sess.tpl.fragments, "_workspace.html", view)
 		return
 	}
 	// And the rootless graph is the second state that is not a chain.
@@ -169,6 +173,7 @@ func (h *handler) workspaceFragment(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
+		view.Fragment = true
 		h.render(w, http.StatusOK, sess.tpl.fragments, "_workspace.html", view)
 		return
 	}
@@ -177,6 +182,7 @@ func (h *handler) workspaceFragment(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	view.Fragment = true
 	h.render(w, http.StatusOK, sess.tpl.fragments, "_workspace.html", view)
 }
 

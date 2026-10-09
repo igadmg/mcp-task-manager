@@ -13,6 +13,10 @@
     <div class="mx-auto flex max-w-[1600px] flex-wrap items-baseline gap-x-4 gap-y-1 px-4 py-3">
       <a href="{{ nav "/" }}" class="text-sm font-semibold tracking-tight text-neutral-100">Task board</a>
       {{ if .Project.TasksDir }}<span class="meta truncate">{{ .Project.TasksDir }}</span>{{ end }}
+      {{/* An agent may be working right now. This used to be an amber block
+           above the board's columns; it is here so it is on every page a
+           session serves, and the poll keeps it fresh out of band. */}}
+      {{ template "_shell_danger.html" .Project }}
       <span class="ml-auto meta">
         {{ if .Project.TasksDir }}read-only &middot; {{ .Project.TaskCount }} tasks &middot; {{ end }}
         <!-- / is a global route, not a session one: it is the one page every

@@ -1,6 +1,11 @@
 <!-- Deliberately no hx-trigger: when this swaps into an open board, the
      session behind it is gone, so polling it again would only repeat the
-     same answer every few seconds. -->
+     same answer every few seconds.
+
+     It does carry the header's indicator out of band, empty: this is the last
+     response an open board will ever get, so without it whatever the header
+     was showing when the session died would stay there for good. -->
+{{ template "_shell_danger_oob.html" .Project }}
 <div id="board" class="rounded-xl border border-white/10 bg-white/[0.02] p-8 text-center">
   <p class="text-sm font-medium text-neutral-200">This workspace session is not open</p>
   <p class="mx-auto mt-2 max-w-md text-sm text-neutral-500">

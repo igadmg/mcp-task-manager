@@ -159,6 +159,9 @@ func TestAppCSSDefinesWorkspaceClasses(t *testing.T) {
 		// a missing rebuild shows a task's design as unstyled HTML.
 		// The backlog graph: the node box, the two text styles, the
 		// positional edge colours and the legend swatch.
+		// The page shell's in-progress indicator.
+		".shell-danger{",
+		".shell-danger-item{",
 		".graph-svg{",
 		".graph-box{",
 		".graph-label{",
