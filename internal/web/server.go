@@ -109,6 +109,9 @@ func NewHandler(d Deps) http.Handler {
 	sessions.HandleFunc("GET /{token}/tasks/{id}", h.detail)
 	sessions.HandleFunc("GET /{token}/tasks/{id}/panel", h.detailPanel)
 	sessions.HandleFunc("GET /{token}/tasks/{id}/files/{name}", h.taskFile)
+	// The literal "description" segment overlaps neither /panel, /files/{name}
+	// nor /w/{rest...}. GET only, so a POST is answered 405 by the mux.
+	sessions.HandleFunc("GET /{token}/tasks/{id}/description/{view}", h.descriptionFragment)
 	// One pattern per family: registering "GET /{token}/tasks/{id}/w/"
 	// beside the wildcard panics, because it matches the same requests.
 	sessions.HandleFunc("GET /{token}/tasks/{id}/w/{rest...}", h.workspace)

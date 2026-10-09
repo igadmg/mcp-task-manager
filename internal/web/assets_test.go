@@ -306,3 +306,19 @@ func TestNoAnimationInMarkup(t *testing.T) {
 		}
 	}
 }
+
+// TestAppCSSDefinesDescToggle pins the description block's busy indicator in
+// the compiled CSS: without the rebuild the hidden "Loading source" element
+// would stay visible for good.
+func TestAppCSSDefinesDescToggle(t *testing.T) {
+	data, err := staticFS.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatalf("read embedded app.css: %v", err)
+	}
+	css := string(data)
+	for _, want := range []string{".desc-busy{display:none}", ".htmx-request .desc-busy{"} {
+		if !strings.Contains(css, want) {
+			t.Errorf("app.css lacks %q: run scripts/build-css.sh", want)
+		}
+	}
+}

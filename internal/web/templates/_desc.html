@@ -1,0 +1,24 @@
+{{/*
+  The description block of a detail view: one block for the panel, the root
+  column and every t column. Every state has root div.desc and carries no id,
+  no data-task and no hx-trigger, and its buttons target "closest .desc" -
+  never #panel - so app.js's panel scroll reset cannot fire.
+  The hidden desc-busy <pre> is the htmx indicator AND the whitespace-pre-wrap
+  marker TestPanelIsTheOnlyScroller relies on: removing it breaks that test.
+*/}}
+{{ if .Notice }}
+<div class="desc mt-2"><p class="text-xs text-neutral-500">{{ .Notice }}</p></div>
+{{ else if .Raw }}
+<div class="desc mt-2">
+  <button type="button" class="copy-btn" hx-get="{{ nav .RenderedHXGet }}" hx-target="closest .desc" hx-swap="outerHTML" hx-indicator="closest .desc" hx-push-url="false" title="Show the rendered markdown">Rendered</button>
+  <pre class="mt-2 whitespace-pre-wrap break-words rounded-lg bg-black/30 p-3 font-mono text-xs leading-relaxed text-neutral-300">{{ .Body.Text }}</pre>
+</div>
+{{ else if .Has }}
+<div class="desc mt-2">
+  <button type="button" class="copy-btn" hx-get="{{ nav .RawHXGet }}" hx-target="closest .desc" hx-swap="outerHTML" hx-indicator="closest .desc" hx-push-url="false" title="Show the markdown source">Source</button>
+  {{ template "_body.html" .Body }}
+  <pre class="desc-busy mt-2 whitespace-pre-wrap break-words rounded-lg bg-black/30 p-3 font-mono text-xs leading-relaxed text-neutral-300">Loading source…</pre>
+</div>
+{{ else }}
+<p class="mt-2 text-xs text-neutral-600">No description.</p>
+{{ end }}

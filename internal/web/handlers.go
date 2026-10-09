@@ -112,6 +112,37 @@ func (h *handler) detailPanel(w http.ResponseWriter, r *http.Request) {
 	h.render(w, http.StatusOK, sess.tpl.fragments, "_detail.html", view)
 }
 
+// descriptionFragment answers the Source / Rendered toggle of a description
+// block. It answers 200 even when there is nothing to show - htmx does not
+// swap a 404 - but never with _gone.html: that carries a #board and an
+// out-of-band header copy, which swapped into a .desc would duplicate the
+// board's id inside the panel. The next strip or board poll delivers the real
+// gone fragment through its own path.
+func (h *handler) descriptionFragment(w http.ResponseWriter, r *http.Request) {
+	view := r.PathValue("view")
+	if view != "raw" && view != "rendered" {
+		http.NotFound(w, r)
+		return
+	}
+	sess, ok := h.session(r)
+	if !ok {
+		h.render(w, http.StatusOK, rootTpl.fragments, "_desc.html",
+			descNotice("This workspace session is not open any more. The board will say so at its next refresh."))
+		return
+	}
+	detail, err := sess.Project().Service.Detail(r.PathValue("id"))
+	if err != nil {
+		h.render(w, http.StatusOK, sess.tpl.fragments, "_desc.html", descNotice("This task is gone."))
+		return
+	}
+	t := detail.Task
+	dv := newDescView(t.ID, t.Description)
+	if view == "raw" {
+		dv = newRawDescView(t.ID, t.Description)
+	}
+	h.render(w, http.StatusOK, sess.tpl.fragments, "_desc.html", dv)
+}
+
 // workspace serves a chain state as a whole page: the deep link, the reload,
 // and the response htmx fetches when its history cache misses.
 func (h *handler) workspace(w http.ResponseWriter, r *http.Request) {

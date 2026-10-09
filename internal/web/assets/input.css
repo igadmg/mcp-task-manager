@@ -417,6 +417,12 @@
            leading-relaxed text-neutral-300;
   }
 
+  /* The hidden busy element of the description block: the htmx indicator for
+   * the Source toggle. It must carry no display utility, because utilities
+   * outrank components and would keep it visible. */
+  .desc-busy { display: none; }
+  .desc.htmx-request .desc-busy { display: block; }
+
   /* Below lg nothing slides and nothing is pinned to the viewport: the strip
    * stacks, the panes grow to their content and the page scrolls normally. */
   @media (width < 64rem) {

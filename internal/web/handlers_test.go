@@ -2439,3 +2439,287 @@ func TestCardClickMovesThePoll(t *testing.T) {
 		}
 	}
 }
+
+const mdDescription = "## Goal\n\n- one\n\n<b>raw</b>"
+
+func TestDetailDescriptionRendersAsMarkdown(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedBoard(t, svc)
+	if _, err := svc.Create("Md", mdDescription, "medium", "feature", "", "md"); err != nil {
+		t.Fatalf("Create error = %v", err)
+	}
+	panel := get(t, h, "/tasks/md/panel").Body.String()
+	for _, want := range []string{`<div class="notes">`, "<h2>Goal</h2>", "<li>one</li>", "&lt;b&gt;raw&lt;/b&gt;"} {
+		if !strings.Contains(panel, want) {
+			t.Errorf("panel lacks %q", want)
+		}
+	}
+	if strings.Contains(panel, "<b>raw</b>") {
+		t.Error("panel emitted the description's HTML unescaped")
+	}
+}
+
+func TestDetailDoesNotShipRawSource(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedBoard(t, svc)
+	if _, err := svc.Create("Md", mdDescription, "medium", "feature", "", "md"); err != nil {
+		t.Fatalf("Create error = %v", err)
+	}
+	panel := get(t, h, "/tasks/md/panel").Body.String()
+	for _, bad := range []string{"## Goal", "- one"} {
+		if strings.Contains(panel, bad) {
+			t.Errorf("panel ships the raw source %q", bad)
+		}
+	}
+}
+
+func TestDetailDescriptionNeverTrustsTheText(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedBoard(t, svc)
+	desc := "<script>alert(1)</script>\n\n<img src=x onerror=alert(2)>\n\n[x](javascript:alert(3))"
+	if _, err := svc.Create("Evil", desc, "medium", "feature", "", "evil"); err != nil {
+		t.Fatalf("Create error = %v", err)
+	}
+	panel := get(t, h, "/tasks/evil/panel").Body.String()
+	for _, bad := range []string{"<script", "<img", "javascript:"} {
+		if strings.Contains(panel, bad) {
+			t.Errorf("panel contains %q", bad)
+		}
+	}
+	if !strings.Contains(panel, "&lt;script&gt;") {
+		t.Error("the script text is not shown escaped")
+	}
+}
+
+func TestDescriptionRendersInEveryTaskColumn(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedWorkspace(t, svc)
+	one, two := "## One", "## Two"
+	if _, err := svc.Update("1", nil, &one, nil, nil, nil); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if _, err := svc.Update("2", nil, &two, nil, nil, nil); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	body := get(t, h, "/tasks/1/w/t/2").Body.String()
+	if root := columnBody(t, body, `data-column="root"`); !strings.Contains(root, "<h2>One</h2>") {
+		t.Error("the root column does not render task 1's description")
+	}
+	if col := columnBody(t, body, `data-column="t"`); !strings.Contains(col, "<h2>Two</h2>") {
+		t.Error("the t column does not render task 2's description")
+	}
+}
+
+func TestDetailAndDescColumnShareRendering(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedWorkspace(t, svc)
+	desc := "## Goal\n\n- a\n- b\n\n```go\nx := 1\n```"
+	if _, err := svc.Update("1", nil, &desc, nil, nil, nil); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	notes := func(s string) string {
+		_, rest, ok := strings.Cut(s, `<div class="notes">`)
+		if !ok {
+			t.Fatal("no notes block")
+		}
+		block, _, _ := strings.Cut(rest, "</div>")
+		return block
+	}
+	panel := notes(get(t, h, "/tasks/1/panel").Body.String())
+	col := notes(columnBody(t, get(t, h, "/tasks/1/w/d/1").Body.String(), `data-column="d"`))
+	if panel != col {
+		t.Errorf("panel and d column differ:\n%s\n---\n%s", panel, col)
+	}
+}
+
+func TestEmptyDescriptionStillSaysSo(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedBoard(t, svc)
+	panel := get(t, h, "/tasks/3/panel").Body.String()
+	if !strings.Contains(panel, "No description.") || strings.Contains(panel, `class="desc`) {
+		t.Error("an empty description should print only the stub")
+	}
+}
+
+func createMd(t *testing.T, svc *task.Service, id string) {
+	t.Helper()
+	if _, err := svc.Create("Md", mdDescription, "medium", "feature", "", id); err != nil {
+		t.Fatalf("Create error = %v", err)
+	}
+}
+
+func TestDescriptionToggleInThePanel(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedBoard(t, svc)
+	createMd(t, svc, "md")
+	panel := get(t, h, "/tasks/md/panel").Body.String()
+	for _, want := range []string{
+		`hx-get="` + h.base + `/tasks/md/description/raw"`,
+		`hx-target="closest .desc"`, `hx-swap="outerHTML"`, `hx-indicator="closest .desc"`,
+	} {
+		if !strings.Contains(panel, want) {
+			t.Errorf("panel lacks %q", want)
+		}
+	}
+}
+
+func TestDescriptionRawFragment(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedBoard(t, svc)
+	createMd(t, svc, "md")
+	rec := get(t, h, "/tasks/md/description/raw")
+	body := rec.Body.String()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("raw = %d", rec.Code)
+	}
+	for _, want := range []string{`class="desc`, "whitespace-pre-wrap", "## Goal", "&lt;b&gt;raw&lt;/b&gt;",
+		`hx-get="` + h.base + `/tasks/md/description/rendered"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("raw fragment lacks %q", want)
+		}
+	}
+	for _, bad := range []string{"<html", `<div class="notes">`, "<b>raw</b>"} {
+		if strings.Contains(body, bad) {
+			t.Errorf("raw fragment contains %q", bad)
+		}
+	}
+}
+
+func TestDescriptionRenderedFragment(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedBoard(t, svc)
+	createMd(t, svc, "md")
+	rec := get(t, h, "/tasks/md/description/rendered")
+	body := rec.Body.String()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("rendered = %d", rec.Code)
+	}
+	for _, want := range []string{`<div class="notes">`, "<h2>Goal</h2>", "/description/raw"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("rendered fragment lacks %q", want)
+		}
+	}
+	if strings.Contains(body, "## Goal") {
+		t.Error("rendered fragment ships the source")
+	}
+}
+
+func TestDescriptionFragmentRoutes(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedBoard(t, svc)
+	createMd(t, svc, "md")
+
+	if rec := get(t, h, "/tasks/md/description/bogus"); rec.Code != http.StatusNotFound {
+		t.Errorf("bogus view = %d, want 404", rec.Code)
+	}
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(method, h.base+"/tasks/md/description/raw", nil))
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Errorf("%s = %d, want 405", method, rec.Code)
+		}
+	}
+
+	rec := getRaw(t, h, "/nosuchtoken/tasks/1/description/raw")
+	body := rec.Body.String()
+	if rec.Code != http.StatusOK || !strings.Contains(body, `class="desc`) || !strings.Contains(body, "not open") {
+		t.Errorf("unknown token = %d %q", rec.Code, body)
+	}
+	for _, bad := range []string{`id="board"`, "hx-swap-oob", "hx-trigger"} {
+		if strings.Contains(body, bad) {
+			t.Errorf("unknown token fragment contains %q", bad)
+		}
+	}
+
+	rec = get(t, h, "/tasks/nope/description/raw")
+	body = rec.Body.String()
+	if rec.Code != http.StatusOK || !strings.Contains(body, "gone") || strings.Contains(body, "id=") {
+		t.Errorf("unknown task = %d %q", rec.Code, body)
+	}
+
+	// An archived task is served read-only.
+	createMd(t, svc, "old")
+	if _, err := svc.StartTask("old"); err != nil {
+		t.Fatalf("StartTask error = %v", err)
+	}
+	if _, err := svc.CompleteTask("old"); err != nil {
+		t.Fatalf("CompleteTask error = %v", err)
+	}
+	if err := svc.ArchiveTask("old"); err != nil {
+		t.Fatalf("ArchiveTask error = %v", err)
+	}
+	rec = get(t, h, "/tasks/old/description/raw")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "## Goal") {
+		t.Errorf("archived raw = %d", rec.Code)
+	}
+
+	// Awkward ids round-trip through the escaped hx-get.
+	id := "a #b?c"
+	createMd(t, svc, id)
+	panel := get(t, h, "/tasks/"+url.PathEscape(id)+"/panel").Body.String()
+	want := `hx-get="` + h.base + `/tasks/a%20%23b%3Fc/description/raw"`
+	if !strings.Contains(panel, want) {
+		t.Fatalf("panel lacks %q", want)
+	}
+	rec = get(t, h, "/tasks/"+url.PathEscape(id)+"/description/raw")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "## Goal") {
+		t.Errorf("awkward id raw = %d", rec.Code)
+	}
+}
+
+func TestDescriptionToggleKeepsPanelScrollRules(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedBoard(t, svc)
+	createMd(t, svc, "md")
+	for _, view := range []string{"raw", "rendered"} {
+		body := get(t, h, "/tasks/md/description/"+view).Body.String()
+		for _, bad := range []string{"data-task", "id=", `hx-target="#panel"`} {
+			if strings.Contains(body, bad) {
+				t.Errorf("%s fragment contains %q", view, bad)
+			}
+		}
+		if !strings.Contains(body, `hx-target="closest .desc"`) {
+			t.Errorf("%s fragment does not target its own block", view)
+		}
+	}
+	panel := get(t, h, "/tasks/md/panel").Body.String()
+	for _, bad := range []string{"max-h-96", "overflow-auto"} {
+		if strings.Contains(panel, bad) {
+			t.Errorf("panel contains %q", bad)
+		}
+	}
+}
+
+func TestDescriptionToggleInEveryColumn(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedWorkspace(t, svc)
+	one, two := "## One", "## Two"
+	if _, err := svc.Update("1", nil, &one, nil, nil, nil); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if _, err := svc.Update("2", nil, &two, nil, nil, nil); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	body := get(t, h, "/tasks/1/w/t/2/t/1").Body.String()
+	if col := columnBody(t, body, `data-column="t"`); !strings.Contains(col, "/tasks/2/description/raw") {
+		t.Error("the first t column does not carry task 2's toggle")
+	}
+	if n := strings.Count(body, "/tasks/1/description/raw"); n < 2 {
+		t.Errorf("task 1's toggle appears %d times, want at least 2", n)
+	}
+	if n := strings.Count(body, `class="desc`); n < 3 {
+		t.Errorf("%d description blocks, want at least 3", n)
+	}
+	if strings.Contains(body, `id="desc`) {
+		t.Error("a description block carries an id")
+	}
+}
+
+func TestEmptyDescriptionHasNoToggle(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedBoard(t, svc)
+	panel := get(t, h, "/tasks/3/panel").Body.String()
+	if !strings.Contains(panel, "No description.") || strings.Contains(panel, "description/raw") {
+		t.Error("an empty description should have no toggle")
+	}
+}

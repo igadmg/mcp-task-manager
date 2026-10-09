@@ -1080,3 +1080,28 @@ func TestChainLinksWithoutAParent(t *testing.T) {
 		t.Errorf("a top-level task has a parent link: %q / %q", v.ParentHref, v.ParentHXGet)
 	}
 }
+
+func TestNewDescView(t *testing.T) {
+	empty := newDescView("x", "")
+	if empty.Has || empty.Body.HTML != "" {
+		t.Errorf("empty description = %+v, want no block", empty)
+	}
+	d := newDescView("x", "## Goal")
+	if !d.Has || !strings.Contains(string(d.Body.HTML), "<h2>Goal</h2>") || d.Body.Text != "" {
+		t.Errorf("rendered description = %+v", d)
+	}
+}
+
+func TestNewDescViewURLs(t *testing.T) {
+	d := newDescView("a#b?c%d", "text")
+	if d.RawHXGet != "/tasks/a%23b%3Fc%25d/description/raw" {
+		t.Errorf("RawHXGet = %q", d.RawHXGet)
+	}
+	if !strings.HasSuffix(d.RenderedHXGet, "/description/rendered") {
+		t.Errorf("RenderedHXGet = %q", d.RenderedHXGet)
+	}
+	r := newRawDescView("1", "## src")
+	if !r.Raw || r.Body.Text != "## src" || r.Body.HTML != "" {
+		t.Errorf("raw view = %+v", r)
+	}
+}

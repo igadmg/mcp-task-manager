@@ -40,11 +40,7 @@
        title="Open the backlog graph with this task highlighted"
        {{ if .GraphSelected }}aria-current="true"{{ end }}>Graph &#8599;</a>
   </div>
-  {{ if .Description }}
-  <pre class="mt-2 whitespace-pre-wrap break-words rounded-lg bg-black/30 p-3 font-mono text-xs leading-relaxed text-neutral-300">{{ .Description }}</pre>
-  {{ else }}
-  <p class="mt-2 text-xs text-neutral-600">No description.</p>
-  {{ end }}
+  {{ template "_desc.html" .Desc }}
 
   {{ if .Card.Blockers }}
   <section class="mt-5">

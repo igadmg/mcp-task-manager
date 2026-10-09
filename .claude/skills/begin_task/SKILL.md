@@ -12,7 +12,7 @@ Every phase is recorded by the task manager server: `start_phase` opens a run of
 ## Step 1: Task Intake and Naming
 
 1. Read the user's input carefully.
-2. If the task is vague, ambiguous, missing acceptance criteria, or contains undefined terms — ask targeted clarifying questions before continuing. Gather only what is needed to produce an unambiguous problem statement. Do not over-ask.
+2.  Ask targeted clarifying questions before continuing. Gather only what is needed to produce an unambiguous problem statement. Do not over-ask.
 3. Once the task is sufficiently clear, generate a short kebab-case task name (3–5 words, e.g. `add-tooltip-control`, `fix-input-scheme-leak`).
 4. Ask the task manager MCP server to create a task for you with that kebab name as the id (`create_task`). The server records you as its creator.
 5. **Do not start it.** The task stays in `todo` until research begins; remember its id until then.

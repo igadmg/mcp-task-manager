@@ -5,7 +5,7 @@ description: Use when the user wants the kanban dashboard of this project's back
 
 # Open Board
 
-Rebuild the `mcp-task-manager` binary from the current working tree, install it
+Rebuild the `mcp-task-manager` binary for mcp and web from the current working tree, install it
 on the user's `PATH`, serve the read-only kanban dashboard for **this** project,
 and open it in the browser.
 

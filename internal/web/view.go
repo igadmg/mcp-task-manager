@@ -330,14 +330,64 @@ type DangerItem struct {
 	UpdatedAgo string
 }
 
+// DescView is the description block of a detail view. It never carries an id
+// or a data-task attribute: the panel's scroll reset in app.js keys on
+// #panel's data-task, and the block must stay invisible to it.
+type DescView struct {
+	Has           bool // the task has a description at all
+	Body          bodyView
+	Raw           bool   // the on-demand source view: Body.Text, not Body.HTML
+	RawHXGet      string // root-relative, no token: the template adds it through nav
+	RenderedHXGet string
+	Notice        string // an inline route message instead of a description
+}
+
+// descHref is the one place the /tasks/{id}/description/{view} URL is spelled.
+// It is root-relative and takes its token through nav. It is deliberately not
+// one of the chainLinks families: the raw text belongs to the task, not to
+// the column that shows it, so it needs no rebasing.
+func descHref(id, view string) string {
+	return "/tasks/" + url.PathEscape(id) + "/description/" + view
+}
+
+// newDescView renders a description as a document, the same call the d column
+// makes, so both read alike.
+func newDescView(id, desc string) DescView {
+	return DescView{
+		Has:           desc != "",
+		Body:          newBodyView("", desc),
+		RawHXGet:      descHref(id, "raw"),
+		RenderedHXGet: descHref(id, "rendered"),
+	}
+}
+
+// newRawDescView is the on-demand source view. The text goes in through a
+// plain struct literal, so html/template escapes it and no second
+// template.HTML exists.
+func newRawDescView(id, desc string) DescView {
+	return DescView{
+		Has:           desc != "",
+		Raw:           true,
+		Body:          bodyView{Text: desc},
+		RawHXGet:      descHref(id, "raw"),
+		RenderedHXGet: descHref(id, "rendered"),
+	}
+}
+
+// descNotice is the inline answer of the description route when there is no
+// description to show (an unknown task or session).
+func descNotice(msg string) DescView {
+	return DescView{Notice: msg}
+}
+
 // DetailView is one task's full page or side panel.
 type DetailView struct {
-	Project     ProjectView
-	Card        CardView
-	Description string
-	Archived    bool
-	Missing     bool
-	Relations   []RelationView
+	Project   ProjectView
+	Card      CardView
+	Desc      DescView
+	Archived  bool
+	Missing   bool
+	Relations []RelationView
 	// Files are the attached files, without the phase records that
 	// Phases shows.
 	Files []FileLinkView
@@ -978,7 +1028,7 @@ func newDetailView(d *task.TaskDetail, cfg *config.Config, titles map[string]str
 	v := DetailView{
 		Project:        newProjectView(cfg, 0),
 		Card:           card,
-		Description:    t.Description,
+		Desc:           newDescView(t.ID, t.Description),
 		Archived:       d.Archived,
 		Files:          newFileLinkViews(t.ID, d.Files),
 		Fields:         newFieldViews(t.Fields),
