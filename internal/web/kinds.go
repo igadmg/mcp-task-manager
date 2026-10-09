@@ -95,22 +95,21 @@ type TaskColumnView struct {
 	Detail DetailView
 }
 
-// FileColumnView is a file column's body. The content is plain text escaped
-// by html/template; workspace-file-column renders it as markdown.
+// FileColumnView is a file column. Body is the file rendered as a document or
+// shown as text, decided by its name (body.go).
 type FileColumnView struct {
 	Name    string
 	RawHref string
-	Content string
+	Body    bodyView
 }
 
-// DescColumnView is a description column's body: whose description it is, and
-// the text. Like the file column it is escaped plain text - rendering markdown
-// is workspace-file-column's decision, and this package still has no
-// template.HTML anywhere (templates.go).
+// DescColumnView is a description column: whose description it is, and the
+// text as a document. It goes through the same bodyView as a file, so "open
+// the description" and "open a file" really are the same working area.
 type DescColumnView struct {
-	ID      string
-	Title   string
-	Content string
+	ID    string
+	Title string
+	Body  bodyView
 	// TaskHref opens the task itself as a column, so a reader who came in
 	// on a deep link can get at the record the text belongs to.
 	TaskHref string
@@ -147,9 +146,11 @@ func resolveDescColumn(c colCtx) (any, bool) {
 		return nil, false
 	}
 	return DescColumnView{
-		ID:       detail.Task.ID,
-		Title:    detail.Task.Title,
-		Content:  detail.Task.Description,
+		ID:    detail.Task.ID,
+		Title: detail.Task.Title,
+		// No file name, so the body renders as a document - which is
+		// what a description is.
+		Body:     newBodyView("", detail.Task.Description),
 		TaskHref: c.here().Append(KindTask, detail.Task.ID).Path(),
 	}, true
 }
@@ -161,6 +162,16 @@ func resolveFileColumn(c colCtx) (any, bool) {
 	if err := task.ValidateAttachedName(c.Ref); err != nil {
 		return nil, false
 	}
+	// The server's own records are not task artifacts. storage.ReadFile
+	// validates a read without the reserved-name rule - that rule is about
+	// writes, and read_task_file documents a *.phase file as readable - so
+	// without this a phase record, or the task's own {id}.md, would render
+	// as a column although no surface links one (ListFiles drops the
+	// record, TaskDetail.Files drops the records). A name nothing offers
+	// is a URL that names nothing, which is the tiler's one 404.
+	if task.IsReservedFileName(c.Ref) || c.Ref == c.TaskID+".md" {
+		return nil, false
+	}
 	content, err := c.Svc.ReadTaskFile(c.TaskID, c.Ref)
 	if err != nil {
 		return nil, false
@@ -168,6 +179,6 @@ func resolveFileColumn(c colCtx) (any, bool) {
 	return FileColumnView{
 		Name:    c.Ref,
 		RawHref: taskFileHref(c.TaskID, c.Ref),
-		Content: content,
+		Body:    newBodyView(c.Ref, content),
 	}, true
 }

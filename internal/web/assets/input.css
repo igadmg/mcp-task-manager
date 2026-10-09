@@ -277,6 +277,62 @@
   .col-selected {
     @apply bg-white/5 text-neutral-200 ring-1 ring-inset ring-white/15;
   }
+  /* Rendered task artifacts. internal/markdown emits a fixed, small tag set
+   * and exactly one class (task-list-item), so this is element selectors
+   * inside one scope rather than Tailwind's typography plugin: the plugin
+   * compiles offline with the pinned CLI but costs ~19 KB of app.css to
+   * style twenty tags, and its own gray scale would need overriding on top
+   * of this palette anyway.
+   *
+   * A code block WRAPS instead of scrolling sideways. A horizontal scroller
+   * here would be a second scroll container inside the column's .pane, which
+   * is exactly what this dashboard has ruled out everywhere else. A table is
+   * the one thing that can still overflow, so its cells wrap too. */
+  .notes {
+    @apply text-sm leading-relaxed text-neutral-300;
+  }
+  .notes > :first-child { @apply mt-0; }
+  .notes h1 { @apply mt-6 mb-2 text-base font-semibold text-neutral-100; }
+  .notes h2 { @apply mt-6 mb-2 text-sm font-semibold text-neutral-100; }
+  .notes h3,
+  .notes h4,
+  .notes h5,
+  .notes h6 {
+    @apply mt-5 mb-1.5 text-sm font-medium text-neutral-200;
+  }
+  .notes p { @apply my-3; }
+  .notes ul { @apply my-3 list-disc space-y-1 pl-5; }
+  .notes ol { @apply my-3 list-decimal space-y-1 pl-5; }
+  .notes li > ul,
+  .notes li > ol { @apply my-1; }
+  .notes li::marker { @apply text-neutral-600; }
+  .notes li.task-list-item { @apply list-none pl-0; }
+  .notes strong { @apply font-semibold text-neutral-100; }
+  .notes em { @apply italic; }
+  .notes a {
+    @apply text-sky-300 underline decoration-sky-300/30 underline-offset-2
+           hover:decoration-sky-300;
+  }
+  .notes code {
+    @apply rounded bg-black/40 px-1 py-0.5 font-mono text-[0.8125rem] text-neutral-200;
+  }
+  .notes pre {
+    @apply my-3 whitespace-pre-wrap break-words rounded-lg bg-black/30 p-3
+           font-mono text-xs leading-relaxed text-neutral-300;
+  }
+  .notes pre code { @apply bg-transparent p-0 text-xs; }
+  .notes blockquote {
+    @apply my-3 border-l-2 border-white/15 pl-3 text-neutral-400;
+  }
+  .notes hr { @apply my-5 border-white/10; }
+  .notes table { @apply my-4 w-full border-collapse text-xs; }
+  .notes th {
+    @apply border-b border-white/15 px-2 py-1.5 text-left font-semibold
+           text-neutral-200;
+  }
+  .notes td { @apply border-b border-white/5 px-2 py-1.5 align-top break-words; }
+  .notes img { @apply my-3 max-w-full rounded-lg; }
+
   .col-file-body {
     @apply mt-3 whitespace-pre-wrap rounded-lg bg-black/30 p-3 font-mono text-xs
            leading-relaxed text-neutral-300;

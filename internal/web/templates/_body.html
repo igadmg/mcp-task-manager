@@ -1,0 +1,10 @@
+{{/* The one fragment that prints a wide column's body: a rendered document,
+     or the bytes as preformatted text. .HTML is the only trusted HTML in this
+     package and comes from newBodyView (body.go), which is the only place
+     that wraps a string in template.HTML. A code block inside .notes wraps
+     rather than scrolling, so a column never gains a second scroll container
+     inside its own .pane. */}}
+{{ if .HTML }}<div class="notes">{{ .HTML }}</div>
+{{ else if .Text }}<pre class="col-file-body">{{ .Text }}</pre>
+{{ else }}<p class="mt-4 text-xs text-neutral-600">Empty.</p>
+{{ end }}
