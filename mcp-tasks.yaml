@@ -9,6 +9,17 @@ auto_archive:
 web:
   enabled: false
   addr: 127.0.0.1:7777
+  # Status colours, one palette for card dots and borders, the in-progress
+  # chip, the Done bars and the graph. Names are <hue>-<shade> from a fixed
+  # list (hues neutral red orange amber lime emerald teal sky blue violet
+  # fuchsia rose; shades 200 300 400 500). Omitted roles keep these defaults.
+  # colors:
+  #   todo: neutral-500
+  #   in_progress: amber-400
+  #   done: emerald-500
+  #   recent: emerald-200   # closed inside recent_hours (bars only)
+  #   new: sky-400          # created inside new_hours, still todo
+  # new_hours: 24           # window of the `new` chip on todo cards; default for bars cards
   # Statistics cards of the board's Done column, in board order. These four
   # are the defaults; `cards: []` shows none.
   done_stats:

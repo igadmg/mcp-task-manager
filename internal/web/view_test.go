@@ -721,7 +721,7 @@ func TestStatsCardsKeepConfigOrder(t *testing.T) {
 		{ID: "lines-14d", Kind: config.StatsKindLines},
 		{ID: "bars-priority", Kind: config.StatsKindBars},
 		{ID: "odd", Kind: "pie"},
-	})
+	}, nil)
 	var ids, kinds []string
 	for _, c := range got {
 		ids = append(ids, c.ID)
@@ -741,7 +741,7 @@ func TestStatsBarOffsets(t *testing.T) {
 		{Value: "full", Total: 12, Done: 7, InProgress: 3, Todo: 2, ClosedRecently: 2, CreatedRecently: 1},
 		{Value: "done-only", Total: 4, Done: 4},
 		{Value: "open-only", Total: 3, InProgress: 1, Todo: 2, CreatedRecently: 2},
-	}}})
+	}}}, nil)
 	want := []StatsBarView{
 		{Value: "full", Total: 12, Done: 7, InProgress: 3, Todo: 2, Recent: 2, New: 1,
 			Open: 5, RecentX: 5, TodoX: 10, RecentHours: h, NewHours: h},
@@ -770,7 +770,7 @@ func TestStatsBarWindowsAreLabelled(t *testing.T) {
 	cards := newStatsCards([]task.StatsCard{{
 		Kind: config.StatsKindBars, RecentHours: 48, NewHours: 168,
 		Bars: []task.StatsBar{{Value: "x", Total: 1, Todo: 1, CreatedRecently: 1}},
-	}})
+	}}, nil)
 	if got := cards[0].Bars[0]; got.RecentHours != 48 || got.NewHours != 168 {
 		t.Errorf("windows = %d/%d, want 48/168", got.RecentHours, got.NewHours)
 	}
@@ -779,7 +779,7 @@ func TestStatsBarWindowsAreLabelled(t *testing.T) {
 func TestStatsBarSkipsEmptyTotal(t *testing.T) {
 	cards := newStatsCards([]task.StatsCard{{ID: "x", Kind: config.StatsKindBars, Bars: []task.StatsBar{
 		{Value: "none"}, {Value: "one", Total: 1, Todo: 1},
-	}}})
+	}}}, nil)
 	if len(cards) != 1 || len(cards[0].Bars) != 1 || cards[0].Bars[0].Value != "one" {
 		t.Errorf("cards = %+v, want only the row with tasks", cards)
 	}
@@ -916,7 +916,7 @@ func TestStatsChartNoLines(t *testing.T) {
 	if c := newStatsChart(card); c != nil {
 		t.Errorf("chart = %+v, want nil without lines", c)
 	}
-	if got := newStatsCards([]task.StatsCard{card}); len(got) != 1 || got[0].Chart != nil {
+	if got := newStatsCards([]task.StatsCard{card}, nil); len(got) != 1 || got[0].Chart != nil {
 		t.Errorf("cards = %+v, want the card without a chart", got)
 	}
 }

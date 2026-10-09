@@ -11,7 +11,7 @@
       <span class="meta ml-auto min-w-0 truncate">{{ .Done }}/{{ .Total }}{{ if .Open }} &middot; {{ .Open }} open{{ end }}{{ if .Recent }} &middot; <span class="stats-recent">+{{ .Recent }}</span>{{ end }}{{ if .New }} &middot; <span class="stats-new">{{ .New }} new</span>{{ end }}</span>
     </div>
     <svg class="stats-bar" viewBox="0 0 {{ .Total }} 1" preserveAspectRatio="none" role="img">
-      <title>{{ .Value }}: {{ .Done }} done (green), {{ .Recent }} of them closed in the last {{ .RecentHours }} h (light green), {{ .InProgress }} in progress (amber), {{ .Todo }} to do (grey), {{ .New }} of them created in the last {{ .NewHours }} h (blue)</title>
+      <title>{{ .Value }}: {{ .Done }} done ({{ $.Colors.done }}), {{ .Recent }} of them closed in the last {{ .RecentHours }} h ({{ $.Colors.recent }}), {{ .InProgress }} in progress ({{ $.Colors.in_progress }}), {{ .Todo }} to do ({{ $.Colors.todo }}), {{ .New }} of them created in the last {{ .NewHours }} h ({{ $.Colors.new }})</title>
       {{ if .Done }}<rect class="bar-done" x="0" width="{{ .Done }}" height="1"/>{{ end }}
       {{ if .Recent }}<rect class="bar-recent" x="{{ .RecentX }}" width="{{ .Recent }}" height="1"/>{{ end }}
       {{ if .InProgress }}<rect class="bar-in_progress" x="{{ .Done }}" width="{{ .InProgress }}" height="1"/>{{ end }}

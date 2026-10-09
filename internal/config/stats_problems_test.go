@@ -263,8 +263,8 @@ func TestStatsBarWindowProblems(t *testing.T) {
 // id is derived from its content and is the key viewer state is stored under,
 // so a window must not rename it.
 func TestStatsBarWindowsDoNotTouchTheID(t *testing.T) {
-	plain := normalizeStatsCards([]StatsCard{{Kind: StatsKindBars, Field: "priority"}})
-	tuned := normalizeStatsCards([]StatsCard{{Kind: StatsKindBars, Field: "priority", RecentHours: 72, NewHours: 168}})
+	plain := normalizeStatsCards([]StatsCard{{Kind: StatsKindBars, Field: "priority"}}, DefaultStatsHours)
+	tuned := normalizeStatsCards([]StatsCard{{Kind: StatsKindBars, Field: "priority", RecentHours: 72, NewHours: 168}}, DefaultStatsHours)
 	if plain[0].ID != tuned[0].ID {
 		t.Errorf("id changed with the windows: %q vs %q", plain[0].ID, tuned[0].ID)
 	}

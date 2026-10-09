@@ -802,8 +802,8 @@ func TestStatsBarsTooltipNamesTheColours(t *testing.T) {
 	// todo one created just now: 1 done, 1 of them recent, 0 in progress,
 	// 1 to do, 1 of them fresh. The title names both windows, which it
 	// could not do while one of them was a constant.
-	const want = "<title>medium: 1 done (green), 1 of them closed in the last 24 h (light green), " +
-		"0 in progress (amber), 1 to do (grey), 1 of them created in the last 24 h (blue)</title>"
+	const want = "<title>medium: 1 done (emerald-500), 1 of them closed in the last 24 h (emerald-200), " +
+		"0 in progress (amber-400), 1 to do (neutral-500), 1 of them created in the last 24 h (sky-400)</title>"
 	if !strings.Contains(body, want) {
 		t.Errorf("the medium bar lacks %s", want)
 	}

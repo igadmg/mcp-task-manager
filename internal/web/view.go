@@ -45,6 +45,20 @@ type ProjectView struct {
 	DangerCount int
 	DangerMore  int
 	DangerRest  string
+	// Palette is the status colours the page paints with. Like Danger it is
+	// on the shell's model so that every model that executes layout.html
+	// carries it.
+	Palette PaletteView
+}
+
+// PaletteView is the dashboard's status palette as the page needs it. Class
+// is the <body> class list that selects the configured colour of each role
+// that differs from its default - empty for the default palette, which
+// :root already paints. Names is every role's colour name, for text that
+// has to say what a colour is (the bar tooltip).
+type PaletteView struct {
+	Class string
+	Names map[string]string
 }
 
 // BoardView is one whole kanban render.
@@ -104,6 +118,8 @@ type StatsCardView struct {
 	Title string
 	Bars  []StatsBarView
 	Chart *StatsChartView
+	// Colors is the palette's role to colour-name map, for the bar tooltip.
+	Colors map[string]string
 }
 
 // StatsChartView is a lines card's chart. Its coordinates are data, like a
@@ -228,7 +244,12 @@ type CardView struct {
 	SubtaskDone  int
 	Resolution   string
 	InProgress   bool
-	UpdatedAgo   string
+	// New marks a todo task created inside the board's new window
+	// (web.new_hours, NewHours here for the tooltip): a board card shows a
+	// chip in the new colour. Set by newBoardView only.
+	New        bool
+	NewHours   int
+	UpdatedAgo string
 	// CreatedBy is the task's creator, empty for tasks that predate the
 	// field; CreatedAgo is relative, CreatedAt the full time for a tooltip.
 	CreatedBy  string
@@ -569,9 +590,16 @@ func newBoardView(snap *task.BoardSnapshot, cfg *config.Config, now time.Time, p
 		Generated:   now.Format("15:04:05"),
 	}
 
+	newHours := config.DefaultStatsHours
+	if cfg != nil && cfg.Web.NewHours > 0 {
+		newHours = cfg.Web.NewHours
+	}
+	fresh := time.Duration(newHours) * time.Hour
+
 	byID := make(map[string]*CardView, len(snap.Tasks))
 	for _, t := range snap.Tasks {
 		card := newCardView(t, snap, now)
+		card.New, card.NewHours = isNew(t, now, fresh), newHours
 		byID[t.ID] = &card
 	}
 
@@ -624,7 +652,7 @@ func newBoardView(snap *task.BoardSnapshot, cfg *config.Config, now time.Time, p
 			cv.Cards = deref(cards)
 		case task.StatusDone:
 			// Done shows statistics, not tasks; its tasks are still counted.
-			cv.Stats = newStatsCards(snap.Stats)
+			cv.Stats = newStatsCards(snap.Stats, v.Project.Palette.Names)
 		default:
 			cv.Cards = deref(cards)
 		}
@@ -722,10 +750,10 @@ func hours(h int) int {
 	return h
 }
 
-func newStatsCards(cards []task.StatsCard) []StatsCardView {
+func newStatsCards(cards []task.StatsCard, colors map[string]string) []StatsCardView {
 	var out []StatsCardView
 	for _, c := range cards {
-		card := StatsCardView{ID: c.ID, Kind: c.Kind, Title: c.Title}
+		card := StatsCardView{ID: c.ID, Kind: c.Kind, Title: c.Title, Colors: colors}
 		if c.Kind == config.StatsKindLines {
 			card.Chart = newStatsChart(c)
 			out = append(out, card)
@@ -831,7 +859,7 @@ func newStatsChart(c task.StatsCard) *StatsChartView {
 }
 
 func newProjectView(cfg *config.Config, taskCount int) ProjectView {
-	p := ProjectView{TaskCount: taskCount}
+	p := ProjectView{TaskCount: taskCount, Palette: newPaletteView(cfg)}
 	if cfg == nil {
 		return p
 	}
@@ -841,6 +869,28 @@ func newProjectView(cfg *config.Config, taskCount int) ProjectView {
 	}
 	p.TasksDir = cfg.TasksDir()
 	return p
+}
+
+// newPaletteView names the palette of cfg (the defaults for a nil one). The
+// roles are walked in config.ColorRoles order so the class list is stable,
+// and a role at its default adds nothing: :root paints it.
+func newPaletteView(cfg *config.Config) PaletteView {
+	names := cfg.Palette()
+	var classes []string
+	for _, role := range config.ColorRoles() {
+		if names[role] != config.DefaultColors[role] {
+			classes = append(classes, "role-"+role+"-"+names[role])
+		}
+	}
+	return PaletteView{Class: strings.Join(classes, " "), Names: names}
+}
+
+// isNew is the card marker's rule: a todo task created inside the board's
+// new window, a future timestamp excluded. It mirrors the arrivals clause of
+// internal/task/stats.go (TestCardMarkerAgreesWithBars pins the two), which
+// cannot be shared because task must not import web.
+func isNew(t *task.Task, now time.Time, fresh time.Duration) bool {
+	return t.Status == task.StatusTodo && t.CreatedAt.After(now.Add(-fresh)) && !t.CreatedAt.After(now)
 }
 
 func newCardView(t *task.Task, snap *task.BoardSnapshot, now time.Time) CardView {

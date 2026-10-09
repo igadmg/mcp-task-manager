@@ -523,6 +523,13 @@ relation_types:
 web:
   enabled: false          # start the dashboard alongside the MCP server
   addr: 127.0.0.1:7777    # listen address
+  new_hours: 24           # a todo card created this recently shows a `new` chip (default 24)
+  colors:                 # status palette; omitted roles keep these defaults
+    todo: neutral-500
+    in_progress: amber-400
+    done: emerald-500
+    recent: emerald-200   # closed inside recent_hours (bars only)
+    new: sky-400          # created inside new_hours, still todo
   done_stats:             # statistics cards of the Done column, in order
     cards:
       - kind: bars        # one bar per value of a task field
@@ -547,6 +554,16 @@ A partially written section keeps the defaults for the keys it does not
 mention, so `web: {enabled: true}` still listens on `127.0.0.1:7777`,
 `auto_archive: {enabled: true}` still waits 30 days, and
 `git: {branching: true}` still uses the default base branches.
+
+`web.colors` is one palette for the whole dashboard: the status dots, the
+in-progress card border and chip, the Done bars, the graph nodes and the bar
+tooltip all follow it. A colour is `<hue>-<shade>` with a hue of `neutral`,
+`red`, `orange`, `amber`, `lime`, `emerald`, `teal`, `sky`, `blue`, `violet`,
+`fuchsia` or `rose` and a shade of `200`, `300`, `400` or `500`. An unknown
+role or name is reported on stderr and the default is used. `web.new_hours`
+is the window of the `new` chip on todo cards, and the default `new_hours` of
+a bars card that sets none. Line-chart series colours are not part of the
+palette. The palette is read when the dashboard starts.
 
 Without `done_stats.cards` the Done column shows bars for `priority`, `type`
 and `resolution` and a 14-day `lines` card with `created` and `closed`;

@@ -20,6 +20,7 @@
       {{ if .Resolution }}<span class="chip chip-muted">{{ .Resolution }}</span>{{ end }}
       {{ if .SubtaskTotal }}<span class="chip chip-muted">{{ .SubtaskDone }}/{{ .SubtaskTotal }} subtasks</span>{{ end }}
       {{ if .InProgress }}<span class="chip chip-live">in progress</span>{{ end }}
+      {{ if .New }}<span class="chip chip-new" title="created {{ .CreatedAgo }}, inside the last {{ .NewHours }} h">new</span>{{ end }}
       {{ if .Blocked }}<span class="chip chip-blocked" title="{{ range .Blockers }}{{ .ID }} ({{ .Status }}) {{ end }}">blocked</span>{{ end }}
       {{ range .Fields }}<span class="chip chip-muted" title="{{ .Key }}: {{ .Value }}">{{ .Key }}: {{ .Value }}</span>{{ end }}
       {{ if .FieldsMore }}<span class="chip chip-muted" title="{{ .FieldsRest }}">+{{ .FieldsMore }}</span>{{ end }}

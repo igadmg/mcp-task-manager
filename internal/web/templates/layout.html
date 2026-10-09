@@ -8,7 +8,7 @@
   <script src="{{ asset "htmx.min.js" }}" defer></script>
   <script src="{{ asset "app.js" }}" defer></script>
 </head>
-<body class="min-h-full bg-neutral-950 font-sans text-neutral-200 antialiased">
+<body class="min-h-full bg-neutral-950 font-sans text-neutral-200 antialiased{{ with .Project.Palette.Class }} {{ . }}{{ end }}">
   <header class="sticky top-0 z-10 border-b border-white/5 bg-neutral-950/85 backdrop-blur">
     <div class="mx-auto flex max-w-[1600px] flex-wrap items-baseline gap-x-4 gap-y-1 px-4 py-3">
       <a href="{{ nav "/" }}" class="text-sm font-semibold tracking-tight text-neutral-100">Task board</a>

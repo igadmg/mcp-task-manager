@@ -95,7 +95,8 @@ func (p StatsCardProblem) String() string {
 // It is pure: it normalizes its own copy and takes the written cards for the
 // one check normalization erases (a negative days).
 func ValidateStatsCards(written []StatsCard) []StatsCardProblem {
-	cards := normalizeStatsCards(written)
+	// The board window only fills a blank new_hours, which no check looks at.
+	cards := normalizeStatsCards(written, DefaultStatsHours)
 	if len(cards) != len(written) {
 		// written named no cards at all, so these are the defaults,
 		// which are valid by construction.
@@ -222,12 +223,16 @@ type StatsCard struct {
 // for priority, type and resolution, and created/closed over 14 days. Every
 // call builds a fresh list, so callers may change it.
 func DefaultStatsCards() []StatsCard {
+	return defaultStatsCards(DefaultStatsHours)
+}
+
+func defaultStatsCards(newHours int) []StatsCard {
 	return normalizeStatsCards([]StatsCard{
 		{Kind: StatsKindBars, Field: "priority"},
 		{Kind: StatsKindBars, Field: "type"},
 		{Kind: StatsKindBars, Field: "resolution"},
 		{Kind: StatsKindLines, Days: DefaultStatsDays, Lines: []string{StatsLineCreated, StatsLineClosed}},
-	})
+	}, newHours)
 }
 
 // DoneStatsCards returns the Done-column cards with every default filled in.
@@ -238,21 +243,25 @@ func (c *Config) DoneStatsCards() []StatsCard {
 	if c == nil {
 		return DefaultStatsCards()
 	}
-	return normalizeStatsCards(c.Web.DoneStats.Cards)
+	return normalizeStatsCards(c.Web.DoneStats.Cards, c.Web.NewHours)
 }
 
 // normalizeStatsCards fills what the written cards left out. yaml decodes
 // every list item from zero, so per-card defaults cannot come from the
 // pre-filled DefaultConfig. It never writes to in, and running it twice
-// changes nothing.
-func normalizeStatsCards(in []StatsCard) []StatsCard {
+// changes nothing. newHours is the board window (web.new_hours): the arrivals
+// window of a bars card that names none; <= 0 means DefaultStatsHours.
+func normalizeStatsCards(in []StatsCard, newHours int) []StatsCard {
+	if newHours <= 0 {
+		newHours = DefaultStatsHours
+	}
 	if in == nil {
-		return DefaultStatsCards()
+		return defaultStatsCards(newHours)
 	}
 	out := make([]StatsCard, len(in))
 	seen := make(map[string]bool, len(in))
 	for i, c := range in {
-		c = normalizeStatsCard(c)
+		c = normalizeStatsCard(c, newHours)
 		// Unique in list order: a repeated key gets -2, -3, ...
 		base := c.ID
 		for n := 2; seen[c.ID]; n++ {
@@ -264,7 +273,7 @@ func normalizeStatsCards(in []StatsCard) []StatsCard {
 	return out
 }
 
-func normalizeStatsCard(c StatsCard) StatsCard {
+func normalizeStatsCard(c StatsCard, newHours int) StatsCard {
 	c.ID = strings.TrimSpace(c.ID)
 	c.Kind = strings.TrimSpace(c.Kind)
 	c.Title = strings.TrimSpace(c.Title)
@@ -289,7 +298,7 @@ func normalizeStatsCard(c StatsCard) StatsCard {
 			c.RecentHours = DefaultStatsHours
 		}
 		if c.NewHours <= 0 {
-			c.NewHours = DefaultStatsHours
+			c.NewHours = newHours
 		}
 		title = humanize(c.Field)
 		// Deliberately NOT the windows: a bars card's id is its identity

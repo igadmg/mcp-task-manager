@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -111,6 +112,12 @@ type WebConfig struct {
 	Addr string `yaml:"addr"`
 	// DoneStats defines the statistics cards of the board's Done column.
 	DoneStats DoneStatsConfig `yaml:"done_stats"`
+	// Colors is the status palette shared by cards, bars and the graph.
+	Colors ColorsConfig `yaml:"colors"`
+	// NewHours is the board's "new" window: a todo task created inside it
+	// carries the new marker on its card, and a bars card that names no
+	// new_hours of its own highlights the same arrivals.
+	NewHours int `yaml:"new_hours"`
 }
 
 // GitConfig holds the opt-in git branch-per-task workflow.
@@ -158,8 +165,9 @@ func DefaultConfig() *Config {
 			AfterDays: 30,
 		},
 		Web: WebConfig{
-			Enabled: false,
-			Addr:    DefaultWebAddr,
+			Enabled:  false,
+			Addr:     DefaultWebAddr,
+			NewHours: DefaultStatsHours,
 			// A fresh list, like BaseBranches below.
 			DoneStats: DoneStatsConfig{Cards: DefaultStatsCards()},
 		},
@@ -214,6 +222,7 @@ func Resolve(roots RootsProvider) (*Config, error) {
 	cfg.applyDefaults()
 	cfg.applyEnvOverrides()
 	reportStatsProblems(cfg)
+	reportColorProblems(cfg)
 
 	if res.TasksDir == "" {
 		name := relTasksDir
@@ -260,6 +269,7 @@ func LoadForRoot(root, tasksDirOverride string) (*Config, error) {
 	}
 	cfg.applyDefaults()
 	reportStatsProblems(cfg)
+	reportColorProblems(cfg)
 
 	name := strings.TrimSpace(tasksDirOverride)
 	if name == "" {
@@ -306,7 +316,18 @@ func (c *Config) applyDefaults() {
 	// Validate before normalizing: normalization repairs some of what the
 	// diagnostics report. Problems are never fatal and never change Cards.
 	c.Web.DoneStats.Problems = ValidateStatsCards(c.Web.DoneStats.Cards)
-	c.Web.DoneStats.Cards = normalizeStatsCards(c.Web.DoneStats.Cards)
+	c.Web.Colors.Problems = ValidateColors(c.Web.Colors.Roles, c.Web.NewHours)
+	if c.Web.NewHours <= 0 {
+		c.Web.NewHours = DefaultStatsHours
+	}
+	cards := c.Web.DoneStats.Cards
+	if reflect.DeepEqual(cards, DefaultStatsCards()) {
+		// Untouched defaults (or cards written to be identical, which is
+		// indistinguishable): rebuild them on the board window, so a
+		// web.new_hours reaches the default cards too.
+		cards = nil
+	}
+	c.Web.DoneStats.Cards = normalizeStatsCards(cards, c.Web.NewHours)
 	bases := trimList(c.Git.BaseBranches)
 	if len(bases) == 0 {
 		bases = d.Git.BaseBranches

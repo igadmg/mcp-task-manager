@@ -1,10 +1,13 @@
 package web
 
 import (
+	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/gpayer/mcp-task-manager/internal/config"
 	"github.com/gpayer/mcp-task-manager/internal/task"
 )
 
@@ -65,7 +68,9 @@ func TestAppCSSDefinesStatsClasses(t *testing.T) {
 	}
 	for _, w := range []string{
 		".stats-card{", ".stats-title{", ".stats-row{", ".stats-bar{", ".stats-recent{",
-		".bar-done{",
+		".bar-done{", ".bar-done{fill:var(--role-done)}", ".bar-recent{fill:var(--role-recent)}",
+		".bar-in_progress{fill:var(--role-in_progress)}", ".bar-todo{fill:var(--role-todo)}",
+		".bar-new{fill:var(--role-new)}", ".chip-new{",
 		".bar-new{",
 		".stats-new{", ".bar-recent{", ".bar-in_progress{", ".bar-todo{",
 		"--color-emerald-200:",
@@ -320,5 +325,107 @@ func TestAppCSSDefinesDescToggle(t *testing.T) {
 		if !strings.Contains(css, want) {
 			t.Errorf("app.css lacks %q: run scripts/build-css.sh", want)
 		}
+	}
+}
+
+// readInputCSS reads the Tailwind entry. It is not embedded, so the test
+// reads it from the package directory, like the build script does.
+func readInputCSS(t *testing.T) string {
+	t.Helper()
+	data, err := os.ReadFile("assets/input.css")
+	if err != nil {
+		t.Fatalf("read assets/input.css: %v", err)
+	}
+	return string(data)
+}
+
+// ruleBody returns the text between the braces of the first rule in css whose
+// selector is exactly sel. input.css has no nested braces in the rules used.
+func ruleBody(t *testing.T, css, sel string) string {
+	t.Helper()
+	re := regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(sel) + `\s*\{([^}]*)\}`)
+	m := re.FindStringSubmatch(css)
+	if m == nil {
+		t.Fatalf("input.css has no rule %q", sel)
+	}
+	return m[1]
+}
+
+// TestColorAllowlistMatchesCSS ties the Go vocabulary of internal/config to
+// the stylesheet: the @source inline lines, the compiled role classes and the
+// :root defaults. The allowlist lives in both places because Tailwind needs
+// the names at build time; this is what keeps them one list.
+func TestColorAllowlistMatchesCSS(t *testing.T) {
+	input := readInputCSS(t)
+	hues := "{" + strings.Join(config.ColorHues, ",") + "}"
+	shades := make([]string, len(config.ColorShades))
+	for i, sh := range config.ColorShades {
+		shades[i] = strconv.Itoa(sh)
+	}
+	for _, role := range config.ColorRoles() {
+		line := `@source inline("role-` + role + `-` + hues + `-{` + strings.Join(shades, ",") + `}");`
+		if !strings.Contains(input, line) {
+			t.Errorf("input.css lacks %s", line)
+		}
+		if !strings.Contains(input, "@utility role-"+role+"-* { --role-"+role+": --value(--color-*); }") {
+			t.Errorf("input.css lacks the @utility for role %q", role)
+		}
+		if want := "--role-" + role + ": var(--color-" + config.DefaultColors[role] + ");"; !strings.Contains(input, want) {
+			t.Errorf(":root in input.css lacks %q", want)
+		}
+	}
+	if n := strings.Count(input, "@source inline("); n != len(config.ColorRoles()) {
+		t.Errorf("input.css has %d @source inline lines, want %d", n, len(config.ColorRoles()))
+	}
+
+	data, err := staticFS.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatalf("read embedded app.css: %v", err)
+	}
+	css := string(data)
+	for _, name := range config.ColorNames() {
+		if !strings.Contains(css, "--color-"+name+":") {
+			t.Errorf("app.css lacks --color-%s - rerun scripts/build-css.sh", name)
+		}
+		for _, role := range config.ColorRoles() {
+			if want := ".role-" + role + "-" + name + "{--role-" + role + ":var(--color-" + name + ")}"; !strings.Contains(css, want) {
+				t.Errorf("app.css lacks %q - rerun scripts/build-css.sh", want)
+			}
+		}
+	}
+}
+
+// TestStatusColoursComeFromTheRoles fails when a status consumer goes back to
+// a hard-coded colour: it would no longer follow web.colors.
+func TestStatusColoursComeFromTheRoles(t *testing.T) {
+	input := readInputCSS(t)
+	hard := regexp.MustCompile(`--color-(amber|emerald|sky|neutral)-\d+|\b(bg|text|ring|border|stroke|fill|decoration)-(amber|emerald|sky|neutral)-\d+`)
+	for _, sel := range []string{
+		".dot-todo", ".dot-in_progress", ".dot-done",
+		".bar-done", ".bar-recent", ".bar-in_progress", ".bar-todo", ".bar-new",
+		".stats-recent", ".stats-new",
+		".card-live", ".chip-live", ".chip-new",
+		".shell-danger-item", ".shell-danger-item:hover",
+		".graph-todo        .graph-box", ".graph-in_progress .graph-box", ".graph-done        .graph-box",
+	} {
+		body := ruleBody(t, input, sel)
+		if m := hard.FindString(body); m != "" {
+			t.Errorf("%s hard-codes %q", sel, m)
+		}
+		if !strings.Contains(body, "var(--role-") {
+			t.Errorf("%s does not read a role colour: %q", sel, body)
+		}
+	}
+}
+
+// TestAppCSSSizeBound is a tripwire on the allowlist's cost: the role classes
+// were measured at about +17 KB over the 48664 B before the palette.
+func TestAppCSSSizeBound(t *testing.T) {
+	data, err := staticFS.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatalf("read embedded app.css: %v", err)
+	}
+	if n := len(data); n > 70*1024 {
+		t.Errorf("app.css is %d B, want under 70 KB - did the allowlist grow?", n)
 	}
 }

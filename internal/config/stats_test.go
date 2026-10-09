@@ -176,7 +176,7 @@ func TestDoneStatsIDsUnique(t *testing.T) {
 		{Kind: StatsKindLines},
 	}
 	var got []string
-	for _, c := range normalizeStatsCards(in) {
+	for _, c := range normalizeStatsCards(in, DefaultStatsHours) {
 		got = append(got, c.ID)
 	}
 	want := []string{"bars-type", "bars-type-2", "bars-type-3", "bars-type-4", "lines-14d", "lines-14d-2"}
@@ -199,11 +199,11 @@ func TestNormalizeStatsCardsIdempotentAndPure(t *testing.T) {
 		{Kind: StatsKindLines, SplitBy: "priority"},
 	}
 
-	once := normalizeStatsCards(in)
+	once := normalizeStatsCards(in, DefaultStatsHours)
 	if !reflect.DeepEqual(in, snapshot) {
 		t.Errorf("input = %+v, want it untouched: the config is read concurrently", in)
 	}
-	if twice := normalizeStatsCards(once); !reflect.DeepEqual(twice, once) {
+	if twice := normalizeStatsCards(once, DefaultStatsHours); !reflect.DeepEqual(twice, once) {
 		t.Errorf("second pass =\n%+v\nwant\n%+v", twice, once)
 	}
 

@@ -19,6 +19,34 @@
   --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
 }
 
+/* The status palette. One custom property per role, read by every surface
+ * that shows that status (cards, chips, bars, graph nodes, the shell header);
+ * :root carries the defaults, and a configured role is selected by a class on
+ * <body> (role-<role>-<hue>-<shade>, written by internal/web from web.colors).
+ * The var() references force the default --color-* variables out, and the
+ * @source inline lines force every allowed role/colour class out: the names are
+ * assembled in Go, which the template scan cannot see. TestColorAllowlistMatchesCSS
+ * ties this list to internal/config. Derived shades (tints, text, hover) are
+ * written in the consumers, not in the utilities: a derived value inside an
+ * @utility is emitted twice. */
+:root {
+  --role-todo: var(--color-neutral-500);
+  --role-in_progress: var(--color-amber-400);
+  --role-done: var(--color-emerald-500);
+  --role-recent: var(--color-emerald-200);
+  --role-new: var(--color-sky-400);
+}
+@source inline("role-todo-{neutral,red,orange,amber,lime,emerald,teal,sky,blue,violet,fuchsia,rose}-{200,300,400,500}");
+@source inline("role-in_progress-{neutral,red,orange,amber,lime,emerald,teal,sky,blue,violet,fuchsia,rose}-{200,300,400,500}");
+@source inline("role-done-{neutral,red,orange,amber,lime,emerald,teal,sky,blue,violet,fuchsia,rose}-{200,300,400,500}");
+@source inline("role-recent-{neutral,red,orange,amber,lime,emerald,teal,sky,blue,violet,fuchsia,rose}-{200,300,400,500}");
+@source inline("role-new-{neutral,red,orange,amber,lime,emerald,teal,sky,blue,violet,fuchsia,rose}-{200,300,400,500}");
+@utility role-todo-* { --role-todo: --value(--color-*); }
+@utility role-in_progress-* { --role-in_progress: --value(--color-*); }
+@utility role-done-* { --role-done: --value(--color-*); }
+@utility role-recent-* { --role-recent: --value(--color-*); }
+@utility role-new-* { --role-new: --value(--color-*); }
+
 @layer components {
   .chip {
     @apply inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium leading-none whitespace-nowrap;
@@ -29,18 +57,29 @@
   .chip-medium  { @apply bg-sky-500/15 text-sky-300 ring-1 ring-inset ring-sky-500/30; }
   .chip-low     { @apply bg-white/5 text-neutral-400 ring-1 ring-inset ring-white/10; }
   .chip-blocked { @apply bg-red-500/15 text-red-300 ring-1 ring-inset ring-red-500/30; }
-  .chip-live    { @apply bg-amber-400/15 text-amber-300 ring-1 ring-inset ring-amber-400/30; }
+  .chip-live {
+    @apply ring-1 ring-inset;
+    background-color: color-mix(in oklab, var(--role-in_progress) 15%, transparent);
+    color: color-mix(in oklab, var(--role-in_progress) 75%, white);
+    --tw-ring-color: color-mix(in oklab, var(--role-in_progress) 30%, transparent);
+  }
+  .chip-new {
+    @apply ring-1 ring-inset;
+    background-color: color-mix(in oklab, var(--role-new) 15%, transparent);
+    color: color-mix(in oklab, var(--role-new) 75%, white);
+    --tw-ring-color: color-mix(in oklab, var(--role-new) 30%, transparent);
+  }
 
   .dot        { @apply size-1.5 rounded-full; }
-  .dot-todo   { @apply bg-neutral-500; }
-  .dot-in_progress { @apply bg-amber-400; }
-  .dot-done   { @apply bg-emerald-500; }
+  .dot-todo   { background-color: var(--role-todo); }
+  .dot-in_progress { background-color: var(--role-in_progress); }
+  .dot-done   { background-color: var(--role-done); }
 
   .card {
     @apply block rounded-lg border border-white/10 bg-neutral-900/60 p-3
            transition hover:border-white/25 hover:bg-neutral-900;
   }
-  .card-live    { @apply border-amber-400/40 bg-amber-400/[0.04]; }
+  .card-live    { border-color: color-mix(in oklab, var(--role-in_progress) 40%, transparent); background-color: color-mix(in oklab, var(--role-in_progress) 4%, transparent); }
   .card-blocked { @apply border-red-500/30; }
 
   .column {
@@ -144,17 +183,17 @@
   .stats-title { @apply text-[11px] font-medium uppercase tracking-wider text-neutral-400; }
   .stats-row  { @apply mt-2; }
   .stats-bar  { @apply mt-1 block h-1.5 w-full overflow-hidden rounded-full bg-white/5; }
-  .bar-done        { fill: var(--color-emerald-500); }
-  .bar-recent      { fill: var(--color-emerald-200); }
-  .bar-in_progress { fill: var(--color-amber-400); }
-  .bar-todo        { fill: var(--color-neutral-500); }
+  .bar-done        { fill: var(--role-done); }
+  .bar-recent      { fill: var(--role-recent); }
+  .bar-in_progress { fill: var(--role-in_progress); }
+  .bar-todo        { fill: var(--role-todo); }
   /* The arrivals: todo tasks created inside the card's new_hours window,
    * over the START of the todo run, so a bar reads left to right as
    * "shipped | shipped just now | in flight | just arrived | still waiting".
-   * Sky, because it collides with none of emerald, amber or neutral. */
-  .bar-new         { fill: var(--color-sky-400); }
-  .stats-recent    { color: var(--color-emerald-300); }
-  .stats-new       { color: var(--color-sky-300); }
+   * Sky by default, because it collides with none of emerald, amber or neutral. */
+  .bar-new         { fill: var(--role-new); }
+  .stats-recent    { color: var(--role-recent); }
+  .stats-new       { color: color-mix(in oklab, var(--role-new) 75%, white); }
   /* Lines cards. The viewBox is the data range - 2 units per day, counts
    * high, one nested svg per scale (per day, running total) - so Go prints
    * integers and the browser stretches them; non-scaling-stroke keeps the
@@ -287,9 +326,13 @@
    * links and a +N - and each link truncates rather than wrapping. */
   .shell-danger { @apply flex min-w-0 items-baseline gap-1.5; }
   .shell-danger-item {
-    @apply max-w-32 truncate font-mono text-[11px] text-amber-200/90
-           underline decoration-amber-400/30 underline-offset-2
-           hover:text-amber-100 hover:decoration-amber-300;
+    @apply max-w-32 truncate font-mono text-[11px] underline underline-offset-2;
+    color: color-mix(in oklab, var(--role-in_progress) 40%, white);
+    text-decoration-color: color-mix(in oklab, var(--role-in_progress) 30%, transparent);
+  }
+  .shell-danger-item:hover {
+    color: color-mix(in oklab, var(--role-in_progress) 20%, white);
+    text-decoration-color: color-mix(in oklab, var(--role-in_progress) 75%, white);
   }
 
   .col-head { @apply flex items-baseline gap-2; }
@@ -375,9 +418,9 @@
   }
   .graph-id    { @apply fill-neutral-500 font-mono text-[11px]; }
   .graph-label { @apply fill-neutral-200 text-[12px]; }
-  .graph-todo        .graph-box { @apply stroke-neutral-500/40; }
-  .graph-in_progress .graph-box { @apply stroke-amber-400/60 fill-amber-400/[0.06]; }
-  .graph-done        .graph-box { @apply stroke-emerald-500/30; }
+  .graph-todo        .graph-box { stroke: color-mix(in oklab, var(--role-todo) 40%, transparent); }
+  .graph-in_progress .graph-box { stroke: color-mix(in oklab, var(--role-in_progress) 60%, transparent); fill: color-mix(in oklab, var(--role-in_progress) 6%, transparent); }
+  .graph-done        .graph-box { stroke: color-mix(in oklab, var(--role-done) 30%, transparent); }
   .graph-done  .graph-label { @apply fill-neutral-500; }
   .graph-done  .graph-id    { @apply fill-neutral-600; }
   .graph-blocked .graph-box { @apply stroke-rose-400/60; }
