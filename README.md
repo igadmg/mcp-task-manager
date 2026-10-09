@@ -115,6 +115,7 @@ directory changed.
 - Done shows statistics instead of task cards: per configured field (by default `priority`, `type`, `resolution`) one stacked bar per value with the done / in progress / todo split, the closures of the last 24 h highlighted, and a label like `7/12 · 5 open · +2`; and line charts of tasks created and closed per day (plain, cumulative, or one line per value of a field), drawn as inline SVG on the server with a legend, day tooltips and the lines listed in `hidden` switched off. Clicking a legend entry shows or hides its line; the choice is kept per browser (in `localStorage`, per card `id` and line) and survives the board refresh, and the toggle sends no request. A done task stays reachable at `/<token>/tasks/{id}`. See `web.done_stats` under Configuration.
 - Every card shows who created the task and when; in-progress cards with phase records also show the current phase, who started it and when, and the tokens spent so far. The detail view lists every phase run.
 - Clicking a card opens its panel at `/<token>/tasks/{id}` — the board with that panel open, not a separate page. Everything in a panel or a column is openable: its description, every attached file, its parent, its subtasks, its blockers and every relation target. Opening any of them turns the board into a workspace: the board slides off to the left, the task's own column takes its place on the far left, and what you opened appears as a column to its right. Opening something from there adds another column, so a subtask sits beside its parent rather than replacing it. A rail on the far left lists the whole chain, so one click steps back. Every column is one screen tall and scrolls inside itself; the page does not scroll, and the strip cannot be panned with a mouse or trackpad — there is no scroll container to pan. Below `lg` nothing slides and the columns stack.
+- The workspace is **live**: one request every five seconds brings back the board, the panel, the rail and every column, so a file an agent is writing updates on screen and a file it adds appears in its column. Every pane keeps its scroll position across the refresh. Markdown rendering is in-house — there is no markdown dependency, which is why the dependency list below is unchanged.
 - An attached document opens **rendered**: a file named `*.md`, or with no extension at all (the older `research` / `design` / `plan` artifacts), is shown as markdown — headings, lists, tables, code blocks — and so is a task's own description. Anything else is shown as preformatted text. Rendering is server-side with no dependencies, nothing in a note is trusted as HTML, and a link with a scheme other than http, https or mailto keeps its text and loses its tag.
 - A column marks whichever of its own items the column to its right is showing, so the strip reads as a path rather than a pile. A task link always appends a column, including one to a task already open — the chain is a history, so the place you came from stays on screen.
 - The whole workspace state is the URL: `/<token>/tasks/{root}/w/t/{subtask}/f/{file}` and so on, `type/ref` pairs appended as you open things — `t` a task, `f` an attached file, `d` a task's own description. So a deep link, a reload, the rail and browser Back all reproduce the same layout, and the board goes on refreshing itself while it is off-screen.
@@ -753,11 +754,15 @@ required) into the gitignored `.cache/` directory and runs it over
 `internal/web/assets/input.css`. It is never invoked by `go build`,
 `go generate` or `go test`. htmx is pinned at **2.0.4**.
 
-On Windows x64, run the script from Git Bash. Hard-reload the board after
-rebuilding: `/static/app.css` is cached as immutable. Tailwind's automatic
-source detection scans every non-gitignored file under the directory it runs
-from, not only the templates, so build from a clean checkout: untracked notes
-or task artifacts would otherwise add stray utility classes.
+On Windows x64, run the script from Git Bash. No hard reload is needed:
+`/static/app.css` is served as immutable but linked by content hash, so a
+rebuilt stylesheet is a new URL.
+
+The build does not depend on the state of your working tree. `input.css`
+imports Tailwind with `source(none)` and scans only `@source "../templates"`,
+so automatic source detection is off and untracked notes or task artifacts
+cannot add stray utility classes — a rebuild on a dirty tree is byte-identical
+to one on a clean checkout.
 
 ### Editing the Packaged Skills
 

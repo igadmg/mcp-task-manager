@@ -46,6 +46,12 @@ type BoardView struct {
 	// the board's own. htmx caches and restores document.title, so a
 	// history entry stays distinguishable.
 	Title string
+	// Polled says something else refreshes this board, so it must not
+	// carry a trigger of its own. It is set inside an open workspace: the
+	// board is the strip's first unit, so the strip's own poll replaces it
+	// whole, and a second trigger would mean a second request and a second
+	// BoardSnapshot for the same markup every interval.
+	Polled bool
 }
 
 // ColumnView is one status column.
@@ -346,6 +352,12 @@ type WorkspaceView struct {
 	// leftmost slot once the board slides away, so everything else is
 	// placed from it.
 	Root *ColumnUnitView
+	// PollHref is the fragment URL this strip refreshes itself from, set
+	// only when a workspace is open. One request brings back the board,
+	// the panel, the rail and every column from one consistent render, so
+	// a file an agent is writing updates on screen. Empty means nothing is
+	// open and the board polls itself instead, as it always has.
+	PollHref string
 	// Shifted says the board has slid off the left, which is exactly the
 	// case when something is open. Only ever one unit leaves, so the
 	// offset is a single width rather than a sum over kinds, and the strip

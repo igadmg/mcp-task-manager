@@ -186,10 +186,14 @@ func (h *handler) workspaceView(sess *Session, escapedPath string) (WorkspaceVie
 	board := h.boardView(sess)
 	board.Panel = &panel
 
+	// The strip refreshes itself from the URL it is already at, and the
+	// board inside it stops polling separately.
+	board.Polled = true
 	view := WorkspaceView{
 		Project:     board.Project,
 		Title:       "#" + panel.Card.ID + " " + panel.Card.Title,
 		PollSeconds: h.PollSeconds,
+		PollHref:    chain.Fragment(),
 		Board:       board,
 		Shifted:     chain.Depth() > 0,
 	}

@@ -193,11 +193,13 @@ func TestAppCSSDefinesWorkspaceClasses(t *testing.T) {
 }
 
 // TestAppJSPreservesPaneScroll pins the scroll-keeping block. Columns scroll
-// inside themselves, so the board's poll replaces #board inside a scroll
-// container and the browser clamps scrollTop to 0 while the old node is gone:
-// without this the column jumps to the top every five seconds. The bans are
-// the same as the stats toggles' - this stays a client-side listener with no
-// request and no htmx attribute in the markup.
+// inside themselves, so a poll replaces markup inside scroll containers and
+// the browser clamps scrollTop to 0 while the old node is gone: without this
+// every column jumps to the top every five seconds. The panel is in the map
+// too, since an open workspace polls the whole strip and replaces it with the
+// same task's content. The bans are the same as the stats toggles' - this
+// stays a client-side listener with no request and no htmx attribute in the
+// markup.
 func TestAppJSPreservesPaneScroll(t *testing.T) {
 	data, err := staticFS.ReadFile("static/app.js")
 	if err != nil {
@@ -212,6 +214,11 @@ func TestAppJSPreservesPaneScroll(t *testing.T) {
 			t.Errorf("app.js lacks %s", w)
 		}
 	}
+	// The panel is no longer excluded: a strip poll replaces it with the
+	// same task's content, so it keeps its place like any other pane.
+	if strings.Contains(js, ":not(#panel)") {
+		t.Error("app.js still leaves the panel out of the offset map")
+	}
 	for _, bad := range []string{"fetch(", "XMLHttpRequest", "htmx.ajax", "hx-", "htmx-history-cache"} {
 		if strings.Contains(js, bad) {
 			t.Errorf("app.js uses %s", bad)
@@ -221,15 +228,22 @@ func TestAppJSPreservesPaneScroll(t *testing.T) {
 
 // TestAppJSResetsPanelScroll pins the other half of the panel's scroll model:
 // #panel is a scroll container too, and an innerHTML swap keeps its
-// scrollTop, so a fresh panel has to be put back to its top explicitly -
-// which is why it is the one pane left out of the offset map above.
+// scrollTop, so a panel whose content is a DIFFERENT task has to be put back
+// to its top explicitly. That case is the swap target being #panel - a card
+// click - which is why the rule is keyed on the target rather than on leaving
+// the panel out of the map, and why the reset clears the stored offset as
+// well: afterSwap fires before afterSettle, so an offset left behind would be
+// restored one event later.
 func TestAppJSResetsPanelScroll(t *testing.T) {
 	data, err := staticFS.ReadFile("static/app.js")
 	if err != nil {
 		t.Fatalf("read embedded app.js: %v", err)
 	}
 	js := string(data)
-	for _, w := range []string{`"htmx:afterSwap"`, `"panel"`, "scrollTop = 0"} {
+	for _, w := range []string{
+		`"htmx:afterSwap"`, `"panel"`, "scrollTop = 0",
+		`offsets[target.getAttribute("data-pane")] = 0`,
+	} {
 		if !strings.Contains(js, w) {
 			t.Errorf("app.js lacks %s", w)
 		}

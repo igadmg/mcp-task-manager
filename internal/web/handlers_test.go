@@ -1833,3 +1833,138 @@ func TestFileColumnOddNamesNeverFail(t *testing.T) {
 		}
 	}
 }
+
+// TestOnlyOneThingPolls is the poll contract. A bare board polls itself; an
+// open workspace polls the whole strip instead and its board carries no
+// trigger of its own, so there is exactly one request per interval at every
+// depth rather than one per column.
+func TestOnlyOneThingPolls(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedWorkspace(t, svc)
+
+	// Nothing open: the board polls, the strip does not.
+	for _, path := range []string{"/", "/tasks/1", "/strip/"} {
+		body := get(t, h, path).Body.String()
+		if n := strings.Count(body, "hx-trigger="); n != 1 {
+			t.Errorf("%s has %d hx-trigger attributes, want exactly 1", path, n)
+		}
+		if !strings.Contains(body, `hx-get="`+h.base+`/board" hx-trigger=`) {
+			t.Errorf("%s does not poll the board", path)
+		}
+	}
+
+	// A chain open: the strip polls its own fragment URL and the board
+	// inside it has no trigger.
+	for _, c := range []struct{ path, poll string }{
+		{"/tasks/1/w/f/research.md", "/strip/tasks/1/w/f/research.md"},
+		{"/tasks/1/w/t/2/f/plan.md", "/strip/tasks/1/w/t/2/f/plan.md"},
+		{"/strip/tasks/1/w/d/1", "/strip/tasks/1/w/d/1"},
+	} {
+		body := get(t, h, c.path).Body.String()
+		if n := strings.Count(body, "hx-trigger="); n != 1 {
+			t.Errorf("%s has %d hx-trigger attributes, want exactly 1", c.path, n)
+		}
+		if !strings.Contains(body, `hx-get="`+h.base+c.poll+`" hx-trigger=`) {
+			t.Errorf("%s does not poll %s", c.path, c.poll)
+		}
+		if strings.Contains(body, `hx-get="`+h.base+`/board" hx-trigger=`) {
+			t.Errorf("%s still polls the board separately", c.path)
+		}
+	}
+}
+
+// TestThePollPushesNoHistory keeps the poll out of the history stack: pushing
+// is opt-in per link in this package, and a poll that pushed would fight Back
+// five times a minute.
+func TestThePollPushesNoHistory(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedWorkspace(t, svc)
+
+	body := get(t, h, "/tasks/1/w/f/research.md").Body.String()
+	// The polling element is #strip; only its own attributes matter here,
+	// since every link inside it pushes on purpose.
+	_, strip, ok := strings.Cut(body, `id="strip"`)
+	if !ok {
+		t.Fatal("the fragment has no #strip")
+	}
+	strip, _, _ = strings.Cut(strip, ">")
+	if !strings.Contains(strip, "hx-trigger=") {
+		t.Fatalf("#strip does not poll: %q", strip)
+	}
+	if strings.Contains(strip, "hx-push-url") {
+		t.Errorf("the poll pushes a history entry: %q", strip)
+	}
+}
+
+// TestWorkspaceIsLive is the acceptance criterion without a browser: the next
+// poll is just another GET of the same fragment URL, so a file rewritten
+// between two of them comes back with its new content, and a file added to a
+// task appears in its column.
+func TestWorkspaceIsLive(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedWorkspace(t, svc)
+
+	const path = "/strip/tasks/1/w/f/research.md"
+	if !strings.Contains(get(t, h, path).Body.String(), "<h1>root findings</h1>") {
+		t.Fatal("the fixture is wrong")
+	}
+
+	if err := svc.WriteTaskFile("1", "research.md", "# rewritten by an agent"); err != nil {
+		t.Fatalf("WriteTaskFile() error = %v", err)
+	}
+	if err := svc.WriteTaskFile("1", "late.md", "# added later"); err != nil {
+		t.Fatalf("WriteTaskFile() error = %v", err)
+	}
+
+	body := get(t, h, path).Body.String()
+	if !strings.Contains(body, "<h1>rewritten by an agent</h1>") {
+		t.Error("the next poll did not pick up the rewritten file")
+	}
+	if strings.Contains(body, "root findings") {
+		t.Error("the next poll still shows the old content")
+	}
+	// The new file is offered by the root column in the same response.
+	if !strings.Contains(body, `href="`+h.base+`/tasks/1/w/f/late.md"`) {
+		t.Error("a file added while the workspace was open does not appear")
+	}
+}
+
+// TestWorkspaceGoneAtTheNextPoll covers both ways the chain's root can leave
+// while it is open. Neither is an error, and the replacement carries no
+// trigger, so a dead workspace stops polling instead of hammering.
+func TestWorkspaceGoneAtTheNextPoll(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedWorkspace(t, svc)
+
+	// Archived: the chain still resolves, read-only, with its banner.
+	if err := svc.WriteTaskFile("4", "notes.md", "# archived"); err != nil {
+		t.Fatalf("WriteTaskFile() error = %v", err)
+	}
+	if err := svc.ArchiveTask("4"); err != nil {
+		t.Fatalf("ArchiveTask() error = %v", err)
+	}
+	archived := get(t, h, "/strip/tasks/4/w/f/notes.md")
+	if archived.Code != http.StatusOK {
+		t.Errorf("an archived root = %d, want 200", archived.Code)
+	}
+	if !strings.Contains(archived.Body.String(), "Archived") {
+		t.Error("an archived root does not say so")
+	}
+
+	// Deleted: one 404 on the fragment, like any chain that names nothing.
+	if err := svc.Delete("3", false); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+	if got := get(t, h, "/strip/tasks/3").Code; got != http.StatusNotFound {
+		t.Errorf("a deleted root = %d, want 404", got)
+	}
+
+	// A session that ended answers the gone fragment, which has no trigger.
+	gone := getRaw(t, h, "/nosuchtoken/strip/tasks/1")
+	if gone.Code != http.StatusOK {
+		t.Errorf("an unknown token on the strip route = %d, want 200", gone.Code)
+	}
+	if strings.Contains(gone.Body.String(), "hx-trigger") {
+		t.Error("the gone fragment keeps polling")
+	}
+}
