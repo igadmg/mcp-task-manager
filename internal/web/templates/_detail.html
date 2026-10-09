@@ -13,7 +13,9 @@
 
   <div class="flex items-baseline gap-2">
     <span class="meta">#{{ .Card.ID }}</span>
-    {{ if .Card.IsSubtask }}<a class="meta hover:text-neutral-300" href="{{ nav "/tasks/" .Card.ParentID }}">&#8627; {{ .Card.ParentID }}</a>{{ end }}
+    {{ if .Card.IsSubtask }}<a class="meta hover:text-neutral-300{{ if .ParentSelected }} col-selected{{ end }}"
+       href="{{ nav .ParentHref }}" hx-get="{{ nav .ParentHXGet }}" hx-target="#strip" hx-swap="outerHTML" hx-push-url="{{ nav .ParentHref }}"
+       {{ if .ParentSelected }}aria-current="true"{{ end }}>&#8627; {{ .Card.ParentID }}</a>{{ end }}
     <span class="chip chip-{{ .Card.Priority }} ml-auto">{{ .Card.Priority }}</span>
   </div>
   <h1 class="mt-1.5 text-base font-semibold leading-snug text-neutral-100">{{ .Card.Title }}</h1>
@@ -25,10 +27,19 @@
     {{ if .Card.Blocked }}<span class="chip chip-blocked">blocked</span>{{ end }}
   </div>
 
+  {{/* The heading is the link that opens this task's text in the working
+       area. From the panel, which is the depth-0 workspace, it is also the
+       control that enters the workspace at this task. */}}
+  <div class="mt-4">
+    <a class="col-link{{ if .DescSelected }} col-selected{{ end }}"
+       href="{{ nav .DescHref }}" hx-get="{{ nav .DescHXGet }}" hx-target="#strip" hx-swap="outerHTML" hx-push-url="{{ nav .DescHref }}"
+       title="Open the description in the workspace"
+       {{ if .DescSelected }}aria-current="true"{{ end }}>Description &#8599;</a>
+  </div>
   {{ if .Description }}
-  <pre class="mt-4 whitespace-pre-wrap break-words rounded-lg bg-black/30 p-3 font-mono text-xs leading-relaxed text-neutral-300">{{ .Description }}</pre>
+  <pre class="mt-2 whitespace-pre-wrap break-words rounded-lg bg-black/30 p-3 font-mono text-xs leading-relaxed text-neutral-300">{{ .Description }}</pre>
   {{ else }}
-  <p class="mt-4 text-xs text-neutral-600">No description.</p>
+  <p class="mt-2 text-xs text-neutral-600">No description.</p>
   {{ end }}
 
   {{ if .Card.Blockers }}
@@ -36,7 +47,9 @@
     <h2 class="text-xs font-semibold uppercase tracking-wider text-neutral-400">Blocked by</h2>
     <ul class="mt-2 space-y-1">
       {{ range .Card.Blockers }}
-      <li><a class="flex items-center gap-2 rounded px-1 py-1 hover:bg-white/5" href="{{ nav "/tasks/" .ID }}">
+      <li><a class="flex items-center gap-2 rounded px-1 py-1 hover:bg-white/5{{ if .Selected }} col-selected{{ end }}"
+             href="{{ nav .Href }}" hx-get="{{ nav .HXGet }}" hx-target="#strip" hx-swap="outerHTML" hx-push-url="{{ nav .Href }}"
+             {{ if .Selected }}aria-current="true"{{ end }}>
         <span class="meta">#{{ .ID }}</span>
         <span class="truncate text-xs text-neutral-300">{{ .Title }}</span>
         <span class="chip chip-muted ml-auto">{{ .Status }}</span>
@@ -51,8 +64,9 @@
     <h2 class="text-xs font-semibold uppercase tracking-wider text-neutral-400">Subtasks {{ .Card.SubtaskDone }}/{{ .Card.SubtaskTotal }}</h2>
     <ul class="mt-2 space-y-1">
       {{ range .Card.Subtasks }}
-      <li><a class="flex items-center gap-2 rounded px-1 py-1 hover:bg-white/5"
-             href="{{ nav .Href }}" hx-get="{{ nav .HXGet }}" hx-target="#strip" hx-swap="outerHTML" hx-push-url="{{ nav .Href }}">
+      <li><a class="flex items-center gap-2 rounded px-1 py-1 hover:bg-white/5{{ if .Selected }} col-selected{{ end }}"
+             href="{{ nav .Href }}" hx-get="{{ nav .HXGet }}" hx-target="#strip" hx-swap="outerHTML" hx-push-url="{{ nav .Href }}"
+             {{ if .Selected }}aria-current="true"{{ end }}>
         <span class="meta">#{{ .ID }}</span>
         <span class="truncate text-xs text-neutral-300">{{ .Title }}</span>
         <span class="chip chip-muted ml-auto">{{ .Status }}</span>
@@ -70,7 +84,9 @@
       <li class="flex items-center gap-2 px-1 py-1">
         <span class="chip chip-muted">{{ .Type }}</span>
         <span class="meta">{{ .Direction }}</span>
-        <a class="truncate text-xs text-neutral-300 hover:text-neutral-100" href="{{ nav "/tasks/" .OtherID }}">#{{ .OtherID }} {{ .OtherTitle }}</a>
+        <a class="truncate text-xs text-neutral-300 hover:text-neutral-100{{ if .Selected }} col-selected{{ end }}"
+           href="{{ nav .Href }}" hx-get="{{ nav .HXGet }}" hx-target="#strip" hx-swap="outerHTML" hx-push-url="{{ nav .Href }}"
+           {{ if .Selected }}aria-current="true"{{ end }}>#{{ .OtherID }} {{ .OtherTitle }}</a>
       </li>
       {{ end }}
     </ul>
@@ -133,7 +149,7 @@
   <section class="mt-5">
     <h2 class="text-xs font-semibold uppercase tracking-wider text-neutral-400">Attached files</h2>
     <ul class="mt-2 flex flex-wrap gap-1.5">
-      {{ range .Files }}<li><a class="chip chip-muted" href="{{ nav .Href }}" hx-get="{{ nav .HXGet }}" hx-target="#strip" hx-swap="outerHTML" hx-push-url="{{ nav .Href }}">{{ .Name }}</a></li>{{ end }}
+      {{ range .Files }}<li><a class="chip chip-muted{{ if .Selected }} col-selected{{ end }}" href="{{ nav .Href }}" hx-get="{{ nav .HXGet }}" hx-target="#strip" hx-swap="outerHTML" hx-push-url="{{ nav .Href }}"{{ if .Selected }} aria-current="true"{{ end }}>{{ .Name }}</a></li>{{ end }}
     </ul>
   </section>
   {{ end }}

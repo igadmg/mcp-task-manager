@@ -288,7 +288,8 @@ func TestNoMutatingRoutes(t *testing.T) {
 
 	sessionPaths := []string{
 		"/", "/board", "/tasks/1", "/tasks/1/panel", "/tasks/1/files/research.md",
-		"/tasks/1/w/f/research.md", "/tasks/1/w/t/2", "/strip/tasks/1", "/strip/",
+		"/tasks/1/w/f/research.md", "/tasks/1/w/t/2", "/tasks/1/w/d/1",
+		"/strip/tasks/1", "/strip/",
 	}
 	for _, path := range sessionPaths {
 		for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
@@ -344,6 +345,9 @@ func TestEscaping(t *testing.T) {
 	for _, path := range []string{
 		"/", "/board", "/tasks/1", "/tasks/1/panel",
 		chainFile, "/strip" + chainFile, "/strip/tasks/1",
+		// The description column renders the task's text as its whole
+		// body, so it is the surface with the most payload on it.
+		"/tasks/1/w/d/1", "/strip/tasks/1/w/d/1",
 	} {
 		body := get(t, h, path).Body.String()
 		if strings.Contains(body, payload) || strings.Contains(body, branchPayload) {
@@ -1323,7 +1327,11 @@ func TestNoTemplateErrors(t *testing.T) {
 		"/tasks/1/w/f/research.md",
 		"/tasks/1/w/t/2",
 		"/tasks/1/w/t/2/f/plan.md",
+		"/tasks/1/w/d/1",
+		"/tasks/1/w/t/2/d/2",
+		"/tasks/1/w/t/2/t/2",
 		"/strip/", "/strip/tasks/1", "/strip/tasks/1/w/f/research.md",
+		"/strip/tasks/1/w/d/1",
 	}
 	for _, path := range paths {
 		rec := get(t, h, path)
@@ -1362,12 +1370,256 @@ func TestEveryPaneHasAKey(t *testing.T) {
 	body := get(t, h, "/tasks/1/w/t/2/f/plan.md").Body.String()
 	for _, want := range []string{
 		`data-pane="board"`, `data-pane="panel"`, `data-pane="root"`,
-		`data-pane="t:2"`, `data-pane="f:plan.md"`,
+		`data-pane="0:t:2"`, `data-pane="1:f:plan.md"`,
 		`data-pane="column:todo"`, `data-pane="column:in_progress"`,
 		`data-pane="column:done"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("a deep chain is missing %s", want)
 		}
+	}
+}
+
+// columnBody returns one column unit's markup: from its data-column marker to
+// the next one, or to the end of the strip. It cannot use sectionAfter - a
+// column's body is _detail.html, which opens sections of its own, so the first
+// </section> closes "Blocked by", not the column.
+func columnBody(t *testing.T, body, marker string) string {
+	t.Helper()
+	_, rest, ok := strings.Cut(body, marker)
+	if !ok {
+		t.Fatalf("body has no %s", marker)
+	}
+	if next := strings.Index(rest, "data-column="); next >= 0 {
+		return rest[:next]
+	}
+	return rest
+}
+
+// TestPanelLinksEveryFamilyIntoTheWorkspace is the subtask's point from the
+// panel's side: the parent, a blocker, a relation target, a subtask, a file
+// and the task's own description all enter the chain, each appending exactly
+// one pair. Before this they were plain /tasks/{id} hrefs that left the
+// workspace, or inert text.
+func TestPanelLinksEveryFamilyIntoTheWorkspace(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedWorkspace(t, svc)
+	if err := svc.AddRelation("2", "relates_to", "3"); err != nil {
+		t.Fatalf("AddRelation() error = %v", err)
+	}
+
+	// Task 2 is a subtask of 1 with a file and now a relation; task 5 is
+	// blocked by 3.
+	panel := get(t, h, "/tasks/2/panel").Body.String()
+	for name, want := range map[string]string{
+		"description": "/tasks/2/w/d/2",
+		"parent":      "/tasks/2/w/t/1",
+		"file":        "/tasks/2/w/f/plan.md",
+		"relation":    "/tasks/2/w/t/3",
+	} {
+		if !strings.Contains(panel, `href="`+h.base+want+`"`) {
+			t.Errorf("the panel does not open its %s (%s)", name, want)
+		}
+		if !strings.Contains(panel, `hx-get="`+h.base+"/strip"+want+`"`) {
+			t.Errorf("the panel's %s link has no fragment URL", name)
+		}
+	}
+	if strings.Contains(panel, `href="`+h.base+`/tasks/1"`) {
+		t.Error("the panel still links its parent out of the workspace")
+	}
+
+	blocked := get(t, h, "/tasks/5/panel").Body.String()
+	if !strings.Contains(blocked, `href="`+h.base+`/tasks/5/w/t/3"`) {
+		t.Error("the panel does not open its blocker as a column")
+	}
+}
+
+// TestColumnLinksEveryFamilyRebased is the same families from a column, which
+// is the case a per-family rebase gets wrong: the links must append to where
+// the column sits, not re-root the chain on its task.
+func TestColumnLinksEveryFamilyRebased(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedWorkspace(t, svc)
+	if err := svc.AddRelation("2", "relates_to", "3"); err != nil {
+		t.Fatalf("AddRelation() error = %v", err)
+	}
+
+	body := get(t, h, "/tasks/1/w/t/2").Body.String()
+	for name, want := range map[string]string{
+		"description": "/tasks/1/w/t/2/d/2",
+		"parent":      "/tasks/1/w/t/2/t/1",
+		"file":        "/tasks/1/w/t/2/f/plan.md",
+		"relation":    "/tasks/1/w/t/2/t/3",
+	} {
+		if !strings.Contains(body, `href="`+h.base+want+`"`) {
+			t.Errorf("the column does not append its %s (%s)", name, want)
+		}
+	}
+	// The root column to its left is rooted at 1 and appends at depth 0.
+	if !strings.Contains(body, `href="`+h.base+`/tasks/1/w/d/1"`) {
+		t.Error("the root column does not open its own description at depth 0")
+	}
+	if strings.Contains(body, `href="`+h.base+`/tasks/2/w/`) {
+		t.Error("a column re-rooted the chain on its own task")
+	}
+}
+
+// TestDescriptionColumnShowsTheText pins the d kind end to end, including the
+// empty case: the chain names a task, not a non-empty text.
+func TestDescriptionColumnShowsTheText(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedWorkspace(t, svc)
+	desc := "a long description\n\nwith two paragraphs"
+	if _, err := svc.Update("1", nil, &desc, nil, nil, nil); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+
+	body := get(t, h, "/tasks/1/w/d/1").Body.String()
+	for _, want := range []string{
+		`data-column="d"`, `data-ref="1"`, "kind-desc",
+		"with two paragraphs",
+		// The column links back to the task the text belongs to.
+		`href="` + h.base + `/tasks/1/w/d/1/t/1"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the description column is missing %q", want)
+		}
+	}
+
+	// Task 3 has no description; the column still exists and says so.
+	empty := get(t, h, "/tasks/3/w/d/3")
+	if empty.Code != http.StatusOK {
+		t.Fatalf("GET a description column of an empty description = %d, want 200", empty.Code)
+	}
+	if !strings.Contains(empty.Body.String(), "No description.") {
+		t.Error("an empty description column does not say so")
+	}
+
+	// A description column of a task that is not there is one 404, like
+	// every other chain that names nothing.
+	if got := get(t, h, "/tasks/1/w/d/nope").Code; got != http.StatusNotFound {
+		t.Errorf("GET a description column of a missing task = %d, want 404", got)
+	}
+}
+
+// TestColumnMarksTheOpenItem is the "a column shows which of its children the
+// column to its right is" criterion, through the rendered markup.
+func TestColumnMarksTheOpenItem(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedWorkspace(t, svc)
+
+	// The root column marks the subtask whose column follows it.
+	body := get(t, h, "/tasks/1/w/t/2").Body.String()
+	root := columnBody(t, body, `data-column="root"`)
+	if !strings.Contains(root, "col-selected") || !strings.Contains(root, `aria-current="true"`) {
+		t.Error("the root column does not mark the subtask it opened")
+	}
+
+	// The last column marks nothing: there is nothing to its right.
+	last := strings.LastIndex(body, `data-column="t"`)
+	if last < 0 {
+		t.Fatal("no task column in the body")
+	}
+	if strings.Contains(body[last:], "col-selected") {
+		t.Error("the last column marks an item although nothing is open past it")
+	}
+
+	// A file column and a description column are marked the same way.
+	for _, c := range []struct{ path, marker string }{
+		{"/tasks/1/w/f/research.md", "research.md"},
+		{"/tasks/1/w/d/1", "Description"},
+	} {
+		rootCol := columnBody(t, get(t, h, c.path).Body.String(), `data-column="root"`)
+		if !strings.Contains(rootCol, "col-selected") {
+			t.Errorf("%s: the root column does not mark %s", c.path, c.marker)
+		}
+	}
+}
+
+// TestChainMayRevisitATask is the re-entry decision, recorded in design.md:
+// the chain is a history, so opening a task already in it appends. The rail
+// stays one rung per column, and the two columns get their own scroll keys -
+// app.js keeps one offset per data-pane string, so a shared key would make
+// them scroll as one.
+func TestChainMayRevisitATask(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedWorkspace(t, svc)
+
+	rec := get(t, h, "/tasks/1/w/t/2/t/1/t/2")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET a chain that revisits a task = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if n := strings.Count(body, `data-column="t"`); n != 3 {
+		t.Errorf("got %d task columns, want the 3 the chain names", n)
+	}
+	for _, want := range []string{
+		`data-pane="0:t:2"`, `data-pane="1:t:1"`, `data-pane="2:t:2"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("a revisiting chain is missing %s", want)
+		}
+	}
+	// Four rungs: the root plus one per column, each linking to its prefix.
+	for _, want := range []string{
+		`href="` + h.base + `/tasks/1"`,
+		`href="` + h.base + `/tasks/1/w/t/2"`,
+		`href="` + h.base + `/tasks/1/w/t/2/t/1"`,
+		`href="` + h.base + `/tasks/1/w/t/2/t/1/t/2"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the rail of a revisiting chain is missing %s", want)
+		}
+	}
+}
+
+// TestColumnWithoutFiles keeps the empty cases quiet rather than rendering an
+// empty section, and keeps the server's own phase records out of the column -
+// they are not attached files a reader opens.
+func TestColumnWithoutFiles(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedWorkspace(t, svc)
+	if _, _, err := svc.StartPhase("3", task.PhaseResearch); err != nil {
+		t.Fatalf("StartPhase() error = %v", err)
+	}
+
+	body := get(t, h, "/tasks/1/w/t/3").Body.String()
+	col := columnBody(t, body, `data-column="t"`)
+	if strings.Contains(col, "Attached files") {
+		t.Error("a column for a task with no files renders the file section")
+	}
+	if strings.Contains(col, "research.phase") {
+		t.Error("a column offers the server's phase record as an attached file")
+	}
+	if !strings.Contains(col, "Phases") {
+		t.Error("the phase history is missing, so the fixture is wrong")
+	}
+}
+
+// TestArchivedColumnIsReadOnly keeps an archived task's column honest: the
+// banner, its files, and none of the derived data the archive does not hold.
+func TestArchivedColumnIsReadOnly(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedWorkspace(t, svc)
+	if err := svc.WriteTaskFile("4", "notes.md", "# archived notes"); err != nil {
+		t.Fatalf("WriteTaskFile() error = %v", err)
+	}
+	if err := svc.ArchiveTask("4"); err != nil {
+		t.Fatalf("ArchiveTask() error = %v", err)
+	}
+
+	body := get(t, h, "/tasks/1/w/t/4").Body.String()
+	col := columnBody(t, body, `data-column="t"`)
+	for _, want := range []string{
+		"Archived", "notes.md",
+		`href="` + h.base + `/tasks/1/w/t/4/f/notes.md"`,
+		`href="` + h.base + `/tasks/1/w/t/4/d/4"`,
+	} {
+		if !strings.Contains(col, want) {
+			t.Errorf("the archived column is missing %q", want)
+		}
+	}
+	if strings.Contains(col, "Subtasks") {
+		t.Error("the archived column shows subtasks the archive does not index")
 	}
 }

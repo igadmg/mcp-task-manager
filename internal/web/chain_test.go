@@ -57,6 +57,18 @@ func TestParseChainValid(t *testing.T) {
 			want: Chain{Root: "42", Columns: []Column{{KindTask, "43"}, {KindFile, "plan.md"}}},
 		},
 		{
+			name: "a description column carries its task id as the ref",
+			path: "/tasks/42/w/d/42",
+			want: Chain{Root: "42", Columns: []Column{{KindDesc, "42"}}},
+		},
+		{
+			name: "a chain may revisit a task: it is a history, not a set",
+			path: "/tasks/42/w/t/43/t/42/t/43",
+			want: Chain{Root: "42", Columns: []Column{
+				{KindTask, "43"}, {KindTask, "42"}, {KindTask, "43"},
+			}},
+		},
+		{
 			name: "text ids",
 			path: "/tasks/web-task-workspace/w/t/workspace-tiler/f/research.md",
 			want: Chain{Root: "web-task-workspace", Columns: []Column{
@@ -334,7 +346,7 @@ func TestEveryKindHasAWholeEntry(t *testing.T) {
 			t.Errorf("kind tag %q needs escaping; tags must be plain path segments", tag)
 		}
 	}
-	for _, want := range []ColumnKind{KindTask, KindFile} {
+	for _, want := range []ColumnKind{KindTask, KindFile, KindDesc} {
 		if _, ok := columnKinds[want]; !ok {
 			t.Errorf("kind %q is not registered", want)
 		}

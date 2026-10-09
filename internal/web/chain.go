@@ -30,6 +30,16 @@ const (
 	// KindFile is a file column: its ref is a file attached to the task
 	// the chain was on when the column was opened.
 	KindFile ColumnKind = "f"
+	// KindDesc is a task's own description in the working area. Its ref is
+	// the task id, which the chain already implies - but a pair without a
+	// ref is not a chain, and spelling the id out makes the URL and the
+	// rail rung say which task's text is open.
+	//
+	// It is a kind rather than a reserved file ref because a reserved ref
+	// would shadow a real file: only "{id}.md" and "*.phase" are reserved
+	// for writes, so a task may legitimately have a file called
+	// "description.md" (internal/task/name.go, internal/task/phase.go).
+	KindDesc ColumnKind = "d"
 )
 
 // maxChainDepth caps the columns in one chain. The cap is about cost, not URL

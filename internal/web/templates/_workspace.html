@@ -46,7 +46,7 @@
 
       {{ range .Columns }}
       <section class="unit {{ .Class }}{{ if .Working }} unit-working{{ end }}" data-column="{{ .Kind }}" data-ref="{{ .Ref }}">
-        <div class="pane" data-pane="{{ .Kind }}:{{ .Ref }}">{{ template "_col.html" . }}</div>
+        <div class="pane" data-pane="{{ .Key }}">{{ template "_col.html" . }}</div>
       </section>
       {{ end }}
     </div>

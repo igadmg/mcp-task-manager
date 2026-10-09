@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"html/template"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/gpayer/mcp-task-manager/internal/project"
@@ -172,7 +173,13 @@ func (h *handler) workspaceView(sess *Session, escapedPath string) (WorkspaceVie
 	}
 	resolved := sess.Project()
 
-	panel, ok := h.detailView(sess, chain.Root)
+	// One memo for the whole render: the panel and every task column read
+	// relation titles through it, so the second BoardSnapshot is taken at
+	// most once however deep the chain is, and not at all when nothing in
+	// it has a relation.
+	titles := relationTitles(h, resolved)
+
+	panel, ok := h.detailViewWith(resolved, chain.Root, titles)
 	if !ok {
 		return WorkspaceView{}, false
 	}
@@ -200,6 +207,8 @@ func (h *handler) workspaceView(sess *Session, escapedPath string) (WorkspaceVie
 			Ref:    chain.Root,
 			Chain:  chain,
 			At:     -1,
+			Titles: titles,
+			Next:   &chain.Columns[0],
 		})
 		if !ok {
 			return WorkspaceView{}, false
@@ -209,6 +218,7 @@ func (h *handler) workspaceView(sess *Session, escapedPath string) (WorkspaceVie
 			Class:    columnKinds[KindTask].Class,
 			Label:    columnKinds[KindTask].Label,
 			Ref:      chain.Root,
+			Key:      "root",
 			Template: columnKinds[KindTask].Template,
 			Href:     chain.TruncateTo(0).Path(),
 			Data:     root,
@@ -223,6 +233,10 @@ func (h *handler) workspaceView(sess *Session, escapedPath string) (WorkspaceVie
 			// URL that names nothing rather than a server error.
 			return WorkspaceView{}, false
 		}
+		var next *Column
+		if i+1 < len(chain.Columns) {
+			next = &chain.Columns[i+1]
+		}
 		data, ok := kind.Resolve(colCtx{
 			Svc:    resolved.Service,
 			Cfg:    resolved.Config,
@@ -231,6 +245,8 @@ func (h *handler) workspaceView(sess *Session, escapedPath string) (WorkspaceVie
 			Ref:    col.Ref,
 			Chain:  chain,
 			At:     i,
+			Titles: titles,
+			Next:   next,
 		})
 		if !ok {
 			return WorkspaceView{}, false
@@ -240,6 +256,7 @@ func (h *handler) workspaceView(sess *Session, escapedPath string) (WorkspaceVie
 			Class:    kind.Class,
 			Label:    kind.Label,
 			Ref:      col.Ref,
+			Key:      paneKey(i, col),
 			Template: kind.Template,
 			Working:  i == len(chain.Columns)-1,
 			Href:     chain.TruncateTo(i + 1).Path(),
@@ -292,6 +309,14 @@ func newRailEntries(chain Chain) []RailEntryView {
 		})
 	}
 	return entries
+}
+
+// paneKey is a column's scroll-memory key. The position leads it because a
+// chain is a history and may name the same task twice: app.js keeps one
+// offset per data-pane string (internal/web/static/app.js), so two columns
+// that shared a key would scroll as one.
+func paneKey(i int, col Column) string {
+	return strconv.Itoa(i) + ":" + string(col.Kind) + ":" + col.Ref
 }
 
 // taskFile serves one attached file as plain text, so the detail view can
@@ -356,6 +381,13 @@ func (h *handler) boardView(sess *Session) BoardView {
 
 func (h *handler) detailView(sess *Session, id string) (DetailView, bool) {
 	resolved := sess.Project()
+	return h.detailViewWith(resolved, id, relationTitles(h, resolved))
+}
+
+// detailViewWith is the panel's view with the title lookup passed in, so a
+// workspace render can share one memo with every column instead of each
+// surface taking its own snapshot.
+func (h *handler) detailViewWith(resolved *project.Resolved, id string, titles func() map[string]string) (DetailView, bool) {
 	detail, err := resolved.Service.Detail(id)
 	if err != nil {
 		return DetailView{}, false
@@ -363,11 +395,28 @@ func (h *handler) detailView(sess *Session, id string) (DetailView, bool) {
 
 	// Relation edges carry ids only; the titles come from the same snapshot
 	// the board reads, and only when there is an edge to label.
-	var titles map[string]string
-	if len(detail.Relations) > 0 {
-		titles = h.titles(resolved)
+	var labels map[string]string
+	if len(detail.Relations) > 0 && titles != nil {
+		labels = titles()
 	}
-	return newDetailView(detail, resolved.Config, titles, h.Now()), true
+	return newDetailView(detail, resolved.Config, labels, h.Now()), true
+}
+
+// relationTitles returns a lookup that takes its BoardSnapshot at most once,
+// on the first caller that has an edge to label. A nil map is cached too: a
+// failed snapshot is logged once and every later caller renders bare ids
+// rather than queueing another scan.
+func relationTitles(h *handler, resolved *project.Resolved) func() map[string]string {
+	var (
+		titles map[string]string
+		done   bool
+	)
+	return func() map[string]string {
+		if !done {
+			titles, done = h.titles(resolved), true
+		}
+		return titles
+	}
 }
 
 func (h *handler) titles(resolved *project.Resolved) map[string]string {

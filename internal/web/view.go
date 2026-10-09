@@ -167,8 +167,11 @@ type CardView struct {
 	// for a detail view's subtask rows, so a subtask opens beside its
 	// parent instead of leaving the workspace; board cards leave them
 	// empty and _card.html builds its own panel link.
-	Href         string
-	HXGet        string
+	Href  string
+	HXGet string
+	// Selected marks a detail view's subtask row whose task the next
+	// column shows. Board cards never set it.
+	Selected     bool
 	Priority     string
 	Type         string
 	Status       string
@@ -263,11 +266,16 @@ func cardFields(f task.Fields) (shown []FieldView, more int, rest string) {
 	return all[:maxCardFields], len(all) - maxCardFields, strings.Join(names, ", ")
 }
 
-// BlockerView is one unresolved blocker.
+// BlockerView is one unresolved blocker. Href/HXGet open it as a task column
+// and Selected marks it when that column is the next one; chainLinks fills
+// all three.
 type BlockerView struct {
-	ID     string
-	Status string
-	Title  string
+	ID       string
+	Status   string
+	Title    string
+	Href     string
+	HXGet    string
+	Selected bool
 }
 
 // DangerItem is one in-progress task, shown in the danger-zone banner.
@@ -308,6 +316,18 @@ type DetailView struct {
 	StartCommitShort  string
 	SquashCommit      string
 	SquashCommitShort string
+
+	// ParentHref/ParentHXGet open the parent as a task column; DescHref/
+	// DescHXGet open this task's own description in the working area. The
+	// Selected flags mark whichever of them the next column shows.
+	// chainLinks is the only writer of all six, as it is of every other
+	// chain URL on this view.
+	ParentHref     string
+	ParentHXGet    string
+	ParentSelected bool
+	DescHref       string
+	DescHXGet      string
+	DescSelected   bool
 }
 
 // WorkspaceView is one workspace state: the rail, then the strip. The board
@@ -349,10 +369,15 @@ type RailEntryView struct {
 // registry and is declared in input.css, Template draws the body, and Data is
 // whatever that kind resolved.
 type ColumnUnitView struct {
-	Kind     string
-	Class    string
-	Label    string
-	Ref      string
+	Kind  string
+	Class string
+	Label string
+	Ref   string
+	// Key is this column's scroll-memory key, "<index>:<kind>:<ref>".
+	// app.js stores one offset per data-pane string, so the position has
+	// to be in it: a chain is a history and may name the same task twice,
+	// and two columns that share a key scroll as one.
+	Key      string
 	Template string
 	Working  bool
 	Href     string
@@ -371,6 +396,8 @@ type FileLinkView struct {
 	// there is the chain's entry point.
 	Href  string
 	HXGet string
+	// Selected marks the file the next column shows.
+	Selected bool
 	// RawHref serves the bytes as text/plain, which is what the file
 	// column's "raw" link and anything outside the workspace uses.
 	RawHref string
@@ -402,6 +429,11 @@ type RelationView struct {
 	Direction  string // "outgoing" | "incoming"
 	OtherID    string
 	OtherTitle string
+	// Href/HXGet open the other task as a task column, and Selected marks
+	// it when that column is the next one. chainLinks fills all three.
+	Href     string
+	HXGet    string
+	Selected bool
 }
 
 // columns fixes the board's column order and headings.
@@ -722,24 +754,74 @@ func newBlockerViews(blockers []task.BlockingInfo) []BlockerView {
 	return out
 }
 
-// newDetailView maps one task's detail. titles resolves relation targets to
-// their titles; a missing entry simply renders as the bare id.
-// newFileLinkViews pairs every attached file with its URL. Both segments are
-// percent-encoded here, so the template emits a finished string and a name
-// holding '#', '?' or '%' survives the trip to the browser.
+// newFileLinkViews pairs every attached file with the URL that serves its
+// bytes. The chain URLs are not set here: chainLinks owns every one of them.
 func newFileLinkViews(id string, names []string) []FileLinkView {
-	base := Chain{Root: id}
 	links := make([]FileLinkView, 0, len(names))
 	for _, name := range names {
-		open := base.Append(KindFile, name)
 		links = append(links, FileLinkView{
 			Name:    name,
-			Href:    open.Path(),
-			HXGet:   open.Fragment(),
 			RawHref: taskFileHref(id, name),
 		})
 	}
 	return links
+}
+
+// chainLinks is the one place a detail view's chain URLs come from. Every
+// link family it can offer - the description, the attached files, the parent,
+// the subtasks, the blockers and the relation targets - is rebased onto base
+// and, when next names one of them, marked as the column to the right.
+//
+// There is exactly one of these on purpose. _detail.html is the side panel,
+// the root column and every task column at once, so a family that is rebased
+// in one caller and forgotten in another renders a link that looks right and
+// 404s when clicked. One function per view, two callers: newDetailView with
+// the depth-0 chain (the panel) and resolveTaskColumn with the column's own
+// place.
+//
+// Percent-encoding happens inside Chain.Path/Fragment, so a template emits a
+// finished string and a name holding '#', '?' or '%' survives the trip.
+func (v *DetailView) chainLinks(base Chain, next *Column) {
+	// A t column marks every row naming that task - a task can be both a
+	// subtask and a blocker - because the column to the right really is
+	// that one task.
+	isTask := func(id string) bool {
+		return next != nil && next.Kind == KindTask && next.Ref == id
+	}
+
+	desc := base.Append(KindDesc, v.Card.ID)
+	v.DescHref, v.DescHXGet = desc.Path(), desc.Fragment()
+	v.DescSelected = next != nil && next.Kind == KindDesc && next.Ref == v.Card.ID
+
+	if v.Card.ParentID != "" {
+		parent := base.Append(KindTask, v.Card.ParentID)
+		v.ParentHref, v.ParentHXGet = parent.Path(), parent.Fragment()
+		v.ParentSelected = isTask(v.Card.ParentID)
+	}
+
+	for i, f := range v.Files {
+		open := base.Append(KindFile, f.Name)
+		v.Files[i].Href, v.Files[i].HXGet = open.Path(), open.Fragment()
+		v.Files[i].Selected = next != nil && next.Kind == KindFile && next.Ref == f.Name
+	}
+
+	for i, sub := range v.Card.Subtasks {
+		open := base.Append(KindTask, sub.ID)
+		v.Card.Subtasks[i].Href, v.Card.Subtasks[i].HXGet = open.Path(), open.Fragment()
+		v.Card.Subtasks[i].Selected = isTask(sub.ID)
+	}
+
+	for i, b := range v.Card.Blockers {
+		open := base.Append(KindTask, b.ID)
+		v.Card.Blockers[i].Href, v.Card.Blockers[i].HXGet = open.Path(), open.Fragment()
+		v.Card.Blockers[i].Selected = isTask(b.ID)
+	}
+
+	for i, r := range v.Relations {
+		open := base.Append(KindTask, r.OtherID)
+		v.Relations[i].Href, v.Relations[i].HXGet = open.Path(), open.Fragment()
+		v.Relations[i].Selected = isTask(r.OtherID)
+	}
 }
 
 // taskFileHref is the one place the /tasks/{id}/files/{name} URL is spelled.
@@ -747,6 +829,8 @@ func taskFileHref(id, name string) string {
 	return "/tasks/" + url.PathEscape(id) + "/files/" + url.PathEscape(name)
 }
 
+// newDetailView maps one task's detail. titles resolves relation targets to
+// their titles; a missing entry simply renders as the bare id.
 func newDetailView(d *task.TaskDetail, cfg *config.Config, titles map[string]string, now time.Time) DetailView {
 	t := d.Task
 	card := CardView{
@@ -775,11 +859,8 @@ func newDetailView(d *task.TaskDetail, cfg *config.Config, titles map[string]str
 		if sub.Status == task.StatusDone {
 			card.SubtaskDone++
 		}
-		open := Chain{Root: t.ID}.Append(KindTask, sub.ID)
 		card.Subtasks = append(card.Subtasks, CardView{
 			ID:         sub.ID,
-			Href:       open.Path(),
-			HXGet:      open.Fragment(),
 			Title:      sub.Title,
 			Priority:   string(sub.Priority),
 			Type:       sub.Type,
@@ -836,6 +917,9 @@ func newDetailView(d *task.TaskDetail, cfg *config.Config, titles map[string]str
 		return v.Relations[i].OtherID < v.Relations[j].OtherID
 	})
 
+	// The panel is the depth-0 workspace, so its links are the chain's
+	// entry point. A column rebases them onto its own place afterwards.
+	v.chainLinks(Chain{Root: t.ID}, nil)
 	return v
 }
 

@@ -160,13 +160,23 @@ func TestAppCSSDefinesWorkspaceClasses(t *testing.T) {
 		"@media (prefers-reduced-motion:reduce)",
 	}
 	// Every registered kind must have its width class compiled, or a column
-	// of that kind would lay out with no width at all.
+	// of that kind would lay out with no width at all. Two kinds of the same
+	// width are merged into one selector list by Tailwind (.kind-file and
+	// .kind-desc are both 44rem), so the class may be followed by a comma
+	// rather than by the brace.
+	defines := func(class string) bool {
+		return strings.Contains(css, "."+class+"{") ||
+			strings.Contains(css, "."+class+",")
+	}
 	for tag, k := range columnKinds {
-		if !strings.Contains(css, "."+k.Class+"{") {
+		if !defines(k.Class) {
 			t.Errorf("app.css lacks a width rule for kind %q (.%s)", tag, k.Class)
 		}
 	}
-	want = append(want, ".kind-board{")
+	if !defines("kind-board") {
+		t.Error("app.css lacks a width rule for the board unit (.kind-board)")
+	}
+	want = append(want, ".col-selected{")
 
 	for _, w := range want {
 		if !strings.Contains(css, w) {

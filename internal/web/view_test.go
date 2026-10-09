@@ -873,3 +873,134 @@ func TestTodoSubtaskNestsUnderInProgressParent(t *testing.T) {
 		t.Errorf("in progress Count = %d, want 1", inProgress.Count)
 	}
 }
+
+// detailWithEverything is a task that has one of every link family, so a test
+// of chainLinks covers all six at once.
+func detailWithEverything() *task.TaskDetail {
+	return &task.TaskDetail{
+		Task: &task.Task{
+			ID:          "9",
+			ParentID:    "1",
+			Title:       "nine",
+			Description: "the text",
+			Status:      task.StatusTodo,
+			Priority:    task.PriorityLow,
+			Type:        "feature",
+		},
+		Files:    []string{"research.md"},
+		Subtasks: []*task.Task{tk("10", "9", task.StatusTodo, task.PriorityLow, fixedNow)},
+		Blockers: []task.BlockingInfo{{TaskID: "3", Title: "blocker", Status: task.StatusTodo}},
+		Relations: []task.RelationEdge{
+			{Type: "relates_to", Source: "9", Target: "7"},
+		},
+	}
+}
+
+// TestChainLinksRebasesEveryFamily is the test that makes the one-rebase-point
+// rule worth having: a family that chainLinks forgets renders a link that
+// looks right and 404s, and _detail.html is three surfaces at once.
+func TestChainLinksRebasesEveryFamily(t *testing.T) {
+	// newDetailView links onto the depth-0 chain - the side panel.
+	v := newDetailView(detailWithEverything(), nil, nil, fixedNow)
+	for _, c := range []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"description", v.DescHref, "/tasks/9/w/d/9"},
+		{"parent", v.ParentHref, "/tasks/9/w/t/1"},
+		{"file", v.Files[0].Href, "/tasks/9/w/f/research.md"},
+		{"subtask", v.Card.Subtasks[0].Href, "/tasks/9/w/t/10"},
+		{"blocker", v.Card.Blockers[0].Href, "/tasks/9/w/t/3"},
+		{"relation", v.Relations[0].Href, "/tasks/9/w/t/7"},
+	} {
+		if c.got != c.want {
+			t.Errorf("panel %s Href = %q, want %q", c.name, c.got, c.want)
+		}
+	}
+	if v.DescHXGet != "/strip/tasks/9/w/d/9" {
+		t.Errorf("DescHXGet = %q", v.DescHXGet)
+	}
+	if v.ParentHXGet != "/strip/tasks/9/w/t/1" {
+		t.Errorf("ParentHXGet = %q", v.ParentHXGet)
+	}
+
+	// A column sits further along, so the same view rebases onto its place
+	// instead of re-rooting the chain on the task.
+	base := Chain{Root: "1", Columns: []Column{{KindTask, "9"}}}
+	v = newDetailView(detailWithEverything(), nil, nil, fixedNow)
+	v.chainLinks(base, nil)
+	for _, c := range []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"description", v.DescHref, "/tasks/1/w/t/9/d/9"},
+		{"parent", v.ParentHref, "/tasks/1/w/t/9/t/1"},
+		{"file", v.Files[0].Href, "/tasks/1/w/t/9/f/research.md"},
+		{"subtask", v.Card.Subtasks[0].Href, "/tasks/1/w/t/9/t/10"},
+		{"blocker", v.Card.Blockers[0].Href, "/tasks/1/w/t/9/t/3"},
+		{"relation", v.Relations[0].Href, "/tasks/1/w/t/9/t/7"},
+	} {
+		if c.got != c.want {
+			t.Errorf("column %s Href = %q, want %q", c.name, c.got, c.want)
+		}
+	}
+}
+
+// TestChainLinksMarksTheNextColumn pins the marking rule, including that a
+// task named by the next column is marked in every row that names it.
+func TestChainLinksMarksTheNextColumn(t *testing.T) {
+	base := Chain{Root: "9"}
+
+	v := newDetailView(detailWithEverything(), nil, nil, fixedNow)
+	if v.DescSelected || v.ParentSelected || v.Files[0].Selected ||
+		v.Card.Subtasks[0].Selected || v.Card.Blockers[0].Selected || v.Relations[0].Selected {
+		t.Error("nothing may be marked at the end of the chain")
+	}
+
+	v = newDetailView(detailWithEverything(), nil, nil, fixedNow)
+	v.chainLinks(base, &Column{KindDesc, "9"})
+	if !v.DescSelected {
+		t.Error("a d column does not mark the description")
+	}
+	if v.Files[0].Selected {
+		t.Error("a d column marked a file")
+	}
+
+	v = newDetailView(detailWithEverything(), nil, nil, fixedNow)
+	v.chainLinks(base, &Column{KindFile, "research.md"})
+	if !v.Files[0].Selected {
+		t.Error("an f column does not mark its file")
+	}
+
+	v = newDetailView(detailWithEverything(), nil, nil, fixedNow)
+	v.chainLinks(base, &Column{KindTask, "3"})
+	if !v.Card.Blockers[0].Selected {
+		t.Error("a t column does not mark the blocker it shows")
+	}
+	if v.Card.Subtasks[0].Selected {
+		t.Error("a t column marked a row naming another task")
+	}
+
+	// A task can be both a subtask and a blocker; the column to the right
+	// is that one task, so both rows are marked.
+	d := detailWithEverything()
+	d.Blockers = []task.BlockingInfo{{TaskID: "10", Title: "also the subtask", Status: task.StatusTodo}}
+	v = newDetailView(d, nil, nil, fixedNow)
+	v.chainLinks(base, &Column{KindTask, "10"})
+	if !v.Card.Subtasks[0].Selected || !v.Card.Blockers[0].Selected {
+		t.Error("a task that is both a subtask and a blocker is not marked in both rows")
+	}
+}
+
+// TestChainLinksWithoutAParent leaves the parent URL empty rather than
+// building one for the empty id, which would render a link to /tasks//....
+func TestChainLinksWithoutAParent(t *testing.T) {
+	d := detailWithEverything()
+	d.Task.ParentID = ""
+	v := newDetailView(d, nil, nil, fixedNow)
+	if v.ParentHref != "" || v.ParentHXGet != "" {
+		t.Errorf("a top-level task has a parent link: %q / %q", v.ParentHref, v.ParentHXGet)
+	}
+}
