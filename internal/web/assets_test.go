@@ -118,6 +118,9 @@ func TestAppJSStatsToggles(t *testing.T) {
 //   - the strip-slide keyframes. The slide must be an animation, not a
 //     transition: htmx replaces the whole #strip, and a freshly inserted
 //     element has no previous value to transition from.
+//     And it must not ride .strip-shifted (or .unit-working): every poll
+//     inserts a fresh #strip, so it would replay every five seconds. It rides
+//     .strip-enter / .unit-enter, which app.js adds only on a real change.
 //   - the viewport-height workspace. Every column is one screen tall and
 //     scrolls inside its own .pane, so the page itself never scrolls.
 //   - the prefers-reduced-motion block. It is the only motion the workspace
@@ -137,7 +140,8 @@ func TestAppCSSDefinesWorkspaceClasses(t *testing.T) {
 		".strip-shifted{",
 		"@keyframes strip-slide",
 		".unit{",
-		".unit-working{",
+		".strip-enter{",
+		".unit-enter{",
 		".pane{",
 		// The board is not its own scroll container: its pane clips and each
 		// status column scrolls inside .column-body, so a long To do queue
@@ -243,13 +247,11 @@ func TestAppJSPreservesPaneScroll(t *testing.T) {
 }
 
 // TestAppJSResetsPanelScroll pins the other half of the panel's scroll model:
-// #panel is a scroll container too, and an innerHTML swap keeps its
-// scrollTop, so a panel whose content is a DIFFERENT task has to be put back
-// to its top explicitly. That case is the swap target being #panel - a card
-// click - which is why the rule is keyed on the target rather than on leaving
-// the panel out of the map, and why the reset clears the stored offset as
-// well: afterSwap fires before afterSettle, so an offset left behind would be
-// restored one event later.
+// a panel whose content is a DIFFERENT task opens at its top. A card click
+// swaps the whole strip, so the swap target cannot tell that case from a poll
+// of the same task; the panel's data-task does. The reset clears the stored
+// offset as well: afterSwap fires before afterSettle, so an offset left
+// behind would be restored one event later.
 func TestAppJSResetsPanelScroll(t *testing.T) {
 	data, err := staticFS.ReadFile("static/app.js")
 	if err != nil {
@@ -257,11 +259,50 @@ func TestAppJSResetsPanelScroll(t *testing.T) {
 	}
 	js := string(data)
 	for _, w := range []string{
-		`"htmx:afterSwap"`, `"panel"`, "scrollTop = 0",
-		`offsets[target.getAttribute("data-pane")] = 0`,
+		`"htmx:afterSwap"`, `getElementById("panel")`, `"data-task"`, "scrollTop = 0",
+		`offsets[panel.getAttribute("data-pane")] = 0`,
 	} {
 		if !strings.Contains(js, w) {
 			t.Errorf("app.js lacks %s", w)
+		}
+	}
+}
+
+// TestAppJSAnimatesOnlyOnChange pins the fix for a strip that slid away again
+// on every poll and every file click: app.js compares the strip it replaces
+// with the new one and adds the animated classes only for a real change.
+func TestAppJSAnimatesOnlyOnChange(t *testing.T) {
+	data, err := staticFS.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatalf("read embedded app.js: %v", err)
+	}
+	js := string(data)
+	for _, w := range []string{
+		`target.id !== "strip"`, `".strip-shifted"`, `!was.shifted`,
+		`classList.add("strip-enter")`, `".unit-working"`, `classList.add("unit-enter")`,
+	} {
+		if !strings.Contains(js, w) {
+			t.Errorf("app.js lacks %s", w)
+		}
+	}
+}
+
+// TestNoAnimationInMarkup: the server says the state, never the motion. An
+// enter class in the markup would replay on every poll of the strip.
+func TestNoAnimationInMarkup(t *testing.T) {
+	entries, err := templateFS.ReadDir("templates")
+	if err != nil {
+		t.Fatalf("read templates: %v", err)
+	}
+	for _, e := range entries {
+		data, err := templateFS.ReadFile("templates/" + e.Name())
+		if err != nil {
+			t.Fatalf("read %s: %v", e.Name(), err)
+		}
+		for _, bad := range []string{"strip-enter", "unit-enter"} {
+			if strings.Contains(string(data), bad) {
+				t.Errorf("%s carries %s", e.Name(), bad)
+			}
 		}
 	}
 }

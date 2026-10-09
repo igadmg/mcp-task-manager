@@ -208,6 +208,13 @@
    * transition from, so a transition would never run. The transition below
    * still covers a change in place.
    *
+   * The animation is NOT on .strip-shifted itself. Every poll and every step
+   * through the chain inserts a fresh #strip, and a keyframe animation
+   * restarts on a fresh element, so the board would slide away again every
+   * five seconds and on every file click. app.js adds .strip-enter only to a
+   * swap that turns an unshifted strip into a shifted one, and .unit-enter
+   * only to a working column the previous strip did not hold.
+   *
    * overflow-x: clip, not hidden: hidden would make the stage a scroll
    * container and drag the vertical axis away from visible. clip also means
    * there is nothing to pan, so "the strip cannot be scrolled sideways" is
@@ -232,8 +239,8 @@
   }
   .strip-shifted {
     --shift: calc(var(--board-w) + var(--strip-gap));
-    animation: strip-slide 260ms ease-out;
   }
+  .strip-enter { animation: strip-slide 260ms ease-out; }
   @keyframes strip-slide {
     from { transform: translateX(0); }
     to   { transform: translateX(calc(-1 * var(--shift))); }
@@ -262,7 +269,7 @@
     from { opacity: 0; transform: translateX(1.5rem); }
     to   { opacity: 1; transform: translateX(0); }
   }
-  .unit-working { animation: unit-in 220ms ease-out; }
+  .unit-enter { animation: unit-in 220ms ease-out; }
 
   .rail { @apply flex w-28 shrink-0 flex-col gap-1 self-start; }
   .rail-step {
@@ -433,7 +440,7 @@
   /* The first reduced-motion rule in this project: the slide and the column
    * entrance are the only motion the workspace adds, and both go. */
   @media (prefers-reduced-motion: reduce) {
-    .strip, .strip-shifted, .unit-working { animation: none; transition: none; }
+    .strip, .strip-enter, .unit-enter { animation: none; transition: none; }
   }
 
   .copy-btn {

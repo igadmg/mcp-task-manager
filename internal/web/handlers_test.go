@@ -612,7 +612,7 @@ func TestBoardRendersPhaseLanes(t *testing.T) {
 
 	planning := laneSection(t, body, "planning")
 	for _, want := range []string{
-		"Fix the index", "chip-live", `hx-get="` + h.base + `/tasks/3/panel"`, ">1</span>",
+		"Fix the index", "chip-live", `hx-get="` + h.base + `/strip/tasks/3"`, ">1</span>",
 		// A card with no in-progress subtasks occupies its own lane only.
 		`class="lane-card lane-from-planning lane-to-planning"`,
 		`class="lane-head lane-from-planning lane-to-planning `,
@@ -630,7 +630,7 @@ func TestBoardRendersPhaseLanes(t *testing.T) {
 			t.Errorf("%s lane does not count 0", phase)
 		}
 	}
-	if n := strings.Count(body, `hx-get="`+h.base+`/tasks/3/panel"`); n != 1 {
+	if n := strings.Count(body, `hx-get="`+h.base+`/strip/tasks/3"`); n != 1 {
 		t.Errorf("task 3 renders %d times, want once", n)
 	}
 }
@@ -783,7 +783,7 @@ func TestBoardDoneColumnRendersStats(t *testing.T) {
 			t.Errorf("Done column lacks %s", want)
 		}
 	}
-	if strings.Contains(body, "Old chore") || strings.Contains(body, `hx-get="`+h.base+`/tasks/4/panel"`) {
+	if strings.Contains(body, "Old chore") || strings.Contains(body, `hx-get="`+h.base+`/strip/tasks/4"`) {
 		t.Error("the Done column renders task 4 as a card")
 	}
 	if strings.Contains(body, "style=") {
@@ -2400,5 +2400,42 @@ func ageTask(t *testing.T, dir, id string, ago time.Duration) {
 	}
 	if err := os.WriteFile(path, out, 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
+	}
+}
+
+// TestCardClickMovesThePoll pins the fix for a selection the timer kept
+// taking back: the page opened at /tasks/3 polls /strip/tasks/3, and a card
+// click that swapped only #panel left that poll in place, so five seconds
+// later task 3 was back in the panel. A card now swaps the whole strip from
+// /strip/tasks/{id}, and that response polls the task it shows.
+func TestCardClickMovesThePoll(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedBoard(t, svc)
+
+	page := get(t, h, "/tasks/3").Body.String()
+	link := `hx-get="` + h.base + `/strip/tasks/5"`
+	i := strings.Index(page, link)
+	if i < 0 {
+		t.Fatalf("card 5 does not load %s", link)
+	}
+	tag := page[i:]
+	tag = tag[:strings.Index(tag, ">")]
+	for _, want := range []string{`hx-target="#strip"`, `hx-swap="outerHTML"`, `hx-push-url="` + h.base + `/tasks/5"`} {
+		if !strings.Contains(tag, want) {
+			t.Errorf("card 5's link lacks %s: %s", want, tag)
+		}
+	}
+	if strings.Contains(page, `hx-target="#panel"`) {
+		t.Error("a link still swaps #panel alone; the strip's poll would put the old task back")
+	}
+
+	frag := get(t, h, "/strip/tasks/5").Body.String()
+	for _, want := range []string{
+		`hx-get="` + h.base + `/strip/tasks/5" hx-trigger="every`,
+		`data-pane="panel" data-task="5"`,
+	} {
+		if !strings.Contains(frag, want) {
+			t.Errorf("/strip/tasks/5 lacks %s", want)
+		}
 	}
 }

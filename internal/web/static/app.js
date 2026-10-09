@@ -173,9 +173,9 @@
 // The panel is in the map too, which it was not while only #board polled. An
 // open workspace polls the whole strip, so the panel is now replaced every
 // interval with the SAME task's content and has to keep its place. What still
-// belongs at the top is a panel whose content is a DIFFERENT task, and that is
-// exactly a card click: an htmx swap whose target is #panel. So the rule is
-// keyed on the swap target rather than on leaving the panel out, and the reset
+// belongs at the top is a panel whose content is a DIFFERENT task. A card click
+// swaps the whole strip now (so the poll follows the selection), so the swap
+// target no longer says which case it is: the panel's data-task does. The reset
 // clears the stored offset as well - afterSwap fires before afterSettle, so a
 // reset that left the old offset behind would be undone one event later.
 //
@@ -185,6 +185,13 @@
   "use strict";
 
   var offsets = {};
+  // The task the panel showed before the swap in flight.
+  var panelTask = null;
+
+  function currentPanelTask() {
+    var panel = document.getElementById("panel");
+    return panel ? panel.getAttribute("data-task") : null;
+  }
 
   // Keyed on the attribute alone, so any scroll container that carries a
   // data-pane joins in: a .pane of the strip, the panel, or a board column's
@@ -194,6 +201,7 @@
   }
 
   function remember() {
+    panelTask = currentPanelTask();
     panes().forEach(function (pane) {
       offsets[pane.getAttribute("data-pane")] = pane.scrollTop;
     });
@@ -221,20 +229,83 @@
     true
   );
 
-  // A fresh panel starts at its top: an innerHTML swap keeps the container's
-  // own scrollTop, so without this the next card's description opens wherever
-  // the previous one was scrolled to. The stored offset goes with it, or the
-  // restore on the next afterSettle would put it straight back.
-  document.addEventListener("htmx:afterSwap", function (event) {
-    var target = event.detail && event.detail.target;
-    if (target && target.id === "panel") {
-      target.scrollTop = 0;
-      offsets[target.getAttribute("data-pane")] = 0;
+  // A panel holding another task starts at its top: without this the restore
+  // below would open the next card's description wherever the previous one
+  // was scrolled to. The stored offset goes with it, or the restore on the
+  // next afterSettle would put it straight back.
+  document.addEventListener("htmx:afterSwap", function () {
+    var panel = document.getElementById("panel");
+    if (panel && panel.getAttribute("data-task") !== panelTask) {
+      panel.scrollTop = 0;
+      offsets[panel.getAttribute("data-pane")] = 0;
+      panelTask = panel.getAttribute("data-task");
     }
   });
 
   document.addEventListener("htmx:beforeSwap", remember);
   ["htmx:afterSwap", "htmx:afterSettle", "htmx:load"].forEach(function (name) {
     document.addEventListener(name, restore);
+  });
+})();
+
+// Strip motion only on a real change.
+//
+// The slide of the board off the left and the fade-in of the newest column
+// are keyframe animations, and a keyframe animation restarts whenever its
+// element is inserted afresh. Every poll and every step through the chain
+// replaces the whole #strip, so if the server put the animated classes in the
+// markup the board would slide away again every five seconds and on every file
+// click. Instead the markup only says the state (.strip-shifted, .unit-working)
+// and this compares it with the strip it replaces: .strip-enter goes on only
+// when the board was on screen before the swap, .unit-enter only on a working
+// column whose pane key the previous strip did not hold. A whole page load and
+// a history restore animate nothing. No request, no htmx attribute.
+(function () {
+  "use strict";
+
+  // What the strip held before the swap in flight; null when the swap does
+  // not replace #strip.
+  var before = null;
+
+  function paneKeys(strip) {
+    var keys = {};
+    strip.querySelectorAll("[data-pane]").forEach(function (pane) {
+      keys[pane.getAttribute("data-pane")] = true;
+    });
+    return keys;
+  }
+
+  document.addEventListener("htmx:beforeSwap", function (event) {
+    var target = event.detail && event.detail.target;
+    if (!target || target.id !== "strip") {
+      before = null;
+      return;
+    }
+    before = {
+      shifted: !!target.querySelector(".strip-shifted"),
+      keys: paneKeys(target)
+    };
+  });
+
+  document.addEventListener("htmx:afterSwap", function () {
+    if (!before) {
+      return;
+    }
+    var was = before;
+    before = null;
+    var strip = document.getElementById("strip");
+    if (!strip) {
+      return;
+    }
+    var shifted = strip.querySelector(".strip-shifted");
+    if (shifted && !was.shifted) {
+      shifted.classList.add("strip-enter");
+    }
+    strip.querySelectorAll(".unit-working").forEach(function (unit) {
+      var pane = unit.querySelector("[data-pane]");
+      if (pane && !was.keys[pane.getAttribute("data-pane")]) {
+        unit.classList.add("unit-enter");
+      }
+    });
   });
 })();

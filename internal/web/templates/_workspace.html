@@ -40,7 +40,7 @@
           <div class="pane pane-board min-w-0" data-pane="board">
             {{ template "_board.html" .Board }}
           </div>
-          <aside id="panel" class="pane" data-pane="panel">
+          <aside id="panel" class="pane" data-pane="panel"{{ with .Board.Panel }} data-task="{{ .Card.ID }}"{{ end }}>
             {{ if .Board.Panel }}{{ template "_detail.html" .Board.Panel }}{{ else }}
             <div class="rounded-xl border border-dashed border-white/10 p-6 text-sm text-neutral-500">
               Pick a card to see its description, relations and attached files.

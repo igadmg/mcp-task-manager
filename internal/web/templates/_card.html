@@ -1,8 +1,12 @@
+{{/* A card click swaps the whole #strip, not just #panel: the strip polls
+     the URL it was rendered at, so a panel swapped in underneath it would be
+     put back to the old task by the next poll. Rendering /strip/tasks/{id}
+     moves the poll along with the selection. */}}
 <article class="card {{ if .InProgress }}card-live{{ end }} {{ if .Blocked }}card-blocked{{ end }}">
   <a href="{{ nav "/tasks/" .ID }}"
-     hx-get="{{ nav "/tasks/" .ID "/panel" }}"
-     hx-target="#panel"
-     hx-swap="innerHTML"
+     hx-get="{{ nav "/strip/tasks/" .ID }}"
+     hx-target="#strip"
+     hx-swap="outerHTML"
      hx-push-url="{{ nav "/tasks/" .ID }}"
      class="block">
     <div class="flex items-baseline gap-2">
@@ -40,9 +44,9 @@
   <div class="mt-2 space-y-1 border-l border-white/10 pl-2">
     {{ range .Subtasks }}
     <a href="{{ nav "/tasks/" .ID }}"
-       hx-get="{{ nav "/tasks/" .ID "/panel" }}"
-       hx-target="#panel"
-       hx-swap="innerHTML"
+       hx-get="{{ nav "/strip/tasks/" .ID }}"
+       hx-target="#strip"
+       hx-swap="outerHTML"
        hx-push-url="{{ nav "/tasks/" .ID }}"
        class="sub-lane sub-lane-{{ .LaneOffset }} flex items-center gap-2 rounded px-1 py-1 hover:bg-white/5">
       <span class="dot dot-{{ .Status }} shrink-0" title="{{ .Status }}"></span>
