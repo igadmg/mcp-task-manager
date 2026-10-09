@@ -155,6 +155,13 @@ func TestAppCSSDefinesWorkspaceClasses(t *testing.T) {
 		".col-section{",
 		".col-link{",
 		".col-file-body{",
+		// The rendered-artifact scope. Element selectors inside .notes, so
+		// a missing rebuild shows a task's design as unstyled HTML.
+		".notes{",
+		".notes h1{",
+		".notes h3,",
+		".notes pre{",
+		".notes table{",
 		// Tailwind rewrites "width < 64rem" as a negated min-width.
 		"@media not all and (min-width:64rem)",
 		"@media (prefers-reduced-motion:reduce)",

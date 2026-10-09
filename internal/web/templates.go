@@ -21,10 +21,17 @@ var templateFS embed.FS
 // own clones (see sessiontpl.go). Parsing needs the name to exist, which is
 // the other reason it is in this map.
 //
-// Every other field is already a plain string and is rendered with {{ . }},
-// so html/template escapes all task text. There is deliberately no safeHTML
-// helper and no template.HTML anywhere in this package - task titles and
-// descriptions are user-controlled.
+// Every other field is a plain string and is rendered with {{ . }}, so
+// html/template escapes all task text. There is deliberately no safeHTML
+// helper: a FuncMap entry would be reachable from every template in every
+// set, so any fragment could trust any string.
+//
+// There is exactly one template.HTML in this package, bodyView.HTML, written
+// only by newBodyView (body.go) and printed only by _body.html: a task's
+// research, design and plan are documents, and the workspace exists to read
+// them as documents. What it wraps is internal/markdown's output, which
+// escapes every source byte and emits a fixed tag set with no script, style,
+// event handler or id. TestOneTrustPoint fails if a second one appears.
 // The sets below are prototypes and are never executed: html/template
 // refuses to Clone a set that has run, and every set here is cloned - once
 // per session, and once for the root pages. Render through rootTpl or a

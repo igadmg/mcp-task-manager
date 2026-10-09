@@ -254,23 +254,54 @@ func TestNoExternalAssetReferences(t *testing.T) {
 	h, svc, _ := newTestHandler(t)
 	seedWorkspace(t, svc)
 
-	for _, path := range []string{"/", "/tasks/1", "/tasks/1/w/f/research.md", "/strip/tasks/1"} {
+	// A file column now renders its artifact, so an ordinary link inside a
+	// task note becomes a real anchor. The guarantee is that the PAGE
+	// fetches nothing, so the sweep is every src= (an <img> really does
+	// fetch, content or not) plus href= on a <link>. An anchor's href is
+	// navigation, not a fetch, and a note that cites a URL should link it.
+	if err := svc.WriteTaskFile("1", "links.md", "see [the issue](https://example.com/1)"); err != nil {
+		t.Fatalf("WriteTaskFile() error = %v", err)
+	}
+	for _, path := range []string{
+		"/", "/tasks/1", "/tasks/1/w/f/research.md", "/tasks/1/w/f/links.md",
+		"/tasks/1/w/d/1", "/strip/tasks/1",
+	} {
 		body := get(t, h, path).Body.String()
-		for _, attr := range []string{`src="`, `href="`} {
-			rest := body
-			for {
-				i := strings.Index(rest, attr)
-				if i < 0 {
-					break
-				}
-				rest = rest[i+len(attr):]
-				value := rest[:strings.Index(rest, `"`)]
-				if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
-					t.Errorf("%s references the network: %s%s", path, attr, value)
-				}
-			}
+		for _, ref := range externalRefs(body) {
+			t.Errorf("%s references the network: %s", path, ref)
 		}
 	}
+}
+
+// externalRefs lists the attribute values on the page that would make the
+// browser fetch from the network: any src=, and href= on a <link> element.
+func externalRefs(body string) []string {
+	var out []string
+	for _, attr := range []string{`src="`, `href="`} {
+		rest := body
+		for {
+			i := strings.Index(rest, attr)
+			if i < 0 {
+				break
+			}
+			before := rest[:i]
+			rest = rest[i+len(attr):]
+			value := rest[:strings.Index(rest, `"`)]
+			if !strings.HasPrefix(value, "http://") && !strings.HasPrefix(value, "https://") {
+				continue
+			}
+			// An href only fetches on a <link>: find the tag this
+			// attribute belongs to.
+			if attr == `href="` {
+				open := strings.LastIndex(before, "<")
+				if open < 0 || !strings.HasPrefix(strings.ToLower(before[open:]), "<link") {
+					continue
+				}
+			}
+			out = append(out, attr+value)
+		}
+	}
+	return out
 }
 
 // TestNoMutatingRoutes asserts the read-only guarantee twice over: every
@@ -1021,7 +1052,7 @@ func TestWorkspaceDeepLinks(t *testing.T) {
 		{
 			name: "a file of the root",
 			path: "/tasks/1/w/f/research.md",
-			want: []string{`data-column="f"`, `data-ref="research.md"`, "# root findings"},
+			want: []string{`data-column="f"`, `data-ref="research.md"`, "<h1>root findings</h1>"},
 		},
 		{
 			name: "a subtask",
@@ -1031,7 +1062,7 @@ func TestWorkspaceDeepLinks(t *testing.T) {
 		{
 			name: "a subtask then its file",
 			path: "/tasks/1/w/t/2/f/plan.md",
-			want: []string{`data-ref="2"`, `data-ref="plan.md"`, "# subtask plan"},
+			want: []string{`data-ref="2"`, `data-ref="plan.md"`, "<h1>subtask plan</h1>"},
 		},
 	}
 
@@ -1197,7 +1228,7 @@ func TestWorkspaceArchivedTask(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET an archived task's file column = %d, want 200", rec.Code)
 	}
-	for _, want := range []string{"# shipped", "Archived"} {
+	for _, want := range []string{"<h1>shipped</h1>", "Archived"} {
 		if !strings.Contains(rec.Body.String(), want) {
 			t.Errorf("the archived workspace is missing %q", want)
 		}
@@ -1621,5 +1652,184 @@ func TestArchivedColumnIsReadOnly(t *testing.T) {
 	}
 	if strings.Contains(col, "Subtasks") {
 		t.Error("the archived column shows subtasks the archive does not index")
+	}
+}
+
+// TestFileColumnRendersMarkdown is the parent task's whole point: a task's
+// research / design / plan has to be readable in the UI. The constructs are
+// the ones this project's own artifacts are made of.
+func TestFileColumnRendersMarkdown(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedWorkspace(t, svc)
+	const src = "# Design\n\n" +
+		"| Concern | State |\n| --- | --- |\n| widths | named classes |\n\n" +
+		"```go\nfunc main() {}\n```\n\n" +
+		"- a list item\n- [ ] a task item\n\n" +
+		"> a quote\n\n" +
+		"Some `inline code` and **bold**.\n"
+	if err := svc.WriteTaskFile("1", "design.md", src); err != nil {
+		t.Fatalf("WriteTaskFile() error = %v", err)
+	}
+
+	body := get(t, h, "/tasks/1/w/f/design.md").Body.String()
+	for _, want := range []string{
+		`<div class="notes">`,
+		"<h1>Design</h1>",
+		"<table>", "<thead>", "<th>Concern</th>", "<td>named classes</td>",
+		`<pre><code class="language-go">`, "func main() {}",
+		"<ul>", "<li>a list item</li>",
+		`<li class="task-list-item">`,
+		"<blockquote>", "<code>inline code</code>", "<strong>bold</strong>",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the rendered file column is missing %q", want)
+		}
+	}
+	// The source markers are gone: this is HTML now, not escaped text.
+	if strings.Contains(body, "# Design") {
+		t.Error("the file column still shows the markdown source")
+	}
+}
+
+// TestFileColumnNeverTrustsTheFile is the security half. The renderer's own
+// tests cover its output; this asserts it through the route, which is where a
+// mistake would actually be served.
+func TestFileColumnNeverTrustsTheFile(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedWorkspace(t, svc)
+	const src = "<script>alert(1)</script>\n\n" +
+		"<img src=x onerror=alert(2)>\n\n" +
+		"[click me](javascript:alert(3))\n\n" +
+		"[relative](design.md)\n"
+	if err := svc.WriteTaskFile("1", "evil.md", src); err != nil {
+		t.Fatalf("WriteTaskFile() error = %v", err)
+	}
+
+	// Scope the assertions to the rendered body: the page's own layout
+	// legitimately carries a <script src> for the vendored htmx.
+	page := get(t, h, "/tasks/1/w/f/evil.md").Body.String()
+	_, rest, ok := strings.Cut(page, `<div class="notes">`)
+	if !ok {
+		t.Fatal("the file column rendered no document at all")
+	}
+	body, _, ok := strings.Cut(rest, "</div>")
+	if !ok {
+		t.Fatal("the rendered document is never closed")
+	}
+	// No tag and no attribute from the file survives as markup. The
+	// payloads are still in the body as escaped text, which is the point -
+	// a reader sees the source - so these look for live markup, not for
+	// the strings.
+	// Only live markup counts. An escaped payload still contains
+	// "onerror=" as text ("&lt;img src=x onerror=alert(2)&gt;"), which is
+	// the point - the reader sees the source - so these are the tag
+	// openers and the attribute that would actually navigate.
+	for _, bad := range []string{
+		"<script", "<img", "javascript:",
+	} {
+		if strings.Contains(body, bad) {
+			t.Errorf("the rendered file column passed through %q", bad)
+		}
+	}
+	// The payload is still visible as text, so a reader sees the source.
+	for _, want := range []string{"&lt;script&gt;", "&lt;img src=x onerror=alert(2)&gt;"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the raw HTML was dropped instead of escaped: no %q", want)
+		}
+	}
+	// A refused link keeps its text.
+	if !strings.Contains(body, "click me") {
+		t.Error("a javascript: link lost its text as well as its tag")
+	}
+}
+
+// TestBodyRenderingByName pins the name rule end to end, including the two
+// shapes this backlog actually has: an extensionless artifact and a .md one.
+func TestBodyRenderingByName(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedWorkspace(t, svc)
+	if err := svc.WriteTaskFile("1", "design", "# extensionless"); err != nil {
+		t.Fatalf("WriteTaskFile() error = %v", err)
+	}
+	if err := svc.WriteTaskFile("1", "notes.txt", "# not a heading"); err != nil {
+		t.Fatalf("WriteTaskFile() error = %v", err)
+	}
+
+	doc := get(t, h, "/tasks/1/w/f/design").Body.String()
+	if !strings.Contains(doc, "<h1>extensionless</h1>") {
+		t.Error("an extensionless artifact is not rendered as a document")
+	}
+
+	text := get(t, h, "/tasks/1/w/f/notes.txt").Body.String()
+	if !strings.Contains(text, `<pre class="col-file-body">`) ||
+		!strings.Contains(text, "# not a heading") {
+		t.Error("a .txt file is not shown as preformatted text")
+	}
+	if strings.Contains(text, `<div class="notes">`) {
+		t.Error("a .txt file was rendered as a document")
+	}
+}
+
+// TestDescriptionColumnRendersAsADocument is the "same working area" claim:
+// a description goes through the same bodyView as a file.
+func TestDescriptionColumnRendersAsADocument(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedWorkspace(t, svc)
+	desc := "## Goal\n\n- one\n- two\n\n`code` and <b>raw</b>"
+	if _, err := svc.Update("1", nil, &desc, nil, nil, nil); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+
+	body := get(t, h, "/tasks/1/w/d/1").Body.String()
+	for _, want := range []string{
+		`<div class="notes">`, "<h2>Goal</h2>", "<li>one</li>",
+		"<code>code</code>", "&lt;b&gt;raw&lt;/b&gt;",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the description column is missing %q", want)
+		}
+	}
+}
+
+// TestFileColumnRefusesServerOwnedFiles closes a hole the read path leaves
+// open: storage validates a read without the reserved-name rule, so before
+// this a phase record and the task's own {id}.md rendered as columns although
+// no surface links either.
+func TestFileColumnRefusesServerOwnedFiles(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedWorkspace(t, svc)
+	if _, _, err := svc.StartPhase("1", task.PhaseResearch); err != nil {
+		t.Fatalf("StartPhase() error = %v", err)
+	}
+
+	for _, name := range []string{"research.phase", "RESEARCH.PHASE", "1.md"} {
+		if got := get(t, h, "/tasks/1/w/f/"+name).Code; got != http.StatusNotFound {
+			t.Errorf("GET a column for %q = %d, want 404", name, got)
+		}
+	}
+	// The refusal is about those names only: an ordinary .md still renders,
+	// and the raw-text route is left as the escape hatch it already was.
+	if got := get(t, h, "/tasks/1/w/f/research.md").Code; got != http.StatusOK {
+		t.Errorf("an ordinary file = %d, want 200", got)
+	}
+	if got := get(t, h, "/tasks/1/files/research.md").Code; got != http.StatusOK {
+		t.Errorf("the raw file route = %d, want 200", got)
+	}
+}
+
+// TestFileColumnOddNamesNeverFail is the "no input produces a 500" criterion.
+// "." and ".." never reach a handler at all: ServeMux cleans the path first.
+func TestFileColumnOddNamesNeverFail(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	seedWorkspace(t, svc)
+
+	// Already-escaped refs are passed through as they are; the rest are
+	// escaped here, because httptest.NewRequest panics on a target that is
+	// not a valid URL (a bare space is not).
+	for _, name := range []string{".", "..", "%2e", "a%23b.md", "%20", "nope.md", "%2Fetc%2Fpasswd"} {
+		code := get(t, h, "/tasks/1/w/f/"+name).Code
+		if code >= 500 {
+			t.Errorf("GET a column for %q = %d, want anything but a server error", name, code)
+		}
 	}
 }

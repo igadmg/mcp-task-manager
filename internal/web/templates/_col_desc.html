@@ -1,14 +1,12 @@
 {{/* A description column: the task's own text in the working area, as wide as
-     a file column. It is escaped plain text, like the file column stub - this
-     package has no template.HTML anywhere (templates.go), and rendering
-     markdown is workspace-file-column's decision. */}}
+     a file column and through the same body fragment, so a description reads
+     exactly like an attached document. */}}
 <div class="col-head">
   <span class="meta truncate" title="{{ .ID }}">#{{ .ID }}</span>
   <a class="col-link ml-auto w-auto shrink-0" href="{{ nav .TaskHref }}">task</a>
 </div>
 <p class="mt-1.5 text-sm font-medium leading-snug text-neutral-100">{{ .Title }}</p>
-{{ if .Content }}
-<pre class="col-file-body">{{ .Content }}</pre>
+{{ if or .Body.HTML .Body.Text }}{{ template "_body.html" .Body }}
 {{ else }}
 <p class="mt-4 text-xs text-neutral-600">No description.</p>
 {{ end }}
