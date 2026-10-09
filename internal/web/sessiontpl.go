@@ -25,7 +25,15 @@ type sessionTemplates struct {
 }
 
 func newSessionTemplates(base string) sessionTemplates {
-	funcs := template.FuncMap{"nav": navFor(base)}
+	return newMountedTemplates(base, "")
+}
+
+func newMountedTemplates(base, mount string) sessionTemplates {
+	funcs := template.FuncMap{
+		"nav":   navFor(mount + base),
+		"root":  navFor(mount),
+		"asset": func(name string) string { return mount + assetURL(name) },
+	}
 	return sessionTemplates{
 		board:     mustClone(boardPage, funcs),
 		fragments: mustClone(fragments, funcs),

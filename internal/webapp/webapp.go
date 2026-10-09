@@ -52,6 +52,10 @@ func (o Options) logger() *log.Logger {
 // A backlog still in the flat layout is rendered as the read-only service
 // sees it; the MCP process migrates it when it next starts.
 func Run(ctx context.Context, opts Options) error {
+	basePath, err := web.NormalizeBasePath(os.Getenv("MCP_WEB_BASE_PATH"))
+	if err != nil {
+		return err
+	}
 	logger := opts.logger()
 
 	cfg, err := config.Load()
@@ -74,6 +78,7 @@ func Run(ctx context.Context, opts Options) error {
 		Sessions:        sessions,
 		Logger:          logger,
 		PrimaryTasksDir: tasksDir,
+		BasePath:        basePath,
 	}, addr)
 
 	// Publish the project before the listener accepts anything, so the very
@@ -88,8 +93,8 @@ func Run(ctx context.Context, opts Options) error {
 		return fmt.Errorf("start dashboard: %w", err)
 	}
 	logger.Printf("%s", resolved.Resolution().Explain())
-	logger.Printf("dashboard: %s%s/", url, sess.Base())
-	logger.Printf("workspaces: %s/", url)
+	logger.Printf("dashboard: %s%s%s/", url, basePath, sess.Base())
+	logger.Printf("workspaces: %s%s/", url, basePath)
 
 	// Record the instance so the MCP side can find it - this process owns
 	// the marker's whole lifetime, and nothing else ever deletes it.

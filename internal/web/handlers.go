@@ -6,12 +6,31 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/gpayer/mcp-task-manager/internal/project"
 )
 
 type handler struct {
 	Deps
+	rootTpl sessionTemplates
+	// One immutable template clone per session and mount, not per poll.
+	templatesMu sync.Mutex
+	templates   map[string]sessionTemplates
+}
+
+func (h *handler) sessionTemplates(sess *Session) sessionTemplates {
+	if h.BasePath == "" {
+		return sess.tpl
+	}
+	h.templatesMu.Lock()
+	defer h.templatesMu.Unlock()
+	tpl, ok := h.templates[sess.Token]
+	if !ok {
+		tpl = newMountedTemplates(sess.Base(), h.BasePath)
+		h.templates[sess.Token] = tpl
+	}
+	return tpl
 }
 
 // welcome is the page at /: it lists what this server may open and what it
@@ -38,7 +57,7 @@ func (h *handler) createSession(w http.ResponseWriter, r *http.Request) {
 		h.renderWelcome(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	http.Redirect(w, r, sess.Base()+"/", http.StatusSeeOther)
+	http.Redirect(w, r, h.BasePath+sess.Base()+"/", http.StatusSeeOther)
 }
 
 // board serves /<token>/: that session's workspace with nothing open, which
@@ -47,10 +66,10 @@ func (h *handler) createSession(w http.ResponseWriter, r *http.Request) {
 func (h *handler) board(w http.ResponseWriter, r *http.Request) {
 	sess, ok := h.session(r)
 	if !ok {
-		h.renderGone(w, r, http.StatusNotFound, rootTpl.gone, "layout.html")
+		h.renderGone(w, r, http.StatusNotFound, h.rootTpl.gone, "layout.html")
 		return
 	}
-	h.render(w, http.StatusOK, sess.tpl.board, "layout.html", h.bareWorkspaceView(sess))
+	h.render(w, http.StatusOK, h.sessionTemplates(sess).board, "layout.html", h.bareWorkspaceView(sess))
 }
 
 // boardFragment is the htmx poll target: the board replaces itself, so a
@@ -63,12 +82,12 @@ func (h *handler) board(w http.ResponseWriter, r *http.Request) {
 func (h *handler) boardFragment(w http.ResponseWriter, r *http.Request) {
 	sess, ok := h.session(r)
 	if !ok {
-		h.renderGone(w, r, http.StatusOK, rootTpl.fragments, "_gone.html")
+		h.renderGone(w, r, http.StatusOK, h.rootTpl.fragments, "_gone.html")
 		return
 	}
 	board := h.boardView(sess)
 	board.Fragment = true
-	h.render(w, http.StatusOK, sess.tpl.fragments, "_board.html", board)
+	h.render(w, http.StatusOK, h.sessionTemplates(sess).fragments, "_board.html", board)
 }
 
 // detail serves /tasks/{id}: the board with that task's panel open. There is
@@ -82,7 +101,7 @@ func (h *handler) boardFragment(w http.ResponseWriter, r *http.Request) {
 func (h *handler) detail(w http.ResponseWriter, r *http.Request) {
 	sess, ok := h.session(r)
 	if !ok {
-		h.renderGone(w, r, http.StatusNotFound, rootTpl.gone, "layout.html")
+		h.renderGone(w, r, http.StatusNotFound, h.rootTpl.gone, "layout.html")
 		return
 	}
 	panel, ok := h.detailView(sess, r.PathValue("id"))
@@ -93,7 +112,7 @@ func (h *handler) detail(w http.ResponseWriter, r *http.Request) {
 	view := h.bareWorkspaceView(sess)
 	view.Board.Panel = &panel
 	view.Title = "#" + panel.Card.ID + " " + panel.Card.Title
-	h.render(w, http.StatusOK, sess.tpl.board, "layout.html", view)
+	h.render(w, http.StatusOK, h.sessionTemplates(sess).board, "layout.html", view)
 }
 
 // detailPanel answers the card click. A task that vanished between the board
@@ -102,14 +121,14 @@ func (h *handler) detail(w http.ResponseWriter, r *http.Request) {
 func (h *handler) detailPanel(w http.ResponseWriter, r *http.Request) {
 	sess, ok := h.session(r)
 	if !ok {
-		h.renderGone(w, r, http.StatusOK, rootTpl.fragments, "_gone.html")
+		h.renderGone(w, r, http.StatusOK, h.rootTpl.fragments, "_gone.html")
 		return
 	}
 	view, ok := h.detailView(sess, r.PathValue("id"))
 	if !ok {
 		view = DetailView{Missing: true}
 	}
-	h.render(w, http.StatusOK, sess.tpl.fragments, "_detail.html", view)
+	h.render(w, http.StatusOK, h.sessionTemplates(sess).fragments, "_detail.html", view)
 }
 
 // descriptionFragment answers the Source / Rendered toggle of a description
@@ -148,7 +167,7 @@ func (h *handler) descriptionFragment(w http.ResponseWriter, r *http.Request) {
 func (h *handler) workspace(w http.ResponseWriter, r *http.Request) {
 	sess, ok := h.session(r)
 	if !ok {
-		h.renderGone(w, r, http.StatusNotFound, rootTpl.gone, "layout.html")
+		h.renderGone(w, r, http.StatusNotFound, h.rootTpl.gone, "layout.html")
 		return
 	}
 	view, ok := h.workspaceView(sess, sessionPath(sess, r))
@@ -156,7 +175,7 @@ func (h *handler) workspace(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	h.render(w, http.StatusOK, sess.tpl.board, "layout.html", view)
+	h.render(w, http.StatusOK, h.sessionTemplates(sess).board, "layout.html", view)
 }
 
 // graph serves /<token>/graph: the backlog graph with nothing highlighted.
@@ -165,7 +184,7 @@ func (h *handler) workspace(w http.ResponseWriter, r *http.Request) {
 func (h *handler) graph(w http.ResponseWriter, r *http.Request) {
 	sess, ok := h.session(r)
 	if !ok {
-		h.renderGone(w, r, http.StatusNotFound, rootTpl.gone, "layout.html")
+		h.renderGone(w, r, http.StatusNotFound, h.rootTpl.gone, "layout.html")
 		return
 	}
 	view, ok := h.graphWorkspaceView(sess)
@@ -173,7 +192,7 @@ func (h *handler) graph(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	h.render(w, http.StatusOK, sess.tpl.board, "layout.html", view)
+	h.render(w, http.StatusOK, h.sessionTemplates(sess).board, "layout.html", view)
 }
 
 // workspaceFragment is the htmx swap target, paired with workspace the way
@@ -182,7 +201,7 @@ func (h *handler) graph(w http.ResponseWriter, r *http.Request) {
 func (h *handler) workspaceFragment(w http.ResponseWriter, r *http.Request) {
 	sess, ok := h.session(r)
 	if !ok {
-		h.renderGone(w, r, http.StatusOK, rootTpl.fragments, "_gone.html")
+		h.renderGone(w, r, http.StatusOK, h.rootTpl.fragments, "_gone.html")
 		return
 	}
 	page := strings.TrimPrefix(sessionPath(sess, r), stripPrefix)
@@ -194,7 +213,7 @@ func (h *handler) workspaceFragment(w http.ResponseWriter, r *http.Request) {
 	if page == "/" {
 		view := h.bareWorkspaceView(sess)
 		view.Fragment = true
-		h.render(w, http.StatusOK, sess.tpl.fragments, "_workspace.html", view)
+		h.render(w, http.StatusOK, h.sessionTemplates(sess).fragments, "_workspace.html", view)
 		return
 	}
 	// And the rootless graph is the second state that is not a chain.
@@ -205,7 +224,7 @@ func (h *handler) workspaceFragment(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		view.Fragment = true
-		h.render(w, http.StatusOK, sess.tpl.fragments, "_workspace.html", view)
+		h.render(w, http.StatusOK, h.sessionTemplates(sess).fragments, "_workspace.html", view)
 		return
 	}
 	view, ok := h.workspaceView(sess, page)
@@ -214,7 +233,7 @@ func (h *handler) workspaceFragment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	view.Fragment = true
-	h.render(w, http.StatusOK, sess.tpl.fragments, "_workspace.html", view)
+	h.render(w, http.StatusOK, h.sessionTemplates(sess).fragments, "_workspace.html", view)
 }
 
 // sessionPath is the request path with the session prefix taken off, which is
@@ -486,7 +505,7 @@ func (h *handler) session(r *http.Request) (*Session, bool) {
 func (h *handler) renderWelcome(w http.ResponseWriter, status int, errMsg string) {
 	view := newWelcomeView(h.Sessions.Workspaces(), h.Sessions.Live(),
 		h.Sessions.ConfigPath(), h.Sessions.Problems(), errMsg)
-	h.render(w, status, rootTpl.welcome, "layout.html", view)
+	h.render(w, status, h.rootTpl.welcome, "layout.html", view)
 }
 
 func (h *handler) renderGone(w http.ResponseWriter, r *http.Request, status int, tpl *template.Template, name string) {
