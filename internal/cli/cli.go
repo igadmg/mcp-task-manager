@@ -225,9 +225,7 @@ func RunWithContext(ctx context.Context, args []string, stdout, stderr io.Writer
 	webCmd := flaggy.NewSubcommand("web")
 	webCmd.Description = "Serve the read-only task dashboard"
 	var serveAddr string
-	var serveWithMCP bool
 	webCmd.String(&serveAddr, "a", "addr", "Listen address (default from mcp-tasks.yaml, e.g. 127.0.0.1:7777)")
-	webCmd.Bool(&serveWithMCP, "", "mcp", "Also serve MCP over stdio in this process")
 	serveCmd.AttachSubcommand(webCmd, 1)
 	flaggy.AttachSubcommand(serveCmd, 1)
 
@@ -237,7 +235,7 @@ func RunWithContext(ctx context.Context, args []string, stdout, stderr io.Writer
 	// Handle subcommands
 	// Checked before serveCmd: flaggy marks both the parent and the child.
 	if webCmd.Used {
-		return cmdServeWeb(ctx, stderr, serveAddr, serveWithMCP)
+		return cmdServeWeb(ctx, stderr, serveAddr)
 	}
 
 	if versionCmd.Used {

@@ -8,6 +8,9 @@ package testsupport
 
 import (
 	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/gpayer/mcp-task-manager/internal/config"
@@ -131,4 +134,61 @@ func IsolateEnv(t *testing.T) {
 	// config directory, so a test must not be able to read - let alone open
 	// a backlog from - the developer's real ~/.config.
 	t.Setenv("HOME", t.TempDir())
+}
+
+// BuildDashboard builds cmd/mcp-task-manager-web into a temporary directory
+// and returns the binary's path.
+//
+// It exists because the dashboard became its own program: `serve web` runs it,
+// start_web_ui spawns it, and a test of either has to have one to run. Built
+// once per test rather than relying on an installed copy, so a test never
+// silently exercises a stale binary from GOBIN.
+//
+// Skips the test when `go` is unavailable or under -short: building takes a
+// second or two, and nothing else here needs a toolchain.
+func BuildDashboard(t *testing.T) string {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("building the dashboard binary takes a moment; skipped under -short")
+	}
+	goBin, err := exec.LookPath("go")
+	if err != nil {
+		t.Skip("no go toolchain to build the dashboard with")
+	}
+
+	root := moduleRoot(t)
+	out := filepath.Join(t.TempDir(), "mcp-task-manager-web")
+	if runtime.GOOS == "windows" {
+		out += ".exe"
+	}
+	cmd := exec.Command(goBin, "build", "-o", out, "./cmd/mcp-task-manager-web")
+	cmd.Dir = root
+	// GOWORK=off for the same reason the MCP config and the open_board skill
+	// use it: a stray go.work would resolve different dependencies than the
+	// module's own.
+	cmd.Env = append(os.Environ(), "GOWORK=off")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build the dashboard: %v\n%s", err, out)
+	}
+	return out
+}
+
+// moduleRoot walks up from the test's working directory to the directory
+// holding go.mod, which is where a `go build ./cmd/...` has to run.
+func moduleRoot(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatalf("no go.mod above %s", dir)
+		}
+		dir = parent
+	}
 }

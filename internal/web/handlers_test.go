@@ -238,6 +238,33 @@ func TestHealthz(t *testing.T) {
 	if rec.Code != http.StatusOK || rec.Body.String() != "ok" {
 		t.Errorf("GET /healthz = %d %q, want 200 \"ok\"", rec.Code, rec.Body.String())
 	}
+	// Nothing was resolved for this handler, so it claims no backlog rather
+	// than claiming an empty one.
+	if got := rec.Header().Get(HealthHeader); got != "" {
+		t.Errorf("%s = %q, want empty when no backlog was named", HealthHeader, got)
+	}
+}
+
+// TestHealthzNamesItsBacklog is what makes /healthz usable as a probe now that
+// the dashboard is its own process: "ok" says something is listening, the
+// header says which backlog it serves. internal/webproc decides whether to
+// spawn on exactly this.
+func TestHealthzNamesItsBacklog(t *testing.T) {
+	sessions := newTestSessions(t)
+	h := NewHandler(Deps{
+		Sessions:        sessions,
+		Logger:          discardLogger(),
+		PrimaryTasksDir: "/abs/backlog",
+	})
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if rec.Code != http.StatusOK || rec.Body.String() != "ok" {
+		t.Fatalf("GET /healthz = %d %q", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get(HealthHeader); got != "/abs/backlog" {
+		t.Errorf("%s = %q, want the backlog this dashboard was started for", HealthHeader, got)
+	}
 }
 
 func TestStaticAssetsServed(t *testing.T) {

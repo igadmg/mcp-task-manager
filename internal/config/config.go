@@ -109,10 +109,6 @@ type WebConfig struct {
 	Enabled bool `yaml:"enabled"`
 	// Addr is the listen address, host:port.
 	Addr string `yaml:"addr"`
-	// WithMCP additionally serves MCP over stdio from `serve web`. Off by
-	// default: a human running it in a terminal has a TTY on stdin, and a
-	// JSON-RPC reader there would eat their keystrokes as garbage frames.
-	WithMCP bool `yaml:"with_mcp"`
 	// DoneStats defines the statistics cards of the board's Done column.
 	DoneStats DoneStatsConfig `yaml:"done_stats"`
 }
@@ -164,7 +160,6 @@ func DefaultConfig() *Config {
 		Web: WebConfig{
 			Enabled: false,
 			Addr:    DefaultWebAddr,
-			WithMCP: false,
 			// A fresh list, like BaseBranches below.
 			DoneStats: DoneStatsConfig{Cards: DefaultStatsCards()},
 		},

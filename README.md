@@ -26,8 +26,15 @@ MCP Task Manager provides a simple but powerful task management system that inte
 ### Install with Go
 
 ```bash
-go install github.com/gpayer/mcp-task-manager/cmd/mcp-task-manager@latest
+go install github.com/gpayer/mcp-task-manager/cmd/...@latest
 ```
+
+That installs **two** binaries: `mcp-task-manager`, the MCP server and CLI,
+and `mcp-task-manager-web`, the read-only dashboard. The dashboard runs as its
+own process so it outlives the agent, and the first binary spawns it on
+demand — so install both, or the board cannot be started. (Installing only
+`cmd/mcp-task-manager` still gives you a working MCP server and CLI; it just
+cannot bring the dashboard up.)
 
 ### Download Pre-built Binaries
 
@@ -52,6 +59,7 @@ sudo mv mcp-task-manager /usr/local/bin/
 git clone https://github.com/gpayer/mcp-task-manager.git
 cd mcp-task-manager
 go build -o mcp-task-manager ./cmd/mcp-task-manager
+go build -o mcp-task-manager-web ./cmd/mcp-task-manager-web
 ```
 
 ## Usage
@@ -80,10 +88,11 @@ Note that a client which launches the server with a working directory *other* th
 
 #### Web Dashboard
 
-The same binary also serves a read-only kanban dashboard of the backlog:
+A read-only kanban dashboard of the backlog runs as its own process:
 
 ```bash
-mcp-task-manager serve web --addr 127.0.0.1:7777
+mcp-task-manager serve web --addr 127.0.0.1:7777   # forwards to the binary below
+mcp-task-manager-web --addr 127.0.0.1:7777         # or run it directly
 # then open http://127.0.0.1:7777/ and pick a workspace
 ```
 
@@ -101,15 +110,27 @@ its address, and that is the only thing here resembling a boundary. Sessions
 also live only as long as the process, so a restart invalidates every link
 (the page says so and offers the list again).
 
-The dashboard and the MCP tools still share one resolved project and one task
-service, so a task created through a tool call shows up on that project's
-board on the next refresh (every 5 seconds). Other workspaces are opened
-read-only, and see another process's writes when the index notices the
-directory changed.
+**The dashboard is a separate process, and only the MCP server writes.** The
+board has its own task service and its own in-memory index over the same
+`tasks/` directory; nothing coordinates the two. That works because records are
+written atomically and each index rebuilds itself when a task file changes, so
+a task created through a tool call shows up on the board on the next refresh
+(every 5 seconds).
 
-- From an MCP client, set `web.enabled` in `mcp-tasks.yaml` (or `MCP_WEB_ENABLED=1`) to bring the board up with the server, or call the `start_web_ui` tool to start it on demand. Either way the project is published as a session as soon as it is resolved, and `start_web_ui` reports the board's tokenized URL.
-- `serve web` resolves the project eagerly and publishes it before the listener accepts anything, so the first request already finds its board. Started from inside the MCP server, the list comes up before the client has named a project and that project's board appears there after the first tool call.
-- `serve web --mcp` additionally serves MCP over stdio in the same process. It is off by default: a terminal has a TTY on stdin, and a JSON-RPC reader there would eat your keystrokes.
+Being its own process is the point: **the board outlives the agent.** Restart
+your MCP client and the dashboard keeps serving on the same URL; asking for it
+again reports the running one instead of starting a second. It is stopped like
+any other program (Ctrl-C in its terminal, or kill its pid — it is recorded in
+`tasks/.users/<user>/web.json`, along with the address and the session prefix
+it serves). A spawned dashboard logs to `tasks/.users/<user>/web.log`.
+
+Because the dashboard never writes, it also never migrates a legacy flat
+`tasks/{id}.md` layout — it shows it as it is, and the MCP server migrates it
+on its next start.
+
+- From an MCP client, set `web.enabled` in `mcp-tasks.yaml` (or `MCP_WEB_ENABLED=1`) to spawn the board when the server first resolves a project, or call the `start_web_ui` tool to spawn it on demand. Either way `start_web_ui` reports the board's tokenized URL, and calling it again reports the running one. Note that `web.enabled` does not open a port at startup: the dashboard has to be told which backlog to serve, and until the first tool call there is none.
+- `serve web` and `mcp-task-manager-web` resolve the project eagerly and publish it before the listener accepts anything, so the first request already finds its board. A port that is already taken is a startup error you see immediately.
+- If the dashboard binary is missing, `serve web` and `start_web_ui` say so and name everywhere they looked; `MCP_WEB_BINARY` points at it explicitly.
 - Tailwind CSS and htmx are compiled into the binary, so the page renders with no network access.
 - The page header names the tasks that are **in progress**, so you can see an agent may be editing those areas from any page — a count chip plus the first couple of tasks, with the rest in a tooltip. It refreshes on the same five-second poll as the board, without a second request.
 - In progress is a grid of Research / Design / Planning / Implementation lanes, each starting one step right of the one before. A task's lane is the phase of its latest started run in its `<phase>.phase` records; a task without records falls back to the workflow files (`research`, `design`, `plan`) attached to it. A card whose nested subtasks are in other phases spans the whole range of its group, and each nested row is indented to its own lane — so a parent in research with a subtask in planning reads as research..planning instead of looking like one planning task. A lane's count is the tasks whose own phase it is, so the four counts add up to the column's.
@@ -502,7 +523,6 @@ relation_types:
 web:
   enabled: false          # start the dashboard alongside the MCP server
   addr: 127.0.0.1:7777    # listen address
-  with_mcp: false         # `serve web` also serves MCP over stdio
   done_stats:             # statistics cards of the Done column, in order
     cards:
       - kind: bars        # one bar per value of a task field
@@ -585,7 +605,8 @@ mistyped path cannot hide the rest, and it cannot break the MCP server either.
 | `MCP_PROJECT_DIR` | Explicit project root, overriding every other source | unset |
 | `CLAUDE_PROJECT_DIR` | Project root; set by Claude Code itself | unset |
 | `MCP_ROOT_SOURCE` | Restricts resolution to a single source: `MCP_PROJECT_DIR`, `CLAUDE_PROJECT_DIR`, `roots` or `cwd`. Useful for testing the roots path, which the environment variables would otherwise always win | unset |
-| `MCP_WEB_ENABLED` | Starts the web dashboard with the MCP server. Parsed as a bool; an unparseable value is ignored | `false` |
+| `MCP_WEB_ENABLED` | Spawns the web dashboard when the MCP server resolves a project. Parsed as a bool; an unparseable value is ignored | `false` |
+| `MCP_WEB_BINARY` | Path to `mcp-task-manager-web`. Without it the dashboard is looked for next to the running binary, then on `PATH` | unset |
 | `MCP_WEB_ADDR` | Dashboard listen address, `host:port`. Never enables the dashboard on its own | `127.0.0.1:7777` |
 | `MCP_WEB_CONFIG` | The web server's own config file (the workspace list). Unlike the well-known locations, a path named here that does not exist is an error | unset |
 | `XDG_CONFIG_HOME` | Config root searched for `mcp-task-manager/web.yaml` before `~/.config` | unset |

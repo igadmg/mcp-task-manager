@@ -433,8 +433,16 @@ func (h *handler) taskFile(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(content))
 }
 
+// health is the liveness route, and since the dashboard became its own
+// process it is also its identity: the header names the backlog this process
+// was started for, so a would-be spawner can tell a running dashboard of ours
+// from an unrelated service on the same port - and a dashboard serving a
+// *different* backlog from one serving this one.
 func (h *handler) health(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	if dir := h.PrimaryTasksDir; dir != "" {
+		w.Header().Set(HealthHeader, dir)
+	}
 	_, _ = w.Write([]byte("ok"))
 }
 

@@ -31,7 +31,23 @@ type Deps struct {
 	Now func() time.Time
 	// PollSeconds overrides DefaultPollSeconds.
 	PollSeconds int
+	// PrimaryTasksDir is the backlog this process was started for, as an
+	// absolute path. It is reported on /healthz in the X-Task-Dashboard
+	// header, which is how a process that wants to start a dashboard can
+	// tell a running one of ours from anything else holding the port - a
+	// bare "ok" cannot, and a PID file answers a different question (see
+	// internal/webproc).
+	//
+	// A dashboard can serve many workspaces, but it was started for
+	// exactly one, and that is the one a spawner asks about. Empty when
+	// nothing was resolved, which is honest rather than misleading: the
+	// header then claims no backlog.
+	PrimaryTasksDir string
 }
+
+// HealthHeader names the backlog a dashboard was started for. It is the one
+// thing that makes GET /healthz identifying rather than merely affirmative.
+const HealthHeader = "X-Task-Dashboard"
 
 func (d Deps) withDefaults() Deps {
 	if d.Sessions == nil {

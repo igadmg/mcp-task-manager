@@ -6,25 +6,59 @@ A Go-based MCP server for task management, designed for Claude and coding agents
 
 ## Architecture
 
+**Two processes, two binaries, one codebase.** `mcp-task-manager` owns writes;
+`mcp-task-manager-web` only reads, in a process of its own, so the dashboard
+outlives the agent.
+
 ```
-┌───────────────────────────────────────────────────────────────┐
-│              Entry Point (cmd/mcp-task-manager)               │
-│        (CLI if args, MCP server otherwise; internal/app)      │
-├──────────────────┬───────────────────┬────────────────────────┤
-│   CLI Commands   │ MCP Tool Handlers │   Web UI (kanban)      │
-│ (list, get, ...) │ (create_task ...) │ (read-only, htmx+CSS)  │
-├──────────────────┴───────────────────┴────────────────────────┤
-│                        Task Service                           │
-│       (business logic, validation, sorting, one mutex)        │
-├───────────────────────────────┬───────────────────────────────┤
-│            Storage            │     VCS (git branching)       │
-│ (markdown files + mem index)  │ (system git, opt-in, vcs pkg) │
-└───────────────────────────────┴───────────────────────────────┘
-         │                        │
-         ▼                        ▼
-    ./tasks/{id}/{id}.md           (source of truth)
+  process 1: mcp-task-manager                 process 2: mcp-task-manager-web
+┌─────────────────────────────────────┐     ┌───────────────────────────────┐
+│   Entry (CLI if args, else MCP)     │     │   Entry (internal/webapp)     │
+│            internal/app             │     │  resolves BuildReadOnly only  │
+├──────────────────┬──────────────────┤     ├───────────────────────────────┤
+│   CLI Commands   │ MCP Tool Handlers│     │     Web UI (kanban)           │
+│ (list, get, ...) │ (create_task ...)│     │  (read-only, htmx + CSS)      │
+├──────────────────┴──────────────────┤     ├───────────────────────────────┤
+│   internal/webproc  ────spawn────▶  │     │   its own Task Service        │
+│  (os/exec, probe, marker; NEVER     │     │   and its own index           │
+│   internal/web — cmd/boundary_test) │     │                               │
+├─────────────────────────────────────┤     └───────────────┬───────────────┘
+│            Task Service             │                     │
+│  (business logic, one mutex, WRITES)│                     │ reads
+├──────────────────┬──────────────────┤                     │
+│      Storage     │ VCS (branching)  │                     │
+└─────────┬────────┴──────────────────┘                     │
+          │                                                 │
+          ▼                                                 ▼
+    ./tasks/{id}/{id}.md           (source of truth; atomic writes)
     ./tasks/archive/{id}/{id}.md   (archived tasks, not indexed)
+    ./tasks/.users/<user>/web.json (the dashboard instance marker)
 ```
+
+**The split is structural, not conventional.** `cmd/mcp-task-manager` has no
+import path to `internal/web` at all, and `cmd/boundary_test.go` walks
+`go list -deps` and fails if one appears (the reverse too: the dashboard links
+neither `internal/app` nor `internal/tools` nor mcp-go). Without that test
+"two binaries" survives only until the next convenience puts the listener back
+in the MCP process. It is also why the `roots/list` request lives in
+`internal/app` rather than `internal/project`: `internal/project` is shared by
+both binaries, so an mcp-go import there would be linked into the dashboard.
+
+**Write ownership.** Only the MCP process writes. The dashboard resolves
+through `project.BuildReadOnly`, which skips `Initialize` — so no legacy-layout
+migration, no auto-archive, no git handle, in a process that must never move a
+file. A backlog still in the flat layout is *rendered as it is*; the MCP
+process migrates it when it next starts.
+
+**Nothing coordinates the two.** The service mutex is per process and now
+guards nothing across the boundary; cross-process coordination stays out of
+scope. What makes it work is that records are written atomically (temp file
+plus rename) and that each index rebuilds itself when a task file's mtime
+moves past `builtAt` or the task count diverges. Two limits are known and
+deliberately not fixed: a backlog emptied to **zero** tasks is not noticed
+(`taskCount == 0` reads as not-stale), and a write landing inside the
+sub-millisecond window of another process's rebuild can be missed until the
+next write.
 
 ### Package boundary
 
@@ -314,7 +348,9 @@ A read-only kanban dashboard, served by `internal/web` (`net/http` +
 `html/template` + `http.ServeMux` patterns; no framework).
 
 - **One process, many workspaces.** MCP (stdio) and HTTP still share the project the MCP server resolved and its single `task.Service`, so a tool call's write is on the board immediately; the same server also serves any number of *other* backlogs at once. `internal/app` is the composition root.
-- **Ways to start it:** `web.enabled` in the config (or `MCP_WEB_ENABLED`) brings it up with the MCP server; the `start_web_ui` tool starts it on demand; `mcp-task-manager serve web` runs it in the foreground.
+- **Ways to start it:** `web.enabled` in the config (or `MCP_WEB_ENABLED`) spawns it when the MCP server first resolves a project — not at startup, because the child has to be told *which* backlog to serve and before the first tool call there is none; the `start_web_ui` tool spawns it on demand; `mcp-task-manager serve web` runs it in the foreground; and `mcp-task-manager-web` can be run by hand or by a supervisor. `serve web` is a **forwarder**: it locates `mcp-task-manager-web` and runs it with stdio inherited, which keeps the command unchanged while the MCP binary links nothing of the dashboard.
+- **The spawned dashboard is detached and idempotent.** It gets its own session (`setsid`, or a new process group on Windows), its output goes to `<tasks_dir>/.users/<user>/web.log` (appended, never rotated), and the parent `Release()`s it — restarting the agent neither kills the board nor starts a second one. Idempotency is **probe first, marker second**: `internal/webproc` reads `<tasks_dir>/.users/<user>/web.json` for an address, asks `GET /healthz` whether a dashboard for *this* backlog is there, and only spawns when nothing answers. The marker's `base` is how a cross-process tool can still report a token-prefixed board link; its `pid` is informational and **never** decides anything, because a pid can be gone, reused, or alive while no longer holding the port — none of which is the question being asked. A dashboard serving a *different* backlog on that address is reported as such rather than adopted. `/healthz` answers `ok` plus `X-Task-Dashboard: <tasks dir>`; the body alone could be any program.
+- **Where the marker lives.** `.users/<user>/` is already skipped by every task scan and is already a reserved task id, so the marker needs no new reserved name and can never be read as a task. Per user, like the current-task pointer beside it; two users sharing one backlog keep separate markers, which the probe makes harmless.
 - **Every URL starts with a session token.** `/<token>/`, `/<token>/board`, `/<token>/tasks/{id}`, `/<token>/tasks/{id}/panel`, `/<token>/tasks/{id}/files/{name}`, `/<token>/tasks/{id}/w/{rest...}`, `/<token>/strip/{rest...}`. `/static/{file...}` and `/healthz` are global — the embedded assets are identical for every session, so they get one URL space and one browser cache. There is no untokenized route to task data and no redirect from a legacy one.
 - **A token is not authentication.** It is a namespace that picks which backlog is shown. Tokens are random, so a URL is not guessable from a path, but nothing may be built as if this were access control: a token is in the server log, in the browser history, in the `Referer` of any outbound link, and in anything that proxies the page. The listener is loopback-only by default, and that — not the token — is the only thing resembling a boundary.
 - **Read-only is structural, in one sentence.** *Task data is reachable by GET only, and the single POST in this server is the session registry, which touches no task data.* The session routes live in their own `ServeMux` with GET patterns only, so a `POST /<token>/board` is answered 405 by the mux before any handler exists.
@@ -539,7 +575,6 @@ auto_archive:         # optional
 web:                  # optional
   enabled: false      # start the dashboard with the MCP server; default: false
   addr: 127.0.0.1:7777  # default
-  with_mcp: false     # `serve web` also serves MCP over stdio; default: false
   done_stats:         # Done-column statistics cards; default: the four below
     cards:            # board order; `cards: []` = no cards
       - kind: bars    # bars | lines; blank: bars with a field, else lines
@@ -736,6 +771,14 @@ mcp-task-manager/
 │   │   ├── vcs.go               # Repo, runner, Check, Head, ResolveIdentity
 │   │   ├── refs.go              # Branch queries and compare-and-swap ref updates, switch
 │   │   └── tree.go              # Snapshot (tasks dir excluded), merge-tree, commit-tree, replay
+│   ├── webapp/
+│   │   └── webapp.go            # The dashboard's composition root (BuildReadOnly + the marker)
+│   ├── webproc/
+│   │   ├── spawn.go             # Spawner: tools.WebStarter over os/exec, probe first
+│   │   ├── marker.go            # <tasks_dir>/.users/<user>/web.json
+│   │   ├── probe.go             # GET /healthz + X-Task-Dashboard
+│   │   ├── locate.go            # Finds mcp-task-manager-web: env, sibling, PATH
+│   │   └── detach_unix.go       # setsid (detach_windows.go: new process group)
 │   └── web/
 │       ├── server.go            # Route table (global + a GET-only session mux)
 │       ├── session.go           # Session registry: tokens, reserved segments, Pick/Adopt/Lookup

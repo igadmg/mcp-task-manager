@@ -17,9 +17,6 @@ func TestWebDefaults(t *testing.T) {
 	if cfg.Web.Addr != DefaultWebAddr {
 		t.Errorf("Web.Addr = %q, want %q", cfg.Web.Addr, DefaultWebAddr)
 	}
-	if cfg.Web.WithMCP {
-		t.Error("Web.WithMCP = true, want false by default")
-	}
 }
 
 func TestPartialWebSectionKeepsDefaultAddr(t *testing.T) {

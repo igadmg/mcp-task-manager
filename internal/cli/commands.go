@@ -2,14 +2,18 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"os"
+	"os/exec"
 	"strconv"
+	"time"
 
-	"github.com/gpayer/mcp-task-manager/internal/app"
 	"github.com/gpayer/mcp-task-manager/internal/config"
 	"github.com/gpayer/mcp-task-manager/internal/project"
 	"github.com/gpayer/mcp-task-manager/internal/task"
+	"github.com/gpayer/mcp-task-manager/internal/webproc"
 )
 
 // loadConfig loads configuration only (does not create directories)
@@ -630,23 +634,59 @@ func cmdComplete(stdout, stderr io.Writer, jsonOutput bool, id, resolution, reso
 // cmdServeWeb runs the dashboard in the foreground until the context is
 // cancelled. Exit 0 on a clean shutdown, 1 on a startup failure - an occupied
 // port or an unresolvable project must not look like success.
-func cmdServeWeb(ctx context.Context, stderr io.Writer, addr string, withMCP bool) int {
-	cfg, err := loadConfig()
+// forwardStopGrace is how long the forwarded dashboard gets to drain after it
+// is asked to stop, before it is killed.
+const forwardStopGrace = 10 * time.Second
+
+// cmdServeWeb runs the dashboard in the foreground, by running the dashboard's
+// own binary.
+//
+// It forwards rather than serving: since the split, the listener lives in
+// cmd/mcp-task-manager-web, and this binary deliberately has no path to
+// internal/web (cmd/import_test.go). Forwarding keeps the command, its
+// output and its flags exactly as they were while the boundary stays
+// enforceable - the alternative was deleting a documented command.
+//
+// The child's stdio is inherited and its signals come from the same terminal,
+// so Ctrl-C stops it as before. This is the one place that does NOT detach:
+// `serve web` is a foreground command, and a detached child would leave the
+// operator's terminal holding nothing.
+func cmdServeWeb(ctx context.Context, stderr io.Writer, addr string) int {
+	bin, err := webproc.Locate()
 	if err != nil {
 		fmt.Fprintf(stderr, "Error: %v\n", err)
 		return 1
 	}
 
-	webCfg := cfg.Web
-	webCfg.Enabled = true
+	args := []string{}
 	if addr != "" {
-		webCfg.Addr = addr
+		args = append(args, "--addr", addr)
 	}
-	if withMCP {
-		webCfg.WithMCP = true
+	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, stderr
+	// Ask the dashboard to stop rather than killing it, so its listener
+	// drains the way it does when a terminal's Ctrl-C reaches it directly.
+	// WaitDelay is the backstop for a child that ignores the signal.
+	cmd.Cancel = func() error {
+		if err := cmd.Process.Signal(os.Interrupt); err != nil {
+			return cmd.Process.Kill()
+		}
+		return nil
 	}
+	cmd.WaitDelay = forwardStopGrace
 
-	if err := app.RunWeb(ctx, app.Options{Web: webCfg, Stderr: stderr}); err != nil {
+	err = cmd.Run()
+	// A cancelled context is this command's normal end - the operator
+	// stopped it - so it is checked before the child's exit status, which
+	// for a signalled process is -1 and means nothing to a caller.
+	if ctx.Err() != nil {
+		return 0
+	}
+	if err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			return exit.ExitCode()
+		}
 		fmt.Fprintf(stderr, "Error: %v\n", err)
 		return 1
 	}

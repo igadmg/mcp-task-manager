@@ -1,17 +1,22 @@
-// Package app is the composition root: it wires the MCP transport and the web
-// dashboard onto one resolved project and one *task.Service, inside one
-// process. Nothing else in the tree knows about both transports.
+// Package app is the MCP server's composition root.
+//
+// It is one of this repository's two applications; internal/webapp is the
+// other. The split is structural, not conventional: this package - and so
+// cmd/mcp-task-manager - has no path to internal/web at all, and
+// cmd/import_test.go fails if one appears. Its only view of the dashboard is
+// internal/webproc, which runs the other binary, probes it over HTTP and
+// reads the marker it leaves on disk.
+//
+// This process owns writes to the backlog. The dashboard only reads, in a
+// process of its own, which is why it outlives the agent.
 package app
 
 import (
 	"context"
 	_ "embed"
 	"encoding/base64"
-	"errors"
-	"fmt"
 	"io"
 	"log"
-	"net/http"
 	"os"
 	"slices"
 	"sync"
@@ -20,7 +25,7 @@ import (
 	"github.com/gpayer/mcp-task-manager/internal/config"
 	"github.com/gpayer/mcp-task-manager/internal/project"
 	"github.com/gpayer/mcp-task-manager/internal/tools"
-	"github.com/gpayer/mcp-task-manager/internal/web"
+	"github.com/gpayer/mcp-task-manager/internal/webproc"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -31,13 +36,10 @@ var iconPNG []byte
 //go:embed instructions.md
 var instructionsMD string
 
-// The only place allowed to know both packages, so the interface and its one
-// real implementation are checked against each other exactly once.
-var _ tools.WebStarter = (*web.Controller)(nil)
-
-// shutdownGrace is how long the HTTP listener gets to drain once the process
-// is stopping.
-const shutdownGrace = 5 * time.Second
+// The interface and its one real implementation, checked against each other
+// exactly once. Since the split that implementation runs another program
+// rather than binding a listener here.
+var _ tools.WebStarter = (*webproc.Spawner)(nil)
 
 // Options are the effective settings a run was started with.
 type Options struct {
@@ -62,41 +64,33 @@ func (o Options) logger() *log.Logger {
 func RunMCP(ctx context.Context, opts Options) error {
 	logger := opts.logger()
 
-	// The controller has to exist before the tool set is built - a tool set
-	// built around a nil controller would still register start_web_ui, and
-	// calling it would dereference nothing.
+	// The spawner has to exist before the tool set is built - a tool set
+	// built around a nil one would still register start_web_ui, and calling
+	// it would dereference nothing. It is cheap and stateless: until a
+	// project is resolved it has no backlog to serve and says so.
 	var srv *server.MCPServer
 	resolver := newLazyResolver(&srv)
-	sessions := newSessions(logger)
-	controller := web.NewController(web.Deps{Sessions: sessions, Logger: logger}, opts.Web.Addr)
-	srv = newServerFor(resolver, controller)
+	spawner := &webproc.Spawner{Addr: opts.Web.Addr, Logger: logger}
+	srv = newServerFor(resolver, spawner)
 
-	// Resolving the project is also what publishes it on the dashboard, so
-	// a board exists the moment the first tool call lands - and the URL the
-	// operator needs is logged there rather than guessed.
+	// Resolving the project is what tells the spawner which backlog to
+	// serve. Nothing is published into a registry any more: the dashboard
+	// owns its own, in its own process.
 	resolver.OnResolve(func(resolved *project.Resolved) {
-		sess, err := sessions.Adopt(resolved)
-		if err != nil {
-			logger.Printf("could not publish the project on the dashboard: %v", err)
-			return
+		spawner.TasksDir = resolved.Config.TasksDir()
+		spawner.User = resolved.Service.UserName()
+		if url, running := spawner.URL(); running {
+			path, _ := spawner.SessionPath(spawner.TasksDir)
+			logger.Printf("dashboard: %s%s/", url, path)
 		}
-		if url, running := controller.URL(); running {
-			logger.Printf("dashboard: %s%s/", url, sess.Base())
+		if opts.Web.Enabled {
+			startDashboard(logger, spawner)
 		}
 	})
 
-	if opts.Web.Enabled {
-		// The dashboard is an extra, not a dependency: if the port is taken,
-		// say so and keep serving MCP.
-		if url, _, err := controller.Start(""); err != nil {
-			logger.Printf("could not start the dashboard: %v", err)
-		} else {
-			// No project is resolved yet, so this is the workspace list.
-			// The board's own URL is logged by the OnResolve above.
-			logger.Printf("dashboard: %s/ (workspaces)", url)
-		}
-	}
-	defer shutdown(controller)
+	// Nothing is deferred: the dashboard is a separate process and outlives
+	// this one on purpose. Restarting the agent must neither kill the board
+	// nor start a second one.
 
 	// Replacing server.ServeStdio: its own signal handling would compete with
 	// the caller's context, and its context is unreachable from here.
@@ -105,71 +99,25 @@ func RunMCP(ctx context.Context, opts Options) error {
 	return stdio.Listen(ctx, os.Stdin, os.Stdout)
 }
 
-// RunWeb serves the dashboard in the foreground, and MCP alongside it when
-// the config asks for that.
+// startDashboard brings the dashboard up for a resolved project. The
+// dashboard is an extra, not a dependency: anything that goes wrong is logged
+// and MCP keeps serving tools.
 //
-// Unlike RunMCP it resolves the project eagerly: an unresolvable project or an
-// occupied port is a startup error the operator sees immediately, not a
-// surprise on the first request.
-func RunWeb(ctx context.Context, opts Options) error {
-	logger := opts.logger()
-
-	cfg, err := config.Load()
+// It runs on resolution rather than at startup because the child has to be
+// told which backlog to serve, and before resolution there is none - the MCP
+// roots step needs a client session.
+func startDashboard(logger *log.Logger, spawner *webproc.Spawner) {
+	url, already, err := spawner.Start("")
 	if err != nil {
-		return fmt.Errorf("load config: %w", err)
+		logger.Printf("could not start the dashboard: %v", err)
+		return
 	}
-	resolved, err := project.Build(cfg)
-	if err != nil {
-		return fmt.Errorf("resolve project: %w", err)
+	path, _ := spawner.SessionPath(spawner.TasksDir)
+	if already {
+		logger.Printf("dashboard already running: %s%s/", url, path)
+		return
 	}
-	resolver := project.NewStatic(resolved)
-
-	sessions := newSessions(logger)
-	controller := web.NewController(web.Deps{Sessions: sessions, Logger: logger}, opts.Web.Addr)
-
-	// Publish the project before the listener accepts anything, so the very
-	// first request already finds its board.
-	sess, err := sessions.Adopt(resolved)
-	if err != nil {
-		return fmt.Errorf("publish the project on the dashboard: %w", err)
-	}
-
-	url, _, err := controller.Start(opts.Web.Addr)
-	if err != nil {
-		return fmt.Errorf("start dashboard: %w", err)
-	}
-	logger.Printf("%s", resolved.Resolution().Explain())
-	logger.Printf("dashboard: %s%s/", url, sess.Base())
-	logger.Printf("workspaces: %s/", url)
-
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	var wg sync.WaitGroup
-	errs := make(chan error, 2)
-
-	if opts.Web.WithMCP {
-		stdio := server.NewStdioServer(newServerFor(resolver, controller))
-		stdio.SetErrorLogger(log.New(opts.stderr(), "", log.LstdFlags))
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			defer cancel() // stdin closing ends the run, like any other transport
-			errs <- stdio.Listen(ctx, os.Stdin, os.Stdout)
-		}()
-	}
-
-	<-ctx.Done()
-	shutdown(controller)
-	wg.Wait()
-	close(errs)
-
-	for err := range errs {
-		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, io.EOF) {
-			return err
-		}
-	}
-	return nil
+	logger.Printf("dashboard: %s%s/", url, path)
 }
 
 func (o Options) stderr() io.Writer {
@@ -179,43 +127,38 @@ func (o Options) stderr() io.Writer {
 	return o.Stderr
 }
 
-func shutdown(c *web.Controller) {
-	ctx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
-	defer cancel()
-	_ = c.Shutdown(ctx)
-}
+// The roots/list round trip lives here rather than in internal/project: it
+// is the MCP transport asking a client a question, and keeping it out of
+// internal/project is what stops mcp-go being linked into the dashboard
+// binary, which imports that package for BuildReadOnly.
+// defaultRootsTimeout bounds the roots/list round trip. Without it a client
+// that never answers would hang the first tool call indefinitely.
+const defaultRootsTimeout = 5 * time.Second
 
-// newSessions builds the dashboard's workspace registry.
-//
-// The workspace list is the web server's own config file, not a project's:
-// it is cross-project, so it must not depend on which project this process
-// was started from. A failure to read it is logged and not fatal - the
-// dashboard is an extra, and a typo in a personal config file must not stop
-// the MCP server from serving tools.
-func newSessions(logger *log.Logger) *web.Sessions {
-	wf, err := config.LoadWebFile()
-	if err != nil {
-		logger.Printf("could not read the workspace list: %v", err)
-		wf = &config.WebFile{}
+// serverRoots returns a project.RootsFunc backed by the protocol's roots/list request.
+// Clients that did not declare the roots capability make this fail, which the
+// resolver treats as "try the next source".
+func serverRoots(s *server.MCPServer, timeout time.Duration) project.RootsFunc {
+	if timeout <= 0 {
+		timeout = defaultRootsTimeout
 	}
-	return web.NewSessions(web.SessionsConfig{
-		Workspaces: wf.Workspaces,
-		ConfigPath: wf.Path,
-		Problems:   wf.Problems,
-		Logger:     logger,
-		Open:       openWorkspace,
-	})
-}
+	return func(ctx context.Context) ([]string, error) {
+		ctx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
 
-// openWorkspace is the one place a dashboard-picked workspace becomes a
-// project. It goes through BuildReadOnly on purpose: opening a backlog
-// nobody asked to write must not migrate its layout or auto-archive it.
-func openWorkspace(ws config.Workspace) (*project.Resolved, error) {
-	cfg, err := config.LoadForRoot(ws.Path, ws.TasksDir)
-	if err != nil {
-		return nil, err
+		result, err := s.RequestRoots(ctx, mcp.ListRootsRequest{})
+		if err != nil {
+			return nil, err
+		}
+
+		var paths []string
+		for _, root := range result.Roots {
+			if p := project.PathFromURI(root.URI); p != "" {
+				paths = append(paths, p)
+			}
+		}
+		return paths, nil
 	}
-	return project.BuildReadOnly(cfg)
 }
 
 // newLazyResolver returns a resolver whose roots step asks the client through
@@ -223,7 +166,7 @@ func openWorkspace(ws config.Workspace) (*project.Resolved, error) {
 // controller be built from resolver.Current before the server exists.
 func newLazyResolver(srv **server.MCPServer) *project.Resolver {
 	return project.NewResolver(func(ctx context.Context) ([]string, error) {
-		return project.ServerRoots(*srv, project.DefaultRootsTimeout)(ctx)
+		return serverRoots(*srv, defaultRootsTimeout)(ctx)
 	})
 }
 

@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/gpayer/mcp-task-manager/internal/config"
+	"github.com/gpayer/mcp-task-manager/internal/testsupport"
+	"github.com/gpayer/mcp-task-manager/internal/webproc"
 )
 
 // serveProject points resolution at a temp backlog holding one task.
@@ -47,8 +49,13 @@ func freeAddr(t *testing.T) string {
 	return ln.Addr().String()
 }
 
+// TestServeWebServesTheBoardAndReturnsOnCancel now covers the forwarder:
+// since the split, `serve web` locates mcp-task-manager-web and runs it in
+// the foreground, so this exercises the whole chain - the CLI, the locator,
+// and the dashboard binary itself.
 func TestServeWebServesTheBoardAndReturnsOnCancel(t *testing.T) {
 	serveProject(t)
+	t.Setenv(webproc.EnvBinary, testsupport.BuildDashboard(t))
 	addr := freeAddr(t)
 
 	var stdout, stderr bytes.Buffer
@@ -91,8 +98,12 @@ func TestServeWebServesTheBoardAndReturnsOnCancel(t *testing.T) {
 	}
 }
 
+// TestServeWebBadAddrExitsNonZero: the forwarder passes the child's exit code
+// through, and the child's stderr is the terminal's, so an occupied port is
+// still a visible, non-zero failure.
 func TestServeWebBadAddrExitsNonZero(t *testing.T) {
 	serveProject(t)
+	t.Setenv(webproc.EnvBinary, testsupport.BuildDashboard(t))
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -105,11 +116,33 @@ func TestServeWebBadAddrExitsNonZero(t *testing.T) {
 		[]string{"mcp-task-manager", "serve", "web", "--addr", ln.Addr().String()},
 		&stdout, &stderr)
 
-	if code != 1 {
-		t.Errorf("serve web on an occupied port exit code = %d, want 1", code)
+	if code == 0 {
+		t.Errorf("serve web on an occupied port exit code = 0, want non-zero (stderr: %q)", stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "Error:") {
-		t.Errorf("stderr = %q, want an error message", stderr.String())
+	if !strings.Contains(stderr.String(), "start dashboard") {
+		t.Errorf("stderr = %q, want the child's bind failure", stderr.String())
+	}
+}
+
+// TestServeWebWithoutTheBinarySaysWhereItLooked: the dashboard is a second
+// artefact now, so the most likely failure is simply not having installed it.
+func TestServeWebWithoutTheBinarySaysWhereItLooked(t *testing.T) {
+	serveProject(t)
+	// An override pointing at nothing, and a PATH with no dashboard on it.
+	t.Setenv(webproc.EnvBinary, filepath.Join(t.TempDir(), "absent"))
+	t.Setenv("PATH", t.TempDir())
+
+	var stdout, stderr bytes.Buffer
+	code := RunWithContext(context.Background(),
+		[]string{"mcp-task-manager", "serve", "web"}, &stdout, &stderr)
+
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	for _, want := range []string{"mcp-task-manager-web", webproc.EnvBinary, "go install"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Errorf("stderr = %q, want %q in it", stderr.String(), want)
+		}
 	}
 }
 

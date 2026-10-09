@@ -166,6 +166,17 @@ func (s *Service) BranchingEnabled() bool {
 	return s.git != nil
 }
 
+// UserName is the user per-user state belongs to: the sanitized local part of
+// the git email, else the OS user. It is the directory name under
+// <tasks_dir>/.users/, which is what a caller wanting to read or write
+// something beside the current-task pointer needs.
+//
+// Deliberately unlocked, like Config and BranchingEnabled: s.identity is
+// write-once, assigned in NewService.
+func (s *Service) UserName() string {
+	return s.identity.Name
+}
+
 // EnsureProjectExists checks that a project was found during config loading.
 // Should be called before read operations.
 //
