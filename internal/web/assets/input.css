@@ -137,8 +137,9 @@
   /* Done-column statistics. A bar is an inline SVG whose viewBox is the
    * row's total, so segment widths are task counts and the browser scales
    * them: Go never computes geometry and no style attribute is needed.
-   * Segments use the column dot colours; the part closed in the last 24 h
-   * is a light emerald over the end of done. */
+   * Segments use the column dot colours; the part closed inside the card's
+   * recent window is a light emerald over the end of done, and the part
+   * created inside its new window a sky blue over the start of todo. */
   .stats-card { @apply rounded-lg border border-white/10 bg-neutral-900/60 p-3; }
   .stats-title { @apply text-[11px] font-medium uppercase tracking-wider text-neutral-400; }
   .stats-row  { @apply mt-2; }
@@ -147,7 +148,13 @@
   .bar-recent      { fill: var(--color-emerald-200); }
   .bar-in_progress { fill: var(--color-amber-400); }
   .bar-todo        { fill: var(--color-neutral-500); }
+  /* The arrivals: todo tasks created inside the card's new_hours window,
+   * over the START of the todo run, so a bar reads left to right as
+   * "shipped | shipped just now | in flight | just arrived | still waiting".
+   * Sky, because it collides with none of emerald, amber or neutral. */
+  .bar-new         { fill: var(--color-sky-400); }
   .stats-recent    { color: var(--color-emerald-300); }
+  .stats-new       { color: var(--color-sky-300); }
   /* Lines cards. The viewBox is the data range - 2 units per day, counts
    * high, one nested svg per scale (per day, running total) - so Go prints
    * integers and the browser stretches them; non-scaling-stroke keeps the

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"io/fs"
 	"net/http"
@@ -798,9 +799,11 @@ func TestStatsBarsTooltipNamesTheColours(t *testing.T) {
 
 	body := get(t, h, "/board").Body.String()
 	// Task 4 (medium bug) is done and closed just now, task 5 is a medium
-	// todo one: 1 done, 1 of them recent, 0 in progress, 1 to do.
-	const want = "<title>medium: 1 done (green), 1 of them in the last 24 h (light green), " +
-		"0 in progress (amber), 1 to do (grey)</title>"
+	// todo one created just now: 1 done, 1 of them recent, 0 in progress,
+	// 1 to do, 1 of them fresh. The title names both windows, which it
+	// could not do while one of them was a constant.
+	const want = "<title>medium: 1 done (green), 1 of them closed in the last 24 h (light green), " +
+		"0 in progress (amber), 1 to do (grey), 1 of them created in the last 24 h (blue)</title>"
 	if !strings.Contains(body, want) {
 		t.Errorf("the medium bar lacks %s", want)
 	}
@@ -2324,5 +2327,78 @@ func TestGoneFragmentClearsTheIndicator(t *testing.T) {
 	}
 	if strings.Contains(body, "hx-trigger") {
 		t.Error("the gone fragment started polling again")
+	}
+}
+
+// TestStatsBarsDrawTheArrivals is the segment through the route: a bar whose
+// todo tasks arrived inside the window carries the fifth colour over the
+// start of its todo run, and the row says how many.
+func TestStatsBarsDrawTheArrivals(t *testing.T) {
+	h, svc, _ := newTestHandler(t)
+	// Two fresh todo tasks of one priority, plus one in progress, so the
+	// todo run has a start that is not the bar's start.
+	testsupport.Seed(t, svc,
+		testsupport.TaskSpec{ID: "1", Title: "Fresh one", Priority: "high"},
+		testsupport.TaskSpec{ID: "2", Title: "Fresh two", Priority: "high"},
+		testsupport.TaskSpec{ID: "3", Title: "Moving", Priority: "high", Status: "in_progress"},
+	)
+
+	body := get(t, h, "/board").Body.String()
+	row := sectionAfter(t, body, `data-value="high"`)
+
+	// 3 total, 1 in progress, 2 todo: the todo run starts at 1 and the
+	// arrivals cover all of it.
+	for _, want := range []string{
+		`<rect class="bar-new" x="1" width="2" height="1"/>`,
+		`<span class="stats-new">2 new</span>`,
+	} {
+		if !strings.Contains(row, want) {
+			t.Errorf("the high row is missing %q\nrow: %s", want, row)
+		}
+	}
+	// The bar's width did not change: the arrivals are inside todo, not a
+	// sixth column of the stack.
+	if !strings.Contains(row, `viewBox="0 0 3 1"`) {
+		t.Errorf("the bar's viewBox is not the total: %s", row)
+	}
+}
+
+// TestStatsBarsWithoutArrivalsDrawNeither keeps both the rect and the clause
+// off a row that has nothing fresh, like every other segment.
+func TestStatsBarsWithoutArrivalsDrawNeither(t *testing.T) {
+	h, svc, dir := newTestHandler(t)
+	testsupport.Seed(t, svc, testsupport.TaskSpec{ID: "1", Title: "Stale", Priority: "low"})
+	// Backdate it past the window, on disk, and let the index notice.
+	ageTask(t, dir, "1", 72*time.Hour)
+
+	row := sectionAfter(t, get(t, h, "/board").Body.String(), `data-value="low"`)
+	if strings.Contains(row, "bar-new") {
+		t.Errorf("a stale row drew the arrivals rect: %s", row)
+	}
+	if strings.Contains(row, "new</span>") {
+		t.Errorf("a stale row drew the arrivals clause: %s", row)
+	}
+	// And it still draws the todo segment it does have.
+	if !strings.Contains(row, "bar-todo") {
+		t.Errorf("the todo segment is gone: %s", row)
+	}
+}
+
+// ageTask rewrites a task's created_at to be ago in the past, the way a
+// backlog that has been running for a while looks.
+func ageTask(t *testing.T, dir, id string, ago time.Duration) {
+	t.Helper()
+	path := filepath.Join(dir, id, id+".md")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	stamp := time.Now().Add(-ago).UTC().Format(time.RFC3339)
+	out := regexp.MustCompile(`(?m)^created_at:.*$`).ReplaceAll(raw, []byte("created_at: "+stamp))
+	if bytes.Equal(raw, out) {
+		t.Fatalf("no created_at in %s", path)
+	}
+	if err := os.WriteFile(path, out, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
 	}
 }

@@ -154,19 +154,31 @@ const statsSplitColors = 8
 
 // StatsBarView is one value's row of a bars card. Every number is a task
 // count: the bar is an SVG whose viewBox is Total wide, so the browser
-// scales the segments and Go never computes geometry. Recent (closed in the
-// last 24 h) is part of Done and drawn over its end, from RecentX; Open is
-// InProgress + Todo, and TodoX is where the todo segment starts.
+// scales the segments and Go never computes geometry.
+//
+// The two highlights are mirror images. Recent (closed inside the card's
+// recent window) is part of Done and painted over its end, from RecentX. New
+// (created inside the card's new window and still waiting) is part of Todo
+// and painted over its start - which is TodoX, already here for the todo
+// segment itself, so the arrivals need no offset of their own. Open is
+// InProgress + Todo.
+//
+// RecentHours and NewHours are the windows in hours. They are the only
+// numbers here that are not counts, and they are labels: the <title> names
+// each window, which it could not do while one of them was a constant.
 type StatsBarView struct {
-	Value      string
-	Total      int
-	Done       int
-	InProgress int
-	Todo       int
-	Recent     int
-	Open       int
-	RecentX    int
-	TodoX      int
+	Value       string
+	Total       int
+	Done        int
+	InProgress  int
+	Todo        int
+	Recent      int
+	New         int
+	Open        int
+	RecentX     int
+	TodoX       int
+	RecentHours int
+	NewHours    int
 }
 
 // PhaseLaneView is one workflow-phase lane inside In progress. Phase is
@@ -650,6 +662,16 @@ func newPhaseLanes(roots []*CardView, snap *task.BoardSnapshot) []PhaseLaneView 
 }
 
 // newStatsCards maps the snapshot's statistics cards, in config order.
+// hours defaults a window a card never named, the way internal/task does for
+// the counting side, so a hand-built card labels itself correctly instead of
+// claiming a window of zero hours.
+func hours(h int) int {
+	if h <= 0 {
+		return config.DefaultStatsHours
+	}
+	return h
+}
+
 func newStatsCards(cards []task.StatsCard) []StatsCardView {
 	var out []StatsCardView
 	for _, c := range cards {
@@ -673,9 +695,13 @@ func newStatsCards(cards []task.StatsCard) []StatsCardView {
 				InProgress: b.InProgress,
 				Todo:       b.Todo,
 				Recent:     b.ClosedRecently,
+				New:        b.CreatedRecently,
 				Open:       b.InProgress + b.Todo,
 				RecentX:    b.Done - b.ClosedRecently,
-				TodoX:      b.Done + b.InProgress,
+				// No offset for New: it starts where todo does.
+				TodoX:       b.Done + b.InProgress,
+				RecentHours: hours(c.RecentHours),
+				NewHours:    hours(c.NewHours),
 			})
 		}
 		out = append(out, card)

@@ -736,18 +736,43 @@ func TestStatsCardsKeepConfigOrder(t *testing.T) {
 }
 
 func TestStatsBarOffsets(t *testing.T) {
+	const h = config.DefaultStatsHours
 	cards := newStatsCards([]task.StatsCard{{Kind: config.StatsKindBars, Bars: []task.StatsBar{
-		{Value: "full", Total: 12, Done: 7, InProgress: 3, Todo: 2, ClosedRecently: 2},
+		{Value: "full", Total: 12, Done: 7, InProgress: 3, Todo: 2, ClosedRecently: 2, CreatedRecently: 1},
 		{Value: "done-only", Total: 4, Done: 4},
-		{Value: "open-only", Total: 3, InProgress: 1, Todo: 2},
+		{Value: "open-only", Total: 3, InProgress: 1, Todo: 2, CreatedRecently: 2},
 	}}})
 	want := []StatsBarView{
-		{Value: "full", Total: 12, Done: 7, InProgress: 3, Todo: 2, Recent: 2, Open: 5, RecentX: 5, TodoX: 10},
-		{Value: "done-only", Total: 4, Done: 4, RecentX: 4, TodoX: 4},
-		{Value: "open-only", Total: 3, InProgress: 1, Todo: 2, Open: 3, TodoX: 1},
+		{Value: "full", Total: 12, Done: 7, InProgress: 3, Todo: 2, Recent: 2, New: 1,
+			Open: 5, RecentX: 5, TodoX: 10, RecentHours: h, NewHours: h},
+		{Value: "done-only", Total: 4, Done: 4, RecentX: 4, TodoX: 4, RecentHours: h, NewHours: h},
+		{Value: "open-only", Total: 3, InProgress: 1, Todo: 2, New: 2,
+			Open: 3, TodoX: 1, RecentHours: h, NewHours: h},
 	}
 	if !slices.Equal(cards[0].Bars, want) {
 		t.Errorf("bars = %+v\nwant %+v", cards[0].Bars, want)
+	}
+	// The arrivals need no offset of their own: they start where todo does,
+	// which is what keeps geometry out of Go.
+	for _, b := range cards[0].Bars {
+		if b.New > b.Todo {
+			t.Errorf("%s: New %d exceeds Todo %d", b.Value, b.New, b.Todo)
+		}
+		if b.TodoX+b.Todo > b.Total {
+			t.Errorf("%s: the todo run ends past the viewBox", b.Value)
+		}
+	}
+}
+
+// TestStatsBarWindowsAreLabelled: the windows travel to the view as labels,
+// and a card that named them keeps them.
+func TestStatsBarWindowsAreLabelled(t *testing.T) {
+	cards := newStatsCards([]task.StatsCard{{
+		Kind: config.StatsKindBars, RecentHours: 48, NewHours: 168,
+		Bars: []task.StatsBar{{Value: "x", Total: 1, Todo: 1, CreatedRecently: 1}},
+	}})
+	if got := cards[0].Bars[0]; got.RecentHours != 48 || got.NewHours != 168 {
+		t.Errorf("windows = %d/%d, want 48/168", got.RecentHours, got.NewHours)
 	}
 }
 

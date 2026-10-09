@@ -65,7 +65,9 @@ func TestAppCSSDefinesStatsClasses(t *testing.T) {
 	}
 	for _, w := range []string{
 		".stats-card{", ".stats-title{", ".stats-row{", ".stats-bar{", ".stats-recent{",
-		".bar-done{", ".bar-recent{", ".bar-in_progress{", ".bar-todo{",
+		".bar-done{",
+		".bar-new{",
+		".stats-new{", ".bar-recent{", ".bar-in_progress{", ".bar-todo{",
 		"--color-emerald-200:",
 		".stats-chart{", ".stats-chart svg{", ".stats-line{", ".stats-off{", ".stats-day{",
 		".stats-legend{", ".stats-legend-item{", ".stats-legend-item[aria-pressed=false]{", ".stats-swatch{",

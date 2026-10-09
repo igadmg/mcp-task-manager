@@ -23,6 +23,12 @@ type StatsCard struct {
 	Field string
 	// Bars holds a bars card's rows: one per value present, in value order.
 	Bars []StatsBar
+	// RecentHours and NewHours are the windows Bars was counted with, in
+	// hours. They ride along because a reader has to be told what
+	// "recently" meant - the bar's title names both - and because they are
+	// per card now rather than one constant.
+	RecentHours int
+	NewHours    int
 	// Days holds a lines card's days: the start (local midnight) of each,
 	// oldest first, today last.
 	Days []time.Time
@@ -37,9 +43,13 @@ type StatsBar struct {
 	Done       int
 	InProgress int
 	Todo       int
-	// ClosedRecently counts the done tasks closed in the last 24 h; it is
-	// part of Done.
+	// ClosedRecently counts the done tasks closed inside the card's
+	// recent_hours window; it is part of Done, drawn over the end of it.
 	ClosedRecently int
+	// CreatedRecently is its mirror: the todo tasks created inside the
+	// card's new_hours window. It is part of Todo, drawn over the start of
+	// it, so one bar shows what arrived and what left.
+	CreatedRecently int
 }
 
 // StatsLine is one line of a lines card.
@@ -55,9 +65,6 @@ type StatsLine struct {
 	Cumulative bool
 }
 
-// statsRecent is the window ClosedRecently counts.
-const statsRecent = 24 * time.Hour
-
 // computeStats computes every card over all (the active index, subtasks
 // included). types is the configured task_types order; now is the instant
 // the 24 h window ends at, and its Location() is the zone the days are
@@ -69,7 +76,10 @@ func computeStats(all []*Task, cards []config.StatsCard, types []string, now tim
 		switch c.Kind {
 		case config.StatsKindBars:
 			card.Field = c.Field
-			card.Bars = statsBars(all, c.Field, types, now)
+			recent, fresh := statsWindow(c.RecentHours), statsWindow(c.NewHours)
+			card.RecentHours = int(recent / time.Hour)
+			card.NewHours = int(fresh / time.Hour)
+			card.Bars = statsBars(all, c.Field, types, now, recent, fresh)
 		case config.StatsKindLines:
 			card.Field = c.SplitBy
 			card.Days, card.Lines = statsLines(all, c, types, now)
@@ -79,7 +89,21 @@ func computeStats(all []*Task, cards []config.StatsCard, types []string, now tim
 	return out
 }
 
-func statsBars(all []*Task, field string, types []string, now time.Time) []StatsBar {
+// statsWindow turns a card's hours into a duration, defaulting a value that
+// was never written. config.DoneStatsCards normalizes this already, so this is
+// for a card built by hand - a test, or a consumer that skipped the config -
+// and it reads the default from internal/config so the number has one home.
+func statsWindow(hours int) time.Duration {
+	if hours <= 0 {
+		hours = config.DefaultStatsHours
+	}
+	return time.Duration(hours) * time.Hour
+}
+
+// statsBars counts one bars card's rows. recent and fresh are the two
+// highlight windows: recent for the closures over the end of done, fresh for
+// the arrivals over the start of todo.
+func statsBars(all []*Task, field string, types []string, now time.Time, recent, fresh time.Duration) []StatsBar {
 	rows := make(map[string]*StatsBar)
 	for _, t := range all {
 		v, ok := statsValue(t, field)
@@ -95,13 +119,19 @@ func statsBars(all []*Task, field string, types []string, now time.Time) []Stats
 		switch t.Status {
 		case StatusDone:
 			row.Done++
-			if ct := closeTime(t); ct.After(now.Add(-statsRecent)) && !ct.After(now) {
+			if ct := closeTime(t); ct.After(now.Add(-recent)) && !ct.After(now) {
 				row.ClosedRecently++
 			}
 		case StatusInProgress:
 			row.InProgress++
 		case StatusTodo:
 			row.Todo++
+			// The mirror of the clause above, including excluding a
+			// future timestamp: a task dated tomorrow has not
+			// arrived yet.
+			if ct := t.CreatedAt; ct.After(now.Add(-fresh)) && !ct.After(now) {
+				row.CreatedRecently++
+			}
 		}
 	}
 

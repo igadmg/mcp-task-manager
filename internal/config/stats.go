@@ -27,6 +27,12 @@ const (
 // DefaultStatsDays is the window of a lines card that names none.
 const DefaultStatsDays = 14
 
+// DefaultStatsHours is a bars card's highlight window when it names none, for
+// both ends of the bar: the closures over the end of done, and the arrivals
+// over the start of todo. One default for both, because the two are the same
+// feature seen from its two ends.
+const DefaultStatsHours = 24
+
 // statsKinds, statsFieldNames and statsLineNames are the vocabularies a
 // written card is checked against. The behaviour behind every field and line
 // name lives in internal/task, which imports this package and so cannot be
@@ -116,6 +122,14 @@ func statsCardProblems(c, written StatsCard) []string {
 		case !slices.Contains(statsFieldNames, c.Field):
 			out = append(out, fmt.Sprintf("unknown field %q (one of %s); the card stays empty", c.Field, oneOf(statsFieldNames)))
 		}
+		// Like days: only a negative value proves the key was written,
+		// since yaml decodes an absent key and a written 0 alike.
+		if written.RecentHours < 0 {
+			out = append(out, fmt.Sprintf("recent_hours: %d is not a positive number; using %d", written.RecentHours, c.RecentHours))
+		}
+		if written.NewHours < 0 {
+			out = append(out, fmt.Sprintf("new_hours: %d is not a positive number; using %d", written.NewHours, c.NewHours))
+		}
 	case StatsKindLines:
 		// Only a negative value proves the key was written: yaml decodes
 		// an absent days and `days: 0` alike, so 0 stays a silent default.
@@ -183,6 +197,15 @@ type StatsCard struct {
 	Title string `yaml:"title,omitempty"`
 	// Field is the task field a bars card groups on.
 	Field string `yaml:"field,omitempty"`
+	// RecentHours is a bars card's outflow window: the done tasks closed
+	// inside it are highlighted over the end of the done run.
+	RecentHours int `yaml:"recent_hours,omitempty"`
+	// NewHours is a bars card's inflow window: the todo tasks created
+	// inside it are highlighted over the start of the todo run. It is a
+	// separate key from RecentHours on purpose - arrivals and departures
+	// are interesting at different scales ("created in the last week and
+	// still waiting" against "closed since yesterday").
+	NewHours int `yaml:"new_hours,omitempty"`
 	// Days is a lines card's window, today included.
 	Days int `yaml:"days,omitempty"`
 	// Lines are the line names of a lines card without split_by.
@@ -262,7 +285,16 @@ func normalizeStatsCard(c StatsCard) StatsCard {
 	var key []string
 	switch c.Kind {
 	case StatsKindBars:
+		if c.RecentHours <= 0 {
+			c.RecentHours = DefaultStatsHours
+		}
+		if c.NewHours <= 0 {
+			c.NewHours = DefaultStatsHours
+		}
 		title = humanize(c.Field)
+		// Deliberately NOT the windows: a bars card's id is its identity
+		// on the board and the key viewer state is stored under, so
+		// changing a window must not rename the card.
 		key = []string{c.Kind, c.Field}
 	case StatsKindLines:
 		if c.Days <= 0 {

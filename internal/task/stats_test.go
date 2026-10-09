@@ -388,3 +388,93 @@ func TestStatsLineNamesMatchConfig(t *testing.T) {
 		}
 	}
 }
+
+// createdAt dates a task, which is what the arrivals segment counts.
+func createdAt(t *Task, at time.Time) *Task {
+	t.CreatedAt = at
+	return t
+}
+
+// TestStatsBarsCreatedRecentlyWindow is the mirror of
+// TestStatsBarsClosedRecentlyWindow: the arrivals segment counts todo tasks
+// created inside the window, excludes a future date the same way, and counts
+// only tasks that are still waiting.
+func TestStatsBarsCreatedRecentlyWindow(t *testing.T) {
+	inside := createdAt(st(StatusTodo, PriorityLow, "bug"), statsNow.Add(-time.Hour))
+	atNow := createdAt(st(StatusTodo, PriorityLow, "bug"), statsNow)
+	// Exactly on the boundary is outside: the comparison is strictly After.
+	edge := createdAt(st(StatusTodo, PriorityLow, "bug"), statsNow.Add(-24*time.Hour))
+	older := createdAt(st(StatusTodo, PriorityLow, "bug"), statsNow.Add(-48*time.Hour))
+	// A task dated tomorrow has not arrived yet.
+	future := createdAt(st(StatusTodo, PriorityLow, "bug"), statsNow.Add(time.Hour))
+	// Created a minute ago but already moving, or already done: not waiting.
+	started := createdAt(st(StatusInProgress, PriorityLow, "bug"), statsNow.Add(-time.Minute))
+	finished := closedAt(createdAt(st("", PriorityLow, "bug"), statsNow.Add(-time.Minute)), statsNow)
+
+	all := []*Task{inside, atNow, edge, older, future, started, finished}
+	card := oneCard(t, all, barsCard("priority"), statsNow)
+	bar := card.Bars[0]
+
+	if bar.CreatedRecently != 2 {
+		t.Errorf("CreatedRecently = %d, want 2 (inside and at now)", bar.CreatedRecently)
+	}
+	if bar.Todo != 5 {
+		t.Errorf("Todo = %d, want 5", bar.Todo)
+	}
+	// The two invariants the task asks for.
+	if bar.CreatedRecently > bar.Todo {
+		t.Errorf("CreatedRecently %d exceeds Todo %d", bar.CreatedRecently, bar.Todo)
+	}
+	if sum := bar.Done + bar.InProgress + bar.Todo; sum != bar.Total {
+		t.Errorf("Done+InProgress+Todo = %d, want Total %d", sum, bar.Total)
+	}
+}
+
+// TestStatsBarsWindowsAreHonoured: both windows come from the card, and they
+// are independent of each other.
+func TestStatsBarsWindowsAreHonoured(t *testing.T) {
+	// Two days back: outside a 24 h window, inside a 72 h one.
+	waiting := createdAt(st(StatusTodo, PriorityLow, "bug"), statsNow.Add(-48*time.Hour))
+	shipped := closedAt(st("", PriorityLow, "bug"), statsNow.Add(-48*time.Hour))
+
+	all := []*Task{waiting, shipped}
+
+	// Defaults: 24 h on both ends, so neither is highlighted.
+	base := oneCard(t, all, barsCard("priority"), statsNow).Bars[0]
+	if base.CreatedRecently != 0 || base.ClosedRecently != 0 {
+		t.Errorf("with the default window: created=%d closed=%d, want 0 and 0",
+			base.CreatedRecently, base.ClosedRecently)
+	}
+
+	// A wider arrivals window picks up the waiting task and only that.
+	card := barsCard("priority")
+	card.NewHours = 72
+	wide := oneCard(t, all, card, statsNow).Bars[0]
+	if wide.CreatedRecently != 1 {
+		t.Errorf("new_hours: 72 → CreatedRecently = %d, want 1", wide.CreatedRecently)
+	}
+	if wide.ClosedRecently != 0 {
+		t.Errorf("new_hours must not widen the closures window: ClosedRecently = %d", wide.ClosedRecently)
+	}
+
+	// And the other end, independently.
+	card = barsCard("priority")
+	card.RecentHours = 72
+	other := oneCard(t, all, card, statsNow).Bars[0]
+	if other.ClosedRecently != 1 {
+		t.Errorf("recent_hours: 72 → ClosedRecently = %d, want 1", other.ClosedRecently)
+	}
+	if other.CreatedRecently != 0 {
+		t.Errorf("recent_hours must not widen the arrivals window: CreatedRecently = %d", other.CreatedRecently)
+	}
+}
+
+// TestStatsBarsZeroWindowIsTheDefault: a card built by hand, or one that
+// skipped the config's normalization, must not silently highlight nothing.
+func TestStatsBarsZeroWindowIsTheDefault(t *testing.T) {
+	fresh := createdAt(st(StatusTodo, PriorityLow, "bug"), statsNow.Add(-time.Hour))
+	card := barsCard("priority") // RecentHours and NewHours are both 0 here
+	if got := oneCard(t, []*Task{fresh}, card, statsNow).Bars[0].CreatedRecently; got != 1 {
+		t.Errorf("CreatedRecently = %d with an unset window, want the 24 h default to apply", got)
+	}
+}

@@ -161,7 +161,8 @@ func TestStatsProblemsDoNotChangeTheCards(t *testing.T) {
 
 	// The decision: report, never fail, never drop. The card is kept and
 	// normalized exactly as it would be without any validation.
-	want := []StatsCard{{ID: "bars-prioriry", Kind: StatsKindBars, Title: "Prioriry", Field: "prioriry"}}
+	want := []StatsCard{{ID: "bars-prioriry", Kind: StatsKindBars, Title: "Prioriry", Field: "prioriry",
+		RecentHours: DefaultStatsHours, NewHours: DefaultStatsHours}}
 	if got := cfg.Web.DoneStats.Cards; !reflect.DeepEqual(got, want) {
 		t.Errorf("Cards = %+v, want %+v", got, want)
 	}
@@ -199,5 +200,79 @@ func TestStatsProblemString(t *testing.T) {
 	p := StatsCardProblem{Index: 2, ID: "lines-14d", Detail: "something is off"}
 	if got, want := p.String(), "web.done_stats.cards[2] (lines-14d): something is off"; got != want {
 		t.Errorf("String() = %q, want %q", got, want)
+	}
+}
+
+// TestStatsBarWindowProblems: a negative window is reported and normalized,
+// like a negative days - and a written 0 is not, because yaml cannot tell it
+// from an absent key.
+func TestStatsBarWindowProblems(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		written StatsCard
+		want    []string
+	}{
+		{
+			"negative recent_hours",
+			StatsCard{Kind: StatsKindBars, Field: "priority", RecentHours: -1},
+			[]string{"recent_hours: -1 is not a positive number; using 24"},
+		},
+		{
+			"negative new_hours",
+			StatsCard{Kind: StatsKindBars, Field: "priority", NewHours: -9},
+			[]string{"new_hours: -9 is not a positive number; using 24"},
+		},
+		{
+			"both negative, reported once each",
+			StatsCard{Kind: StatsKindBars, Field: "priority", RecentHours: -1, NewHours: -2},
+			[]string{
+				"recent_hours: -1 is not a positive number; using 24",
+				"new_hours: -2 is not a positive number; using 24",
+			},
+		},
+		{
+			"a written zero is a silent default",
+			StatsCard{Kind: StatsKindBars, Field: "priority", RecentHours: 0, NewHours: 0},
+			nil,
+		},
+		{
+			"a sensible window says nothing",
+			StatsCard{Kind: StatsKindBars, Field: "priority", RecentHours: 72, NewHours: 168},
+			nil,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			problems := ValidateStatsCards([]StatsCard{tc.written})
+			var got []string
+			for _, p := range problems {
+				got = append(got, p.Detail)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("problems = %q, want %q", got, tc.want)
+			}
+			for i := range tc.want {
+				if got[i] != tc.want[i] {
+					t.Errorf("problem %d = %q, want %q", i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
+
+// TestStatsBarWindowsDoNotTouchTheID is the risk the task flagged: a card's
+// id is derived from its content and is the key viewer state is stored under,
+// so a window must not rename it.
+func TestStatsBarWindowsDoNotTouchTheID(t *testing.T) {
+	plain := normalizeStatsCards([]StatsCard{{Kind: StatsKindBars, Field: "priority"}})
+	tuned := normalizeStatsCards([]StatsCard{{Kind: StatsKindBars, Field: "priority", RecentHours: 72, NewHours: 168}})
+	if plain[0].ID != tuned[0].ID {
+		t.Errorf("id changed with the windows: %q vs %q", plain[0].ID, tuned[0].ID)
+	}
+	if plain[0].ID != "bars-priority" {
+		t.Errorf("id = %q, want bars-priority", plain[0].ID)
+	}
+	// And the title is not a window either.
+	if plain[0].Title != tuned[0].Title {
+		t.Errorf("title changed with the windows: %q vs %q", plain[0].Title, tuned[0].Title)
 	}
 }

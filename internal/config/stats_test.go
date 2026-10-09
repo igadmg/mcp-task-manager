@@ -25,9 +25,12 @@ func resolveDoneStats(t *testing.T, body string) []StatsCard {
 
 func TestDefaultStatsCards(t *testing.T) {
 	want := []StatsCard{
-		{ID: "bars-priority", Kind: StatsKindBars, Title: "Priority", Field: "priority"},
-		{ID: "bars-type", Kind: StatsKindBars, Title: "Type", Field: "type"},
-		{ID: "bars-resolution", Kind: StatsKindBars, Title: "Resolution", Field: "resolution"},
+		{ID: "bars-priority", Kind: StatsKindBars, Title: "Priority", Field: "priority",
+			RecentHours: DefaultStatsHours, NewHours: DefaultStatsHours},
+		{ID: "bars-type", Kind: StatsKindBars, Title: "Type", Field: "type",
+			RecentHours: DefaultStatsHours, NewHours: DefaultStatsHours},
+		{ID: "bars-resolution", Kind: StatsKindBars, Title: "Resolution", Field: "resolution",
+			RecentHours: DefaultStatsHours, NewHours: DefaultStatsHours},
 		{ID: "lines-14d", Kind: StatsKindLines, Title: "Last 14 days", Days: 14, Lines: []string{"created", "closed"}},
 	}
 	if got := DefaultStatsCards(); !reflect.DeepEqual(got, want) {
@@ -96,7 +99,8 @@ func TestDoneStatsPerCardDefaults(t *testing.T) {
 		{
 			"kind inferred from field",
 			"- field: created_by\n",
-			StatsCard{ID: "bars-created-by", Kind: "bars", Title: "Created by", Field: "created_by"},
+			StatsCard{ID: "bars-created-by", Kind: "bars", Title: "Created by", Field: "created_by",
+				RecentHours: DefaultStatsHours, NewHours: DefaultStatsHours},
 		},
 		{
 			"kind inferred without field",
@@ -119,9 +123,34 @@ func TestDoneStatsPerCardDefaults(t *testing.T) {
 			StatsCard{ID: "lines-14d", Kind: "lines", Title: "Last 14 days", Days: 14, Lines: []string{"created", "closed"}},
 		},
 		{
+			"zero and absent windows default to 24 h, on both ends",
+			"- kind: bars\n  field: type\n  recent_hours: 0\n",
+			StatsCard{ID: "bars-type", Kind: "bars", Title: "Type", Field: "type",
+				RecentHours: DefaultStatsHours, NewHours: DefaultStatsHours},
+		},
+		{
+			"written windows kept, and they do not touch the id",
+			"- kind: bars\n  field: type\n  recent_hours: 48\n  new_hours: 168\n",
+			StatsCard{ID: "bars-type", Kind: "bars", Title: "Type", Field: "type",
+				RecentHours: 48, NewHours: 168},
+		},
+		{
+			"negative windows defaulted",
+			"- kind: bars\n  field: type\n  recent_hours: -1\n  new_hours: -9\n",
+			StatsCard{ID: "bars-type", Kind: "bars", Title: "Type", Field: "type",
+				RecentHours: DefaultStatsHours, NewHours: DefaultStatsHours},
+		},
+		{
+			"a lines card gets no bar windows",
+			"- kind: lines\n  days: 7\n",
+			StatsCard{ID: "lines-7d", Kind: "lines", Title: "Last 7 days", Days: 7,
+				Lines: []string{"created", "closed"}},
+		},
+		{
 			"field slugged into the id",
 			"- kind: bars\n  field: Odd Field!\n",
-			StatsCard{ID: "bars-odd-field", Kind: "bars", Title: "Odd Field!", Field: "Odd Field!"},
+			StatsCard{ID: "bars-odd-field", Kind: "bars", Title: "Odd Field!", Field: "Odd Field!",
+				RecentHours: DefaultStatsHours, NewHours: DefaultStatsHours},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

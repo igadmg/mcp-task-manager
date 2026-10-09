@@ -4,14 +4,23 @@
   <div class="stats-row" data-value="{{ .Value }}">
     <div class="flex flex-wrap items-baseline gap-x-2">
       <span class="min-w-0 truncate text-xs text-neutral-300" title="{{ .Value }}">{{ .Value }}</span>
-      <span class="meta ml-auto min-w-0 truncate">{{ .Done }}/{{ .Total }}{{ if .Open }} &middot; {{ .Open }} open{{ end }}{{ if .Recent }} &middot; <span class="stats-recent">+{{ .Recent }}</span>{{ end }}</span>
+      {{/* Four clauses at most, each dropped at zero: the tally, what is
+           open, what left recently (+N) and what arrived recently (N new).
+           A word rather than a glyph for the arrivals - the line already
+           says "open" in words, and an arrow would need explaining. */}}
+      <span class="meta ml-auto min-w-0 truncate">{{ .Done }}/{{ .Total }}{{ if .Open }} &middot; {{ .Open }} open{{ end }}{{ if .Recent }} &middot; <span class="stats-recent">+{{ .Recent }}</span>{{ end }}{{ if .New }} &middot; <span class="stats-new">{{ .New }} new</span>{{ end }}</span>
     </div>
     <svg class="stats-bar" viewBox="0 0 {{ .Total }} 1" preserveAspectRatio="none" role="img">
-      <title>{{ .Value }}: {{ .Done }} done (green), {{ .Recent }} of them in the last 24 h (light green), {{ .InProgress }} in progress (amber), {{ .Todo }} to do (grey)</title>
+      <title>{{ .Value }}: {{ .Done }} done (green), {{ .Recent }} of them closed in the last {{ .RecentHours }} h (light green), {{ .InProgress }} in progress (amber), {{ .Todo }} to do (grey), {{ .New }} of them created in the last {{ .NewHours }} h (blue)</title>
       {{ if .Done }}<rect class="bar-done" x="0" width="{{ .Done }}" height="1"/>{{ end }}
       {{ if .Recent }}<rect class="bar-recent" x="{{ .RecentX }}" width="{{ .Recent }}" height="1"/>{{ end }}
       {{ if .InProgress }}<rect class="bar-in_progress" x="{{ .Done }}" width="{{ .InProgress }}" height="1"/>{{ end }}
       {{ if .Todo }}<rect class="bar-todo" x="{{ .TodoX }}" width="{{ .Todo }}" height="1"/>{{ end }}
+      {{/* The arrivals, painted over the start of the todo run - so recent
+           work sits in the middle of the bar and the stale tail stays at the
+           far right. x is TodoX, the todo segment's own start, which is why
+           this needs no offset of its own. */}}
+      {{ if .New }}<rect class="bar-new" x="{{ .TodoX }}" width="{{ .New }}" height="1"/>{{ end }}
     </svg>
   </div>
   {{ else }}
