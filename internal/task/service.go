@@ -229,13 +229,34 @@ func (s *Service) InitializeReadOnly() error {
 // it is validated and used verbatim as the task's id and directory name,
 // bypassing (and not advancing) the numeric auto-increment counter. If id
 // is empty, the next auto-increment id is allocated as before.
-func (s *Service) Create(title, description string, priority Priority, taskType string, parentID string, id string) (*Task, error) {
+func (s *Service) Create(title, description string, priority Priority, taskType string, parentID string, id string, opts ...CreateOption) (*Task, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.create(title, description, priority, taskType, parentID, id)
+	return s.create(title, description, priority, taskType, parentID, id, opts...)
 }
 
-func (s *Service) create(title, description string, priority Priority, taskType string, parentID string, id string) (*Task, error) {
+// CreateOption carries what a creation may optionally set. It exists so that
+// Create does not grow a seventh positional parameter for every new field,
+// mirroring UpdateOption.
+type CreateOption func(*createOpts)
+
+type createOpts struct {
+	fields map[string]any
+}
+
+// WithCreateFields sets the task's free-form fields. Keys and values go
+// through the same rules an update applies: a reserved or malformed key, or a
+// non-scalar value, fails the creation rather than being dropped.
+func WithCreateFields(fields map[string]any) CreateOption {
+	return func(o *createOpts) { o.fields = fields }
+}
+
+func (s *Service) create(title, description string, priority Priority, taskType string, parentID string, id string, opts ...CreateOption) (*Task, error) {
+	var o createOpts
+	for _, apply := range opts {
+		apply(&o)
+	}
+
 	if title == "" {
 		return nil, fmt.Errorf("title is required")
 	}
@@ -278,6 +299,11 @@ func (s *Service) create(title, description string, priority Priority, taskType 
 		taskID = s.index.NextID()
 	}
 
+	fields, err := MergeFields(nil, o.fields)
+	if err != nil {
+		return nil, err
+	}
+
 	now := time.Now().UTC()
 	t := &Task{
 		ID:          taskID,
@@ -290,6 +316,7 @@ func (s *Service) create(title, description string, priority Priority, taskType 
 		CreatedAt:   now,
 		CreatedBy:   s.identity.Name,
 		UpdatedAt:   now,
+		Fields:      fields,
 	}
 
 	if err := s.storage.Save(t); err != nil {
@@ -302,10 +329,10 @@ func (s *Service) create(title, description string, priority Priority, taskType 
 }
 
 // CreateSubtask creates a subtask under a parent
-func (s *Service) CreateSubtask(title, description string, priority Priority, taskType string, parentID string) (*Task, error) {
+func (s *Service) CreateSubtask(title, description string, priority Priority, taskType string, parentID string, opts ...CreateOption) (*Task, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.create(title, description, priority, taskType, parentID, "")
+	return s.create(title, description, priority, taskType, parentID, "", opts...)
 }
 
 // Get returns a task by ID with full description loaded from disk.
@@ -440,6 +467,7 @@ type updateOpts struct {
 	verified      *bool
 	branch        *branchInfo
 	commitMessage *string
+	fields        map[string]any
 }
 
 // WithResolution closes the task with the given resolution. Naming one implies
@@ -458,6 +486,14 @@ func WithResolutionNote(note string) UpdateOption {
 // task's own text was last checked against reality.
 func WithVerified(v bool) UpdateOption {
 	return func(o *updateOpts) { o.verified = &v }
+}
+
+// WithFields merges free-form fields into the task: a key in changes is set,
+// a key absent from it is left alone, and a nil or empty value removes its
+// key. It is a merge rather than a replacement so that two agents working the
+// same task cannot drop each other's fields.
+func WithFields(changes map[string]any) UpdateOption {
+	return func(o *updateOpts) { o.fields = changes }
 }
 
 // WithCommitMessage sets the message of the squash commit a completion
@@ -581,6 +617,16 @@ func (s *Service) update(id string, title, description *string, status *Status, 
 		}
 	}
 
+	// Fields are merged into a new map, so nothing that holds the task
+	// this call was handed sees the change before it is written.
+	if o.fields != nil {
+		merged, err := MergeFields(t.Fields, o.fields)
+		if err != nil {
+			return nil, err
+		}
+		t.Fields = merged
+	}
+
 	t.UpdatedAt = now
 
 	if err := s.storage.Save(t); err != nil {
@@ -660,14 +706,60 @@ func (s *Service) Delete(id string, deleteSubtasks bool) error {
 
 // List returns all tasks, optionally filtered
 // Note: Tasks returned do not include descriptions for performance (use Get for full task data)
-func (s *Service) List(status *Status, priority *Priority, taskType *string, parentID *string, resolution *Resolution) []*Task {
+func (s *Service) List(status *Status, priority *Priority, taskType *string, parentID *string, resolution *Resolution, opts ...ListOption) []*Task {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.list(status, priority, taskType, parentID, resolution)
+	return s.list(status, priority, taskType, parentID, resolution, opts...)
 }
 
-func (s *Service) list(status *Status, priority *Priority, taskType *string, parentID *string, resolution *Resolution) []*Task {
-	return s.index.Filter(status, priority, taskType, parentID, resolution)
+// ListOption narrows a listing beyond the fixed filters. Like CreateOption it
+// keeps a signature that already takes five filters from growing a sixth.
+type ListOption func(*listOpts)
+
+type listOpts struct {
+	fields map[string]string
+}
+
+// WithFieldFilter keeps only the tasks whose free-form fields match every
+// pair given. The comparison is on the value's plain rendering, exact and
+// case-sensitive, so `count: 3` is found by "3" without the filter having to
+// know yaml types. A pair naming a field a task does not have never matches.
+func WithFieldFilter(fields map[string]string) ListOption {
+	return func(o *listOpts) { o.fields = fields }
+}
+
+func (s *Service) list(status *Status, priority *Priority, taskType *string, parentID *string, resolution *Resolution, opts ...ListOption) []*Task {
+	tasks := s.index.Filter(status, priority, taskType, parentID, resolution)
+
+	var o listOpts
+	for _, apply := range opts {
+		apply(&o)
+	}
+	if len(o.fields) == 0 {
+		return tasks
+	}
+
+	kept := make([]*Task, 0, len(tasks))
+	for _, t := range tasks {
+		if matchesFields(t.Fields, o.fields) {
+			kept = append(kept, t)
+		}
+	}
+	return kept
+}
+
+// matchesFields reports whether every wanted pair is present on f with that
+// value - an AND, so adding a pair can only narrow a listing.
+func matchesFields(f Fields, want map[string]string) bool {
+	for key, value := range want {
+		if _, ok := f[key]; !ok {
+			return false
+		}
+		if f.String(key) != value {
+			return false
+		}
+	}
+	return true
 }
 
 // GetNextTask returns the highest priority todo task

@@ -191,9 +191,15 @@ func (s *Service) captureTask(txn *gitTxn, id string) error {
 	if t == nil {
 		return fmt.Errorf("task not found: %s", id)
 	}
+	// A struct copy shares the Fields map. No flow edits one in place today
+	// - update builds a new map - so this is insurance rather than a fix:
+	// without it, the first flow that did would make the undo below
+	// "restore" the very value it was meant to undo, and silently.
 	saved := *t
+	saved.Fields = t.Fields.Clone()
 	txn.add("record of task "+id, func() error {
 		restored := saved
+		restored.Fields = saved.Fields.Clone()
 		if err := s.storage.Save(&restored); err != nil {
 			return err
 		}

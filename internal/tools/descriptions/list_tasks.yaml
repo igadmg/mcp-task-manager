@@ -9,3 +9,8 @@ params:
     superseded, duplicate, wontfix). Tasks closed before resolutions existed
     count as completed.
   archived: If true, list archived tasks instead of active tasks
+  fields: >-
+    Keep only tasks whose free-form fields match every pair given
+    (e.g. {"area": "web"}). The match is on the value's plain rendering,
+    exact and case-sensitive, so a numeric field is matched by its digits
+    ("3"). A pair naming a field a task does not have never matches.

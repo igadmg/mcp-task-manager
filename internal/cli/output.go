@@ -54,6 +54,12 @@ func FormatTaskDetail(t *task.Task, opts *TaskDetailOptions) string {
 	if t.ResolutionNote != "" {
 		sb.WriteString(fmt.Sprintf("Why:         %s\n", t.ResolutionNote))
 	}
+	if len(t.Fields) > 0 {
+		sb.WriteString("\nFields:\n")
+		for _, key := range t.Fields.Keys() {
+			sb.WriteString(fmt.Sprintf("  %s: %s\n", key, t.Fields.String(key)))
+		}
+	}
 	for _, line := range []struct{ label, value string }{
 		{"Branch:      ", t.Branch},
 		{"Base branch: ", t.BaseBranch},
@@ -184,4 +190,40 @@ func FormatJSONMessage(w io.Writer, msg string, id string) error {
 		"message": msg,
 		"id":      id,
 	})
+}
+
+// ParseFieldArgs turns repeated --field key=value arguments into the map the
+// service's field options take. A value is taken verbatim after the first
+// "=", so "note=a=b" sets "a=b"; an argument without one is a usage error
+// rather than a silently ignored flag.
+func ParseFieldArgs(args []string) (map[string]any, error) {
+	if len(args) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]any, len(args))
+	for _, arg := range args {
+		key, value, ok := strings.Cut(arg, "=")
+		if !ok {
+			return nil, fmt.Errorf("--field %q must be key=value", arg)
+		}
+		out[key] = value
+	}
+	return out, nil
+}
+
+// FieldFilterArgs is ParseFieldArgs for a listing, where every value is
+// already a string to compare against.
+func FieldFilterArgs(args []string) (map[string]string, error) {
+	parsed, err := ParseFieldArgs(args)
+	if err != nil {
+		return nil, err
+	}
+	if parsed == nil {
+		return nil, nil
+	}
+	out := make(map[string]string, len(parsed))
+	for key, value := range parsed {
+		out[key] = value.(string)
+	}
+	return out, nil
 }

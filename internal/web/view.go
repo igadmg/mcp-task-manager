@@ -211,12 +211,56 @@ type CardView struct {
 	// the parent card's first lane (0..3). It is 0 for a row with no phase
 	// of its own - a todo subtask - and for every card outside In progress.
 	LaneOffset int
+	// Fields are the task's free-form fields as chips, sorted by key and
+	// capped at maxCardFields; FieldsMore is how many were left off, and
+	// FieldsRest names them for the +N chip's tooltip. The detail view
+	// shows all of them, so a card does not have to.
+	Fields     []FieldView
+	FieldsMore int
+	FieldsRest string
 	// Subtasks are nested when they sit in the same column as this card,
 	// plus the todo subtasks of an in-progress card, which also keep their
 	// own card in To do; otherwise they render standalone in their column.
 	Subtasks []CardView
 
 	createdAt time.Time // sorting only
+}
+
+// FieldView is one free-form field, rendered as a chip on a card and as a row
+// in the detail view.
+type FieldView struct {
+	Key   string
+	Value string
+}
+
+// maxCardFields is how many field chips a card shows before it collapses the
+// rest into a +N chip. A card with ten chips is noise, and the detail view is
+// one click away.
+const maxCardFields = 3
+
+// newFieldViews renders a task's fields in the order every surface shows them
+// (sorted by key).
+func newFieldViews(f task.Fields) []FieldView {
+	keys := f.Keys()
+	out := make([]FieldView, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, FieldView{Key: key, Value: f.String(key)})
+	}
+	return out
+}
+
+// cardFields splits a task's fields into the chips a card shows and a count
+// plus a tooltip for the ones it does not.
+func cardFields(f task.Fields) (shown []FieldView, more int, rest string) {
+	all := newFieldViews(f)
+	if len(all) <= maxCardFields {
+		return all, 0, ""
+	}
+	var names []string
+	for _, field := range all[maxCardFields:] {
+		names = append(names, field.Key+": "+field.Value)
+	}
+	return all[:maxCardFields], len(all) - maxCardFields, strings.Join(names, ", ")
 }
 
 // BlockerView is one unresolved blocker.
@@ -244,7 +288,10 @@ type DetailView struct {
 	Relations   []RelationView
 	// Files are the attached files, without the phase records that
 	// Phases shows.
-	Files          []FileLinkView
+	Files []FileLinkView
+	// Fields are every free-form field, uncapped - the card's chips are the
+	// summary, this is the full list.
+	Fields         []FieldView
 	Phases         []PhaseView
 	TotalTokens    string
 	UpdatedAt      string
@@ -635,6 +682,7 @@ func newCardView(t *task.Task, snap *task.BoardSnapshot, now time.Time) CardView
 		Branch:       cardBranch(t),
 		createdAt:    t.CreatedAt,
 	}
+	c.Fields, c.FieldsMore, c.FieldsRest = cardFields(t.Fields)
 	if info, ok := snap.PhaseInfo[t.ID]; ok {
 		c.Phase = string(info.Current)
 		c.PhaseBy = info.Run.StartedBy
@@ -721,6 +769,7 @@ func newDetailView(d *task.TaskDetail, cfg *config.Config, titles map[string]str
 		Branch:       cardBranch(t),
 		createdAt:    t.CreatedAt,
 	}
+	card.Fields, card.FieldsMore, card.FieldsRest = cardFields(t.Fields)
 	for _, sub := range d.Subtasks {
 		card.SubtaskTotal++
 		if sub.Status == task.StatusDone {
@@ -749,6 +798,7 @@ func newDetailView(d *task.TaskDetail, cfg *config.Config, titles map[string]str
 		Description:    t.Description,
 		Archived:       d.Archived,
 		Files:          newFileLinkViews(t.ID, d.Files),
+		Fields:         newFieldViews(t.Fields),
 		UpdatedAt:      t.UpdatedAt.Format(timeFormat),
 		ResolutionNote: t.ResolutionNote,
 

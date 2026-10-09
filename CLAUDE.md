@@ -72,6 +72,7 @@ Use the **cclsp MCP tools** (LSP server access) for code navigation:
 - **Source of truth:** Markdown files with YAML frontmatter, one per-task directory (`./tasks/{id}/{id}.md`)
 - **Attached files:** free-form named text files live alongside `{id}.md` in the same `./tasks/{id}/` directory
 - **Archive:** `./tasks/archive/{id}/{id}.md` — archived tasks (same format, not indexed); archiving moves the whole per-task directory, carrying attached files with it
+- **Free-form fields:** any frontmatter key the server does not own is preserved verbatim through every flow (see Flexible fields)
 - **Index:** in-memory only, rebuilt from the .md files; no cache file is ever written
 - **Location:** resolved from the project root, not from the server's working directory. Order: absolute `MCP_TASKS_DIR` → `MCP_PROJECT_DIR` → `CLAUDE_PROJECT_DIR` → MCP `roots/list` → marker search upwards from cwd. Inside the root: relative `MCP_TASKS_DIR` → `tasks_dir` from the config → `.tasks` (legacy `tasks/` when that is the directory actually holding tasks). See `internal/config` and `internal/project`.
 - **Resolution timing:** lazy, on the first tool call — MCP roots only exist after `initialize`. The tool schemas are registered on defaults and re-published via `tools/list_changed` if the resolved project configures different task types.
@@ -106,10 +107,78 @@ base_branch: main_patched            # git branching only: base branch, or the p
 start_commit: 3f2a...                # git branching only: the commit the wip branch grows from
 final_branch: dev/42-add-login       # git branching only: set by a delivered top-level completion
 squash_commit: 9c1b...               # git branching only: the final commit, or the subtask's merge onto the parent's wip
+complexity: high      # any other key: a free-form field, kept but given no meaning
+area: web
 ---
 
 Markdown description here.
 ```
+
+### Flexible fields
+
+Any frontmatter key the server does not own is a **free-form field**: metadata
+a user or an agent hangs off a task (`complexity: high`, `area: web`). The
+server gives none of them a meaning - nothing sorts, filters a queue or gates
+a flow on a field value - it only promises never to lose one.
+
+- **The codec is one struct.** `internal/storage/frontmatter.go` holds the
+  single named `frontmatter` type that both `Save` and `parse` use, with
+  `Extra task.Fields` tagged `yaml:",inline"`. yaml hands a named key to its
+  field and everything else to that map, so the merge lives nowhere near the
+  per-flow code and no new flow can forget it. Every mutating flow already
+  round-trips a task freshly parsed from disk (`Index.Get` calls
+  `storage.Load`), and archiving renames a directory, so the whole set of
+  flows is lossless with no flow-specific code.
+- **Lossless on read, scalars on write.** A value read from a record is kept
+  exactly as yaml decoded it, nested maps and block scalars included. A value
+  a *caller* sets must be a string, number or boolean
+  (`task.NormalizeFieldValue`); an integral number is stored as an `int`,
+  which is what yaml decodes one back into, so a value is the same Go type
+  before and after a round trip.
+- **Order.** The server writes the owned keys in the `frontmatter` struct's
+  declaration order, then the fields **sorted** (what yaml.v3 emits for an
+  inline map). A repeated write is therefore a byte-for-byte no-op; a
+  hand-written record whose extra keys were in some other order is reordered
+  once, by the first server write that touches it.
+- **Reserved keys.** `task.reservedFieldKeys` holds the 20 frontmatter keys
+  plus `description` - which is not a frontmatter key at all (the body is),
+  and is reserved precisely so a frontmatter `description:` is not preserved
+  as a field while the real one sits below the fence.
+  `TestReservedFieldKeysMatchFrontmatter` (in `internal/storage`) holds the
+  table to the struct's tags, the arrangement `StatsFields()` uses for the
+  same reason: the dependency runs storage -> task, so `task` cannot ask.
+  **This is crash safety, not tidiness:** yaml.v3 does not report an inline
+  key that collides with a struct field as an error, it `panic`s, and the
+  panic escapes even `yaml.Marshal`'s own recover. `ValidateFieldKey` stops a
+  caller, and `Save` refuses one that got through anyway.
+- **Key shape.** `task.ValidateFieldKey`: 1-64 characters, `^[a-z][a-z0-9_-]*$`,
+  not reserved. Deliberately *not* `ValidateNameSegment`, which is about path
+  segments and would accept a newline or a colon. The rule applies to
+  caller-supplied keys only - a key already in a record is read and written
+  back whatever it looks like; it just cannot be re-set through a tool
+  without being renamed.
+- **Setting and clearing.** `create_task` and `update_task` take one `fields`
+  object. An update **merges**: a key given is set, a key left out is
+  untouched (so two agents on one task cannot drop each other's fields), and
+  a value of `null` or `""` removes its key - the cost being that a field
+  cannot hold an empty string. `fields: {}` is a no-op, not "clear all". A
+  bad key or value fails the whole call and changes nothing.
+- **The index carries them.** `IndexEntry.Fields`, cloned in both mappers,
+  because the board, `list_tasks`, `get_next_task` and the CLI table all read
+  entries rather than records, and loading a record per board card is out of
+  the question at the dashboard's poll rate - the clone there is load-bearing
+  (`TestIndexCarriesFields`). `captureTask` clones too, but defensively: its
+  rollback copy is a struct copy and shares the map, and no flow edits one in
+  place today, so that clone is insurance against the first one that would.
+- **Filtering** is an AND of exact, case-sensitive matches on the value's
+  plain rendering (`task.WithFieldFilter`), so `count: 3` is found by `"3"`
+  without the filter learning yaml types. A pair naming a field a task does
+  not have never matches.
+- **Surfaces.** Card chips are capped at `maxCardFields` (3) with a `+N` chip
+  whose tooltip names the rest, reusing `chip-muted` so no CSS rebuild is
+  owed; the detail view lists every field in a `Fields` block. The CLI shows
+  them in `get` and takes a repeatable `--field key=value` on `list`,
+  `create` and `update`.
 
 ### Task Identification
 - Ids are strings. By default `create_task` still allocates an auto-incrementing numeric-looking id, now unpadded (e.g. `"8"`, not `"008"`).
@@ -405,10 +474,10 @@ is refused, the file name wins over its `phase` key. Subtasks have their own.
 ### Task Management
 | Tool | Description |
 |------|-------------|
-| `create_task` | Create a new task with title, description, priority, type, optional `parent_id` for subtasks, and optional `id` for a caller-supplied custom task id; stamps `created_by` |
-| `update_task` | Modify task fields, including `resolution` / `resolution_note` (closes the task) and `verified` (stamps `verified_at`). Under git branching, refuses status moves that belong to `start_task` / `complete_task` |
-| `list_tasks` | List tasks with optional filters (status, priority, type, parent_id, resolution, archived); top-level tasks by default |
-| `get_task` | Get full details of a task by ID (includes subtasks for parent tasks, `created_by` and the `phases` run history; falls back to archive) |
+| `create_task` | Create a new task with title, description, priority, type, optional `parent_id` for subtasks, optional `id` for a caller-supplied custom task id, and optional `fields` (free-form key/value metadata); stamps `created_by` |
+| `update_task` | Modify task fields, including `resolution` / `resolution_note` (closes the task), `verified` (stamps `verified_at`) and `fields` (merges free-form metadata; `null` or `""` removes a key). Under git branching, refuses status moves that belong to `start_task` / `complete_task` |
+| `list_tasks` | List tasks with optional filters (status, priority, type, parent_id, resolution, archived, `fields`); top-level tasks by default |
+| `get_task` | Get full details of a task by ID (includes subtasks for parent tasks, `created_by`, `fields` and the `phases` run history; falls back to archive) |
 | `delete_task` | Remove a task; use `delete_subtasks: true` to cascade delete subtasks |
 | `archive_task` | Archive a completed task (moves its directory, including attached files, to `tasks/archive/`) |
 
@@ -617,6 +686,7 @@ mcp-task-manager/
 │   │   └── roots.go             # MCP roots/list client request + file:// URI parsing
 │   ├── storage/
 │   │   ├── storage.go           # Storage interface
+│   │   ├── frontmatter.go       # The one named frontmatter struct (both directions) + the inline field map
 │   │   ├── markdown.go          # Markdown file operations (per-task directory layout)
 │   │   ├── migrate.go           # Legacy flat-layout migration
 │   │   ├── files.go             # Attached-file read/write/list, reserved names
@@ -632,6 +702,7 @@ mcp-task-manager/
 │   │   ├── branching_complete.go # Delivered / subtask / abandoned completion, parent gate
 │   │   ├── branching_restart.go # Restart: replay the wip onto its parent line
 │   │   ├── current.go           # CurrentTask and the pointer rules
+│   │   ├── fields.go            # Fields: free-form frontmatter metadata, key rules, reserved keys, merge
 │   │   ├── name.go              # ValidateAttachedName / ValidateNameSegment: the one name-shape rule set
 │   │   ├── phase.go             # Phase names, order, reserved *.phase names; name-based fallback derivation
 │   │   ├── phaserecord.go       # PhaseRun, PhaseRecord, PhaseSummary
@@ -710,6 +781,7 @@ mcp-task-manager/
 - Relation type: must be in configured list (default: `blocked_by`, `relates_to`, `duplicate_of`, `superseded_by`)
 - Resolution: `completed` | `obsolete` | `superseded` | `duplicate` | `wontfix`; only valid on a `done` task
 - Phase: `research` | `design` | `planning` | `implementation`; tokens a non-negative integer (at most 1e15)
+- Field keys: `task.ValidateFieldKey` - 1-64 characters, `^[a-z][a-z0-9_-]*$`, and not one of the 21 reserved keys (the 20 frontmatter keys plus `description`). Field values set by a caller must be a string, number or boolean; `null` or `""` removes the key. A key already written into a record by hand is never validated - it is read and written back as it is
 - Attached filenames: `task.ValidateAttachedName` is the one definition of the shape rules (shared with ids and pointer users through `task.ValidateNameSegment`); `{id}.md` and anything ending in `.phase` are reserved for writes only — a read serves both
 - No file store: `WriteTaskFile` / `ReadTaskFile` / `ListTaskFiles` return an error when the service was built without one. The read-only view paths stay tolerant (no store lists no files), so a board render never fails over it
 - Config: `applyDefaults` fills in what a partially written YAML section left out, so a half-specified `web:` or `auto_archive:` block cannot silently zero the rest; it also fills each `web.done_stats` card's defaults (nothing in a card is validated yet)

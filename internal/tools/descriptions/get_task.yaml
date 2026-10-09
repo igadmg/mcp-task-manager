@@ -1,6 +1,7 @@
 description: >-
   Get a task by ID, with created_by (who created it), its subtasks and
   blockers, and phases: the history of every phase run (start, finish, user,
-  tokens). Falls back to the archive.
+  tokens), and fields: the task's free-form key/value metadata, including keys
+  added to the record by hand. Falls back to the archive.
 params:
   id: Task ID

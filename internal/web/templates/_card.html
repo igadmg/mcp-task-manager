@@ -17,6 +17,8 @@
       {{ if .SubtaskTotal }}<span class="chip chip-muted">{{ .SubtaskDone }}/{{ .SubtaskTotal }} subtasks</span>{{ end }}
       {{ if .InProgress }}<span class="chip chip-live">in progress</span>{{ end }}
       {{ if .Blocked }}<span class="chip chip-blocked" title="{{ range .Blockers }}{{ .ID }} ({{ .Status }}) {{ end }}">blocked</span>{{ end }}
+      {{ range .Fields }}<span class="chip chip-muted" title="{{ .Key }}: {{ .Value }}">{{ .Key }}: {{ .Value }}</span>{{ end }}
+      {{ if .FieldsMore }}<span class="chip chip-muted" title="{{ .FieldsRest }}">+{{ .FieldsMore }}</span>{{ end }}
       <span class="meta ml-auto">{{ .UpdatedAgo }}</span>
     </div>
     <p class="meta mt-1.5 truncate" title="created {{ .CreatedAt }}">created {{ .CreatedAgo }}{{ if .CreatedBy }} by {{ .CreatedBy }}{{ end }}</p>

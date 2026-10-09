@@ -22,3 +22,9 @@ params:
     just checked against the code and still describes reality. It says nothing
     about progress; use it when reviewing a backlog for staleness. false clears
     the stamp.
+  fields: |
+    Free-form metadata to merge into the task, one object of key: value
+    pairs. A key given is set, a key left out is untouched, and a value of
+    null or "" removes its key - so a field cannot hold an empty string.
+    Same key rules and scalar values as create_task; a bad key or value
+    fails the whole call and changes nothing.

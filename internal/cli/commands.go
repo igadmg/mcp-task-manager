@@ -59,7 +59,13 @@ func checkProjectExists(stderr io.Writer, cfg *config.Config) int {
 }
 
 // cmdList handles the list command
-func cmdList(stdout, stderr io.Writer, jsonOutput bool, status, priority, taskType string, parentID string, archived bool) int {
+func cmdList(stdout, stderr io.Writer, jsonOutput bool, status, priority, taskType string, parentID string, archived bool, fieldArgs []string) int {
+	fieldFilter, err := FieldFilterArgs(fieldArgs)
+	if err != nil {
+		fmt.Fprintf(stderr, "Error: %v\n", err)
+		return 1
+	}
+
 	cfg, err := loadConfig()
 	if err != nil {
 		fmt.Fprintf(stderr, "Error: %v\n", err)
@@ -83,6 +89,7 @@ func cmdList(stdout, stderr io.Writer, jsonOutput bool, status, priority, taskTy
 			fmt.Fprintf(stderr, "Error: %v\n", err)
 			return 1
 		}
+		tasks = filterByFields(tasks, fieldFilter)
 		if jsonOutput {
 			if tasks == nil {
 				tasks = []*task.Task{}
@@ -117,7 +124,11 @@ func cmdList(stdout, stderr io.Writer, jsonOutput bool, status, priority, taskTy
 	// - Default ("0"): show top-level tasks only (parentID = "0")
 	// - Specified N: show subtasks of task N (parentID = N)
 	parentPtr := &parentID
-	tasks := svc.List(statusPtr, priorityPtr, typePtr, parentPtr, nil)
+	var listOpts []task.ListOption
+	if len(fieldFilter) > 0 {
+		listOpts = append(listOpts, task.WithFieldFilter(fieldFilter))
+	}
+	tasks := svc.List(statusPtr, priorityPtr, typePtr, parentPtr, nil, listOpts...)
 
 	// Build subtask counts for each task
 	subtaskCounts := make(map[string]SubtaskCounts)
@@ -247,14 +258,25 @@ func cmdNext(stdout, stderr io.Writer, jsonOutput bool) int {
 }
 
 // cmdCreate handles the create command
-func cmdCreate(stdout, stderr io.Writer, jsonOutput bool, title, priority, taskType, description string, parentID string, id string) int {
+func cmdCreate(stdout, stderr io.Writer, jsonOutput bool, title, priority, taskType, description string, parentID string, id string, fieldArgs []string) int {
+	fields, err := ParseFieldArgs(fieldArgs)
+	if err != nil {
+		fmt.Fprintf(stderr, "Error: %v\n", err)
+		return 1
+	}
+
 	svc, _, err := initService()
 	if err != nil {
 		fmt.Fprintf(stderr, "Error: %v\n", err)
 		return 1
 	}
 
-	t, err := svc.Create(title, description, task.Priority(priority), taskType, parentID, id)
+	var createOpts []task.CreateOption
+	if fields != nil {
+		createOpts = append(createOpts, task.WithCreateFields(fields))
+	}
+
+	t, err := svc.Create(title, description, task.Priority(priority), taskType, parentID, id, createOpts...)
 	if err != nil {
 		fmt.Fprintf(stderr, "Error: %v\n", err)
 		return 1
@@ -273,7 +295,13 @@ func cmdCreate(stdout, stderr io.Writer, jsonOutput bool, title, priority, taskT
 }
 
 // cmdUpdate handles the update command
-func cmdUpdate(stdout, stderr io.Writer, jsonOutput bool, id string, title, status, priority, taskType, description, resolution, resolutionNote string, verified bool) int {
+func cmdUpdate(stdout, stderr io.Writer, jsonOutput bool, id string, title, status, priority, taskType, description, resolution, resolutionNote string, verified bool, fieldArgs []string) int {
+	fields, err := ParseFieldArgs(fieldArgs)
+	if err != nil {
+		fmt.Fprintf(stderr, "Error: %v\n", err)
+		return 1
+	}
+
 	svc, _, err := initService()
 	if err != nil {
 		fmt.Fprintf(stderr, "Error: %v\n", err)
@@ -311,6 +339,9 @@ func cmdUpdate(stdout, stderr io.Writer, jsonOutput bool, id string, title, stat
 	}
 	if verified {
 		opts = append(opts, task.WithVerified(true))
+	}
+	if fields != nil {
+		opts = append(opts, task.WithFields(fields))
 	}
 
 	t, err := svc.Update(id, titlePtr, descPtr, statusPtr, priorityPtr, typePtr, opts...)
@@ -620,4 +651,26 @@ func cmdServeWeb(ctx context.Context, stderr io.Writer, addr string, withMCP boo
 		return 1
 	}
 	return 0
+}
+
+// filterByFields applies a --field filter to a slice the index did not
+// filter for us - the archive, which is a linear scan rather than a query.
+func filterByFields(tasks []*task.Task, want map[string]string) []*task.Task {
+	if len(want) == 0 {
+		return tasks
+	}
+	kept := make([]*task.Task, 0, len(tasks))
+	for _, t := range tasks {
+		match := true
+		for key, value := range want {
+			if _, ok := t.Fields[key]; !ok || t.Fields.String(key) != value {
+				match = false
+				break
+			}
+		}
+		if match {
+			kept = append(kept, t)
+		}
+	}
+	return kept
 }

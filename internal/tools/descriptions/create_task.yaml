@@ -13,3 +13,11 @@ params:
     (non-empty, no '/' or '\', not '..'); "0", "archive", ".index.json" and
     ".users" are reserved (a retired cache filename and the per-user state
     directory). Must not already exist (active or archived).
+  fields: >-
+    Optional free-form metadata, one object of key: value pairs
+    (e.g. {"complexity": "high", "area": "web"}). Keys are lowercase
+    [a-z][a-z0-9_-]*, at most 64 characters, and may not be one the server
+    owns (id, title, status, priority, type, created_at, resolution, branch,
+    description, ...). Values are strings, numbers or booleans. The server
+    gives them no meaning - nothing sorts or filters a queue on them - it
+    only keeps them, including keys added to the record by hand.

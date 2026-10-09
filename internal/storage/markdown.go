@@ -40,59 +40,19 @@ func (s *MarkdownStorage) taskPath(id string) string {
 	return filepath.Join(s.taskDir(id), fmt.Sprintf("%s.md", id))
 }
 
-// Save writes a task to a markdown file
-// Save writes a task to a markdown file
+// Save writes a task to a markdown file: the frontmatter between --- fences,
+// then the description as the body. The key list lives on the frontmatter
+// struct, which also carries the task's free-form fields inline.
 func (s *MarkdownStorage) Save(t *task.Task) error {
-	// Build frontmatter
-	frontmatter := struct {
-		ID             string          `yaml:"id"`
-		ParentID       string          `yaml:"parent_id,omitempty"`
-		OrphanedID     string          `yaml:"orphaned_id,omitempty"`
-		Title          string          `yaml:"title"`
-		Status         task.Status     `yaml:"status"`
-		Priority       task.Priority   `yaml:"priority"`
-		Type           string          `yaml:"type"`
-		Relations      []task.Relation `yaml:"relations,omitempty"`
-		CreatedAt      string          `yaml:"created_at"`
-		CreatedBy      string          `yaml:"created_by,omitempty"`
-		UpdatedAt      string          `yaml:"updated_at"`
-		Resolution     task.Resolution `yaml:"resolution,omitempty"`
-		ResolutionNote string          `yaml:"resolution_note,omitempty"`
-		ClosedAt       string          `yaml:"closed_at,omitempty"`
-		VerifiedAt     string          `yaml:"verified_at,omitempty"`
-		Branch         string          `yaml:"branch,omitempty"`
-		BaseBranch     string          `yaml:"base_branch,omitempty"`
-		StartCommit    string          `yaml:"start_commit,omitempty"`
-		FinalBranch    string          `yaml:"final_branch,omitempty"`
-		SquashCommit   string          `yaml:"squash_commit,omitempty"`
-	}{
-		ID:             t.ID,
-		ParentID:       t.ParentID,
-		OrphanedID:     t.OrphanedID,
-		Title:          t.Title,
-		Status:         t.Status,
-		Priority:       t.Priority,
-		Type:           t.Type,
-		Relations:      t.Relations,
-		CreatedAt:      t.CreatedAt.Format(timeLayout),
-		CreatedBy:      t.CreatedBy,
-		UpdatedAt:      t.UpdatedAt.Format(timeLayout),
-		Resolution:     t.Resolution,
-		ResolutionNote: t.ResolutionNote,
-		ClosedAt:       formatTime(t.ClosedAt),
-		VerifiedAt:     formatTime(t.VerifiedAt),
-		Branch:         t.Branch,
-		BaseBranch:     t.BaseBranch,
-		StartCommit:    t.StartCommit,
-		FinalBranch:    t.FinalBranch,
-		SquashCommit:   t.SquashCommit,
+	if err := checkExtraKeys(t.Fields); err != nil {
+		return err
 	}
 
 	var buf bytes.Buffer
 	buf.WriteString("---\n")
 	enc := yaml.NewEncoder(&buf)
 	enc.SetIndent(2)
-	if err := enc.Encode(frontmatter); err != nil {
+	if err := enc.Encode(newFrontmatter(t)); err != nil {
 		return err
 	}
 	buf.WriteString("---\n\n")
@@ -182,28 +142,7 @@ func (s *MarkdownStorage) parse(data []byte) (*task.Task, error) {
 	}
 
 	// Parse frontmatter
-	var fm struct {
-		ID             string          `yaml:"id"`
-		ParentID       string          `yaml:"parent_id"`
-		OrphanedID     string          `yaml:"orphaned_id"`
-		Title          string          `yaml:"title"`
-		Status         string          `yaml:"status"`
-		Priority       string          `yaml:"priority"`
-		Type           string          `yaml:"type"`
-		Relations      []task.Relation `yaml:"relations"`
-		CreatedAt      string          `yaml:"created_at"`
-		CreatedBy      string          `yaml:"created_by"`
-		UpdatedAt      string          `yaml:"updated_at"`
-		Resolution     string          `yaml:"resolution"`
-		ResolutionNote string          `yaml:"resolution_note"`
-		ClosedAt       string          `yaml:"closed_at"`
-		VerifiedAt     string          `yaml:"verified_at"`
-		Branch         string          `yaml:"branch"`
-		BaseBranch     string          `yaml:"base_branch"`
-		StartCommit    string          `yaml:"start_commit"`
-		FinalBranch    string          `yaml:"final_branch"`
-		SquashCommit   string          `yaml:"squash_commit"`
-	}
+	var fm frontmatter
 	if err := yaml.Unmarshal(frontmatterBuf.Bytes(), &fm); err != nil {
 		return nil, err
 	}
@@ -217,33 +156,7 @@ func (s *MarkdownStorage) parse(data []byte) (*task.Task, error) {
 		bodyBuf.WriteString(scanner.Text())
 	}
 
-	// Parse timestamps
-	createdAt, _ := parseTime(fm.CreatedAt)
-	updatedAt, _ := parseTime(fm.UpdatedAt)
-
-	return &task.Task{
-		ID:             fm.ID,
-		ParentID:       fm.ParentID,
-		OrphanedID:     fm.OrphanedID,
-		Title:          fm.Title,
-		Description:    strings.TrimSpace(bodyBuf.String()),
-		Status:         task.Status(fm.Status),
-		Priority:       task.Priority(fm.Priority),
-		Type:           fm.Type,
-		Relations:      fm.Relations,
-		CreatedAt:      createdAt,
-		CreatedBy:      fm.CreatedBy,
-		UpdatedAt:      updatedAt,
-		Resolution:     task.Resolution(fm.Resolution),
-		ResolutionNote: fm.ResolutionNote,
-		ClosedAt:       parseOptionalTime(fm.ClosedAt),
-		VerifiedAt:     parseOptionalTime(fm.VerifiedAt),
-		Branch:         fm.Branch,
-		BaseBranch:     fm.BaseBranch,
-		StartCommit:    fm.StartCommit,
-		FinalBranch:    fm.FinalBranch,
-		SquashCommit:   fm.SquashCommit,
-	}, nil
+	return fm.toTask(strings.TrimSpace(bodyBuf.String())), nil
 }
 
 // timeLayout is how every timestamp the storage writes is rendered: the

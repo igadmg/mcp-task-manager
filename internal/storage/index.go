@@ -51,6 +51,12 @@ type IndexEntry struct {
 	Branch       string
 	FinalBranch  string
 	SquashCommit string
+	// Fields are the task's free-form frontmatter fields. They ride along
+	// because every surface that shows or filters them - the board,
+	// list_tasks, get_next_task, the CLI table - reads entries rather than
+	// records, and loading a record per board card is not an option at the
+	// dashboard's poll rate.
+	Fields task.Fields
 }
 
 // taskToEntry converts a Task to an IndexEntry
@@ -72,6 +78,10 @@ func taskToEntry(t *task.Task) *IndexEntry {
 		Branch:       t.Branch,
 		FinalBranch:  t.FinalBranch,
 		SquashCommit: t.SquashCommit,
+		// Cloned in both directions: an entry outlives the call that made
+		// it, and a caller who edits what it was handed must not reach
+		// into the index.
+		Fields: t.Fields.Clone(),
 	}
 }
 
@@ -94,6 +104,7 @@ func entryToTask(e *IndexEntry) *task.Task {
 		Branch:       e.Branch,
 		FinalBranch:  e.FinalBranch,
 		SquashCommit: e.SquashCommit,
+		Fields:       e.Fields.Clone(),
 		// Description, ResolutionNote, BaseBranch and StartCommit
 		// intentionally empty
 	}

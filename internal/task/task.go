@@ -103,6 +103,13 @@ type Task struct {
 	// SquashCommit is the final commit of a top-level task, or the commit a
 	// subtask merged into its parent's wip branch.
 	SquashCommit string `yaml:"squash_commit,omitempty" json:"squash_commit,omitempty"`
+
+	// Fields are the frontmatter keys the server does not own: free-form
+	// metadata that rides along untouched. There is no yaml tag because
+	// internal/storage owns the codec - these keys are written inline at
+	// the frontmatter top level, not under a key of their own (see
+	// fields.go).
+	Fields Fields `yaml:"-" json:"fields,omitempty"`
 }
 
 // Closed reports whether the task has left the active flow.

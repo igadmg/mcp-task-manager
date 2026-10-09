@@ -42,6 +42,9 @@ func managementTools(rs *project.Resolver, validTypes []string) []server.ServerT
 		mcp.WithString("id",
 			mcp.Description(createText.param("id")),
 		),
+		mcp.WithObject("fields",
+			mcp.Description(createText.param("fields")),
+		),
 	)
 	tools = append(tools, server.ServerTool{Tool: createTool, Handler: createTaskHandler(rs)})
 
@@ -92,6 +95,9 @@ func managementTools(rs *project.Resolver, validTypes []string) []server.ServerT
 		mcp.WithBoolean("verified",
 			mcp.Description(updateText.param("verified")),
 		),
+		mcp.WithObject("fields",
+			mcp.Description(updateText.param("fields")),
+		),
 	)
 	tools = append(tools, server.ServerTool{Tool: updateTool, Handler: updateTaskHandler(rs)})
 
@@ -135,6 +141,9 @@ func managementTools(rs *project.Resolver, validTypes []string) []server.ServerT
 		mcp.WithBoolean("archived",
 			mcp.Description(listText.param("archived")),
 		),
+		mcp.WithObject("fields",
+			mcp.Description(listText.param("fields")),
+		),
 	)
 	tools = append(tools, server.ServerTool{Tool: listTool, Handler: listTasksHandler(rs)})
 
@@ -160,7 +169,12 @@ func createTaskHandler(rs *project.Resolver) server.ToolHandlerFunc {
 		parentID := req.GetString("parent_id", "")
 		customID := req.GetString("id", "")
 
-		t, err := svc.Create(title, description, priority, taskType, parentID, customID)
+		var opts []task.CreateOption
+		if fields, ok := fieldsArg(req, "fields"); ok {
+			opts = append(opts, task.WithCreateFields(fields))
+		}
+
+		t, err := svc.Create(title, description, priority, taskType, parentID, customID, opts...)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
@@ -191,7 +205,10 @@ type taskWithSubtasksResponse struct {
 	ResolutionNote string          `json:"resolution_note,omitempty"`
 	ClosedAt       string          `json:"closed_at,omitempty"`
 	VerifiedAt     string          `json:"verified_at,omitempty"`
-	Subtasks       []*task.Task    `json:"subtasks,omitempty"`
+	// Fields is the task's free-form key/value metadata, empty when it has
+	// none.
+	Fields   task.Fields  `json:"fields,omitempty"`
+	Subtasks []*task.Task `json:"subtasks,omitempty"`
 	// Phases is the task's phase-run history, in workflow order.
 	Phases []task.PhaseRecord `json:"phases,omitempty"`
 }
@@ -239,6 +256,7 @@ func getTaskHandler(rs *project.Resolver) server.ToolHandlerFunc {
 			ResolutionNote: t.ResolutionNote,
 			ClosedAt:       formatOptionalTime(t.ClosedAt),
 			VerifiedAt:     formatOptionalTime(t.VerifiedAt),
+			Fields:         t.Fields,
 			Phases:         d.Phases,
 		}
 
@@ -290,6 +308,9 @@ func updateTaskHandler(rs *project.Resolver) server.ToolHandlerFunc {
 		}
 		if _, ok := args["verified"]; ok {
 			opts = append(opts, task.WithVerified(req.GetBool("verified", false)))
+		}
+		if fields, ok := fieldsArg(req, "fields"); ok {
+			opts = append(opts, task.WithFields(fields))
 		}
 
 		t, err := svc.Update(id, title, description, status, priority, taskType, opts...)
@@ -376,7 +397,12 @@ func listTasksHandler(rs *project.Resolver) server.ToolHandlerFunc {
 			parentID = &id
 		}
 
-		tasks := svc.List(status, priority, taskType, parentID, resolution)
+		var listOpts []task.ListOption
+		if fields, ok := fieldsArg(req, "fields"); ok {
+			listOpts = append(listOpts, task.WithFieldFilter(fieldFilter(fields)))
+		}
+
+		tasks := svc.List(status, priority, taskType, parentID, resolution, listOpts...)
 
 		if len(tasks) == 0 {
 			return mcp.NewToolResultText("No tasks found"), nil
@@ -409,4 +435,38 @@ func jsonResult(v any) (*mcp.CallToolResult, error) {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 	return mcp.NewToolResultText(string(data)), nil
+}
+
+// fieldsArg reads an object argument as the free-form field map. ok is false
+// when the caller did not pass the argument at all, which is what tells
+// "leave the fields alone" from "change these fields" - the same distinction
+// the rest of this file draws with the args lookup.
+//
+// A non-object value is reported as an empty map rather than an error: the
+// service validates the pairs and answers with a message that names the key,
+// which is more useful than a type complaint here.
+func fieldsArg(req mcp.CallToolRequest, name string) (map[string]any, bool) {
+	raw, ok := req.GetArguments()[name]
+	if !ok {
+		return nil, false
+	}
+	fields, ok := raw.(map[string]any)
+	if !ok {
+		return map[string]any{}, true
+	}
+	return fields, true
+}
+
+// fieldFilter renders a filter object's values the way Fields.String renders a
+// stored one, so {"count": 3} and {"count": "3"} both match `count: 3`.
+func fieldFilter(fields map[string]any) map[string]string {
+	out := make(map[string]string, len(fields))
+	for key, value := range fields {
+		if value == nil {
+			out[key] = ""
+			continue
+		}
+		out[key] = fmt.Sprint(value)
+	}
+	return out
 }

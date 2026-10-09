@@ -69,6 +69,8 @@ func RunWithContext(ctx context.Context, args []string, stdout, stderr io.Writer
 	listCmd.Bool(&listJSON, "j", "json", "Output as JSON")
 	listCmd.String(&listParent, "", "parent", "List subtasks of parent task ID (default: top-level tasks)")
 	listCmd.Bool(&listArchived, "a", "archived", "List archived tasks")
+	var listFields []string
+	listCmd.StringSlice(&listFields, "", "field", "Keep only tasks with this field value (key=value; repeatable, all must match)")
 	flaggy.AttachSubcommand(listCmd, 1)
 
 	// Get subcommand
@@ -104,6 +106,8 @@ func RunWithContext(ctx context.Context, args []string, stdout, stderr io.Writer
 	createCmd.Bool(&createJSON, "j", "json", "Output as JSON")
 	createCmd.String(&createParent, "", "parent", "Parent task ID (creates a subtask)")
 	createCmd.String(&createID, "", "id", "Optional custom task id (used verbatim as id and directory name instead of auto-increment)")
+	var createFields []string
+	createCmd.StringSlice(&createFields, "", "field", "Free-form field to set (key=value; repeatable)")
 	flaggy.AttachSubcommand(createCmd, 1)
 
 	// Update subcommand
@@ -123,6 +127,8 @@ func RunWithContext(ctx context.Context, args []string, stdout, stderr io.Writer
 	updateCmd.String(&updateNote, "", "note", "One line on why the task was closed this way")
 	updateCmd.Bool(&updateVerified, "", "verified", "Stamp verified_at: this task's text was just checked against reality")
 	updateCmd.Bool(&updateJSON, "j", "json", "Output as JSON")
+	var updateFields []string
+	updateCmd.StringSlice(&updateFields, "", "field", "Free-form field to set, or key= to remove it (key=value; repeatable)")
 	flaggy.AttachSubcommand(updateCmd, 1)
 
 	// Delete subcommand
@@ -246,7 +252,7 @@ func RunWithContext(ctx context.Context, args []string, stdout, stderr io.Writer
 	}
 
 	if listCmd.Used {
-		return cmdList(stdout, stderr, listJSON, listStatus, listPriority, listType, listParent, listArchived)
+		return cmdList(stdout, stderr, listJSON, listStatus, listPriority, listType, listParent, listArchived, listFields)
 	}
 
 	if getCmd.Used {
@@ -258,11 +264,11 @@ func RunWithContext(ctx context.Context, args []string, stdout, stderr io.Writer
 	}
 
 	if createCmd.Used {
-		return cmdCreate(stdout, stderr, createJSON, createTitle, createPriority, createType, createDesc, createParent, createID)
+		return cmdCreate(stdout, stderr, createJSON, createTitle, createPriority, createType, createDesc, createParent, createID, createFields)
 	}
 
 	if updateCmd.Used {
-		return cmdUpdate(stdout, stderr, updateJSON, updateIDStr, updateTitle, updateStatus, updatePriority, updateType, updateDesc, updateResolution, updateNote, updateVerified)
+		return cmdUpdate(stdout, stderr, updateJSON, updateIDStr, updateTitle, updateStatus, updatePriority, updateType, updateDesc, updateResolution, updateNote, updateVerified, updateFields)
 	}
 
 	if deleteCmd.Used {

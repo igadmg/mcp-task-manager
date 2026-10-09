@@ -115,6 +115,20 @@
   </section>
   {{ end }}
 
+  {{ if .Fields }}
+  <section class="mt-5">
+    <h2 class="text-xs font-semibold uppercase tracking-wider text-neutral-400">Fields</h2>
+    <dl class="mt-2 space-y-1">
+      {{ range .Fields }}
+      <div class="flex min-w-0 items-baseline gap-2">
+        <dt class="meta shrink-0">{{ .Key }}</dt>
+        <dd class="min-w-0 break-words text-xs text-neutral-300">{{ .Value }}</dd>
+      </div>
+      {{ end }}
+    </dl>
+  </section>
+  {{ end }}
+
   {{ if .Files }}
   <section class="mt-5">
     <h2 class="text-xs font-semibold uppercase tracking-wider text-neutral-400">Attached files</h2>
