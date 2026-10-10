@@ -1,6 +1,7 @@
 description: |
-  Move a task from todo to in_progress, and make it your current task (see
-  get_current_task). Workflows that track delivery phases use start_phase
+  Move a task from todo to in_progress, and append it to your current-task
+  list (see get_current_task; the last-listed task is the most recent one).
+  Workflows that track delivery phases use start_phase
   instead; start_task writes no phase records.
 
   When git branching is enabled (git.branching in mcp-tasks.yaml), the server

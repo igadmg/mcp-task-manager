@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -78,19 +79,24 @@ func (s *Service) startPhase(id string, p Phase) (*Task, *PhaseRecord, error) {
 	return started, saved, nil
 }
 
-// phaseTask resolves the task a phase call names: id, or the calling
-// user's current task. Archived tasks are refused: their phases are
-// history.
+// phaseTask resolves the task a phase call names: id, or - when id is
+// empty - the calling user's current task. With several tasks in progress
+// the call is ambiguous and must be given an id. Archived tasks are
+// refused: their phases are history.
 func (s *Service) phaseTask(id string) (*Task, error) {
 	if id == "" {
-		cur, ok, err := s.currentTask()
+		tasks, err := s.currentTasks()
 		if err != nil {
 			return nil, err
 		}
-		if !ok {
+		switch len(tasks) {
+		case 0:
 			return nil, errors.New("no task id given and no current task; pass id")
+		case 1:
+			id = tasks[0].ID
+		default:
+			return nil, fmt.Errorf("several tasks are in progress (%s); pass id", strings.Join(taskIDs(tasks), ", "))
 		}
-		id = cur.ID
 	}
 	return s.activeTask(id, "phases")
 }

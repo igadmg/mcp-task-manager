@@ -166,15 +166,23 @@ func getCurrentTaskHandler(rs *project.Resolver) server.ToolHandlerFunc {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 
-		t, ok, err := svc.CurrentTask()
+		tasks, err := svc.CurrentTasks()
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
-		if !ok {
+		if len(tasks) == 0 {
 			return mcp.NewToolResultText("No current task"), nil
 		}
-		return jsonResult(t)
+		return jsonResult(currentTasksResult{Current: tasks[len(tasks)-1].ID, Tasks: tasks})
 	})
+}
+
+// currentTasksResult is the get_current_task answer: the id of the most
+// recently started task and the full records of every in-progress task, in
+// the order they were started.
+type currentTasksResult struct {
+	Current string       `json:"current"`
+	Tasks   []*task.Task `json:"tasks"`
 }
 
 func getNextTaskHandler(rs *project.Resolver) server.ToolHandlerFunc {

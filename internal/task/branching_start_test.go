@@ -262,8 +262,8 @@ func TestStartSubtask(t *testing.T) {
 			if got := b.Git(t, "show", "HEAD:par.txt"); got != "parent work" {
 				t.Errorf("subtask branch par.txt = %q, want the parent's work", got)
 			}
-			if data, _ := os.ReadFile(b.PointerPath()); string(data) != "sub\n" {
-				t.Errorf("pointer = %q, want sub", data)
+			if data, _ := os.ReadFile(b.PointerPath()); string(data) != "par\nsub\n" {
+				t.Errorf("pointer = %q, want par then sub", data)
 			}
 			requireNoServerCommitInTasks(t, b)
 		})
@@ -287,8 +287,8 @@ func TestStartSubtask(t *testing.T) {
 			if head := b.Head(t); head != "dev/wip/par--sub" {
 				t.Errorf("HEAD = %s", head)
 			}
-			if data, _ := os.ReadFile(b.PointerPath()); string(data) != "sub\n" {
-				t.Errorf("pointer = %q, want sub", data)
+			if data, _ := os.ReadFile(b.PointerPath()); string(data) != "par\nsub\n" {
+				t.Errorf("pointer = %q, want par then sub", data)
 			}
 		})
 

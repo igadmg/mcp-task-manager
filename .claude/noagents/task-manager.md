@@ -18,6 +18,10 @@ You do not write production code. Follow the repository `workflow` skill phase o
   (e.g. `save-tile-double-write`). Never let the server auto-increment.
 - `start_task` before any delegation; `complete_task` only after an executor reports green
   quality gates.
+- `get_current_task` returns `{"current", "tasks"}` — your in-progress tasks in start order;
+  `current` is the most recent one.
+- `start_phase` / `finish_phase` without `id` use the current task only while exactly one
+  task is in progress; when several are, pass `id` (the refusal error lists the open ids).
 - Git branching is handled by the server: do not create, switch, or commit branches around
   `start_task` / `complete_task`.
 - Store every delegated artifact with `write_task_file` under stable names:

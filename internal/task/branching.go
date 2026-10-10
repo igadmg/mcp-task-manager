@@ -233,12 +233,26 @@ func (s *Service) capturePhase(txn *gitTxn, id string, p Phase, rec *PhaseRecord
 // which may cut the wip branch of an in-progress parent that has none.
 type flowStep func(txn *gitTxn) error
 
-// pointAndRun is the tail every start flow shares: point the user at task
-// id, then run extra. Keeping both in one call means no flow can drop the
-// hook.
+// pointAndRun is the tail every start flow shares: add task id to the
+// user's current-task list, then run extra. A subtask is listed behind its
+// parent, when the parent is not listed yet, so the subtask reads as the
+// most recently started. Keeping both in one call means no flow can drop
+// the hook.
 func (s *Service) pointAndRun(txn *gitTxn, id string, extra flowStep) error {
-	if err := s.setPointer(txn, id); err != nil {
-		return err
+	if s.keepsPointer() {
+		ids := []string{id}
+		if t, ok := s.index.Get(id); ok && t.ParentID != "" {
+			stored, err := s.current.ReadCurrentTasks(s.identity.Name)
+			if err != nil {
+				return err
+			}
+			if !slices.Contains(stored, t.ParentID) {
+				ids = []string{t.ParentID, id}
+			}
+		}
+		if err := s.addPointer(txn, ids...); err != nil {
+			return err
+		}
 	}
 	return extra.run(txn)
 }
@@ -259,22 +273,19 @@ func (s *Service) updateStatus(txn *gitTxn, id string, status Status, opts ...Up
 	return s.update(id, nil, nil, &status, nil, nil, opts...)
 }
 
-// capturePointer records user's current-task pointer as it is now,
-// registering an undo that rewrites or removes it. A no-op without a
-// pointer store.
+// capturePointer records user's current-task list as it is now,
+// registering an undo that writes it back (or removes the file, when there
+// was none). A no-op without a pointer store.
 func (s *Service) capturePointer(txn *gitTxn, user string) error {
 	if s.current == nil {
 		return nil
 	}
-	id, ok, err := s.current.ReadCurrentTask(user)
+	ids, err := s.current.ReadCurrentTasks(user)
 	if err != nil {
 		return err
 	}
 	txn.add("current-task pointer of "+user, func() error {
-		if ok {
-			return s.current.WriteCurrentTask(user, id)
-		}
-		return s.current.RemoveCurrentTask(user)
+		return s.current.WriteCurrentTasks(user, ids)
 	})
 	return nil
 }

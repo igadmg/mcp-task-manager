@@ -500,13 +500,26 @@ full rationale, sequences and rejected alternatives are in
 ### Current-task pointer
 
 `<tasks_dir>/.users/<user>/current_task`, one per user (`<user>` from the git
-email, falling back to the OS user). `start_task` writes it; `complete_task`
-with any resolution moves it to the still-open parent of a subtask, or removes
-it — only when it names a task that call closed. `get_current_task` reads it
-(archived tasks included). It is written in both modes and journaled with the
-rest of a flow. `.users` is skipped by every scan and reserved as an id; this
-repository gitignores `tasks/.users/`. Every successful `start_phase` points
-the user at its task too; `finish_phase` leaves the pointer alone.
+email, falling back to the OS user). It holds the user's current-task list:
+one task id per line, in the order the tasks were started; the last line is
+the most recently started task. `start_task` and every `start_phase` append
+the task, moving it to the end on a re-start (no duplicates); `complete_task`
+with any resolution removes the ids that call closed — only when the list
+names a task that call closed — and lists an open parent of a closed subtask
+last. `get_current_task` returns the effective list: only the ids that still
+resolve to an `in_progress` task, in start order; closed, archived or unknown
+entries are skipped silently. `finish_phase` leaves the list alone. It is
+written in both modes and journaled with the rest of a flow. `.users` is
+skipped by every scan and reserved as an id; this repository gitignores
+`tasks/.users/`.
+
+Known limitation: two MCP processes of the same user read-modify-write the
+same file, so one flow's update can be lost; the write itself is atomic (the
+file is never torn), and within one process the service mutex serializes the
+flows.
+
+Picking the default task for an AI host session from the session's spec is
+designed separately (`web-interactive-claude-sessions`).
 
 ### Phase records
 
@@ -517,7 +530,9 @@ that phase: `started_at`, `started_by`, and once finished `finished_at`,
 through `task.PhaseStore` (`storage/phase.go`); `version: 1`, a newer version
 is refused, the file name wins over its `phase` key. Subtasks have their own.
 
-- **`start_phase(phase, id?)`** (id defaults to the current task) appends a
+- **`start_phase(phase, id?)`** (id defaults to the current task when exactly
+  one task is in progress; with several, the call is refused listing them —
+  pass id) appends a
   run, never overwrites. Refused, before anything changes: archived or done
   tasks; any open run of the task (one at a time); a phase whose predecessor
   has no finished run (migration escape: a task with no `.phase` file at all
@@ -527,7 +542,8 @@ is refused, the file name wins over its `phase` key. Subtasks have their own.
   `in_progress`, record-only and without git; implementation under git
   branching runs the branch flows (see Git branching). The run is appended
   inside the same journaled flow, before the worktree changes.
-- **`finish_phase(phase, id?, tokens?, note?)`** stamps the open run; tokens
+- **`finish_phase(phase, id?, tokens?, note?)`** (id defaults like
+  `start_phase`) stamps the open run; tokens
   must be an integer from 0 to 1e15. No status, pointer or git change; allowed
   on done tasks.
 - **`complete_task`** finishes every open run of every task it closes
@@ -572,11 +588,11 @@ is refused, the file name wins over its `phase` key. Subtasks have their own.
 | Tool | Description |
 |------|-------------|
 | `get_next_task` | Returns highest priority `todo` task (skips parents with incomplete subtasks and blocked tasks) |
-| `start_task` | Move task from `todo` to `in_progress` (auto-starts parent if subtask; refuses if blocked) and point the current-task pointer at it; writes no phase records. Under git branching: create and check out its wip branch, or restart (rebase and check out) an existing one; an `in_progress` task without a branch is refused with a hint to use `start_phase implementation` |
-| `complete_task` | Close a task: `in_progress` → `done` (auto-completes parent if last subtask; triggers auto-archive if enabled). With a `resolution` other than `completed` it also accepts a `todo` task and closes its open subtasks along with it. Finishes every open phase run of each task it closes. Under git branching: squash onto the final branch (or merge into the parent's wip) with optional `commit_message`, or save a safety commit and return to the base |
-| `get_current_task` | Return the task the calling user's current-task pointer names; "No current task" when there is none |
-| `start_phase` | Start a run of a delivery phase (`research`, `design`, `planning`, `implementation`) on a task (`id`, default the current task) and record it in `<phase>.phase`; moves a `todo` task to `in_progress` and points the current-task pointer at it. `implementation` under git branching does the `start_task` branch work (cutting a branchless parent's wip for a subtask) |
-| `finish_phase` | Finish the open run of a phase with optional `tokens` and `note`; no status or git change |
+| `start_task` | Move task from `todo` to `in_progress` (auto-starts parent if subtask; refuses if blocked) and append it to the user's current-task list (last = most recent); writes no phase records. Under git branching: create and check out its wip branch, or restart (rebase and check out) an existing one; an `in_progress` task without a branch is refused with a hint to use `start_phase implementation` |
+| `complete_task` | Close a task: `in_progress` → `done` (auto-completes parent if last subtask; triggers auto-archive if enabled). With a `resolution` other than `completed` it also accepts a `todo` task and closes its open subtasks along with it. Finishes every open phase run of each task it closes, and removes the closed ids from the user's current-task list. Under git branching: squash onto the final branch (or merge into the parent's wip) with optional `commit_message`, or save a safety commit and return to the base |
+| `get_current_task` | Return the calling user's in-progress tasks as `{"current": <most recent id>, "tasks": [...]}` in the order they were started; entries naming a closed, archived or unknown task are skipped; "No current task" when none |
+| `start_phase` | Start a run of a delivery phase (`research`, `design`, `planning`, `implementation`) on a task (`id` defaults to the current task when exactly one is in progress; required when several are — the error lists them) and record it in `<phase>.phase`; moves a `todo` task to `in_progress` and appends it to the current-task list. `implementation` under git branching does the `start_task` branch work (cutting a branchless parent's wip for a subtask) |
+| `finish_phase` | Finish the open run of a phase with optional `tokens` and `note`; `id` defaults like `start_phase`; no status or git change |
 
 ## Configuration
 
@@ -780,7 +796,7 @@ mcp-task-manager/
 │   │   ├── migrate.go           # Legacy flat-layout migration
 │   │   ├── files.go             # Attached-file read/write/list, reserved names
 │   │   ├── phase.go             # <phase>.phase records (task.PhaseStore), YAML codec
-│   │   ├── current.go           # Per-user current-task pointer (.users/<user>/current_task)
+│   │   ├── current.go           # Per-user current-task list file (.users/<user>/current_task, one id per line)
 │   │   └── index.go             # In-memory index over the task directories
 │   ├── task/
 │   │   ├── task.go              # Task model/types (status, priority, resolution, branch fields)
@@ -790,7 +806,7 @@ mcp-task-manager/
 │   │   ├── branching_start.go   # Fresh and subtask start flows, vacate rule
 │   │   ├── branching_complete.go # Delivered / subtask / abandoned completion, parent gate
 │   │   ├── branching_restart.go # Restart: replay the wip onto its parent line
-│   │   ├── current.go           # CurrentTask and the pointer rules
+│   │   ├── current.go           # CurrentTasks and the pointer-list rules
 │   │   ├── fields.go            # Fields: free-form frontmatter metadata, key rules, reserved keys, merge
 │   │   ├── name.go              # ValidateAttachedName / ValidateNameSegment: the one name-shape rule set
 │   │   ├── phase.go             # Phase names, order, reserved *.phase names; name-based fallback derivation

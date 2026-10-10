@@ -44,11 +44,15 @@ type Identity struct {
 	FromGitEmail bool
 }
 
-// CurrentTaskStore keeps each user's current-task pointer.
+// CurrentTaskStore keeps each user's current-task list: the ids of the
+// tasks they have in progress, one per line, in the order the tasks were
+// started. The last id names the most recently started task.
 type CurrentTaskStore interface {
-	ReadCurrentTask(user string) (id string, ok bool, err error)
-	WriteCurrentTask(user, id string) error
-	RemoveCurrentTask(user string) error
+	// ReadCurrentTasks returns the stored list; a missing file reads as
+	// nil, nil.
+	ReadCurrentTasks(user string) ([]string, error)
+	// WriteCurrentTasks stores the list; an empty list removes the file.
+	WriteCurrentTasks(user string, ids []string) error
 }
 
 // PhaseStore keeps a task's server-owned phase records, one <phase>.phase

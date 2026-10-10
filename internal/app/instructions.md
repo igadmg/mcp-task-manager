@@ -5,9 +5,10 @@ Workflows should use tools `write_task_file`, `read_task_file`, `list_task_files
 to access and write data assosiated with workflow step (ex. task, research, design etc.)
 Tasks are identified by an id — a numeric auto-increment string by default, or a
 custom text id passed explicitly via `create_task`'s `id` parameter, which also
-records you as the task's `created_by`. `start_task` or `start_phase` makes a
-task your current task; `get_current_task` returns it, so a workflow never has
-to keep the id itself.
+records you as the task's `created_by`. `start_task` or `start_phase` appends
+a task to your current-task list; `get_current_task` returns that list (`current`
+is the most recently started task), so a workflow rarely has to keep the id
+itself.
 
 ## Planning
 - `create_task` — add work items as they're identified (title, description,
@@ -23,8 +24,8 @@ to keep the id itself.
 1. `get_next_task` — fetch the highest-priority actionable `todo` task. It
    skips parents with incomplete subtasks and tasks blocked by an unfinished
    `blocked_by` relation.
-2. `start_task` — mark it `in_progress` before making changes. It becomes
-   your current task: `get_current_task` returns it from then on.
+2. `start_task` — mark it `in_progress` before making changes. It joins your
+   current-task list: `get_current_task` returns it (last) from then on.
 3. Do the work.
 4. `complete_task` — mark it `done` when finished. Completing the last open
    subtask auto-completes its parent (unless the parent works on a git
@@ -35,8 +36,10 @@ A workflow that runs a task through research, design, planning and
 implementation records each phase on the task:
 
 1. `create_task` leaves the task in `todo`.
-2. `start_phase(phase=research, id=<id>)` moves it to `in_progress` and makes
-   it your current task; later phases default to the current task.
+2. `start_phase(phase=research, id=<id>)` moves it to `in_progress` and
+   appends it to your current-task list; later phases default to the current
+   task while exactly one is in progress — pass `id` when several are (the
+   error lists them).
 3. `finish_phase(phase=<p>, tokens=<n>)` closes the run with the tokens it
    cost (e.g. the phase sub-agent's total) and an optional `note`.
 4. Each phase starts only after the previous one has a finished run, and only

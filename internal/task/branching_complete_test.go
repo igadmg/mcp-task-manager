@@ -3,6 +3,8 @@ package task_test
 import (
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/gpayer/mcp-task-manager/internal/storage"
@@ -19,14 +21,20 @@ func commitCode(t *testing.T, b *testsupport.GitBacklog, name, content, msg stri
 	return b.Git(t, "rev-parse", "HEAD")
 }
 
-func requirePointer(t *testing.T, b *testsupport.GitBacklog, want string) {
+// requirePointer fails unless the pointer file holds exactly want, one id
+// per line, in the given order.
+func requirePointer(t *testing.T, b *testsupport.GitBacklog, want ...string) {
 	t.Helper()
 	data, err := os.ReadFile(b.PointerPath())
 	switch {
-	case want == "" && !os.IsNotExist(err):
+	case len(want) == 0 && !os.IsNotExist(err):
 		t.Errorf("pointer = (%q, %v), want none", data, err)
-	case want != "" && string(data) != want+"\n":
-		t.Errorf("pointer = (%q, %v), want %s", data, err, want)
+	case len(want) > 0:
+		if err != nil {
+			t.Errorf("pointer = (%q, %v), want %v", data, err, want)
+		} else if got := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n"); !slices.Equal(got, want) {
+			t.Errorf("pointer = %q, want %v", data, want)
+		}
 	}
 }
 
@@ -91,7 +99,7 @@ func TestCompleteDelivered(t *testing.T) {
 		if got := mustGet(t, b, "alpha"); got.FinalBranch != "dev/alpha" || got.Branch != "dev/wip/alpha" {
 			t.Errorf("stored branch fields = (%q, %q)", got.Branch, got.FinalBranch)
 		}
-		requirePointer(t, b, "")
+		requirePointer(t, b)
 		requireNoServerCommitInTasks(t, b)
 	})
 }
@@ -170,7 +178,7 @@ func TestCompleteNonDeliveredCheckedOut(t *testing.T) {
 			if done.Status != task.StatusDone || done.Resolution != task.ResolutionObsolete {
 				t.Errorf("done = %s/%s", done.Status, done.Resolution)
 			}
-			requirePointer(t, b, "")
+			requirePointer(t, b)
 			requireNoServerCommitInTasks(t, b)
 		})
 
@@ -218,7 +226,7 @@ func TestCompleteNonDeliveredNotCheckedOut(t *testing.T) {
 		t.Errorf("refs changed:\n%s", got)
 	}
 	requireHead(t, b, "main_patched")
-	requirePointer(t, b, "")
+	requirePointer(t, b)
 }
 
 func TestCompleteNonDeliveredCascade(t *testing.T) {
@@ -256,7 +264,7 @@ func TestCompleteNonDeliveredCascade(t *testing.T) {
 				} else {
 					requireHead(t, b, head)
 				}
-				requirePointer(t, b, "")
+				requirePointer(t, b)
 			})
 		}
 	})

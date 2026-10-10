@@ -110,8 +110,8 @@ func TestUsersDirIgnoredByScans(t *testing.T) {
 	if err := s.Save(makeTestTask(1)); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
-	if err := s.WriteCurrentTask("dev", "1"); err != nil {
-		t.Fatalf("WriteCurrentTask() error = %v", err)
+	if err := s.WriteCurrentTasks("dev", []string{"1"}); err != nil {
+		t.Fatalf("WriteCurrentTasks() error = %v", err)
 	}
 	// A crafted record exactly where a task scan would look for task ".users".
 	rec := "---\nid: .users\ntitle: crafted\nstatus: todo\npriority: high\ntype: feature\n---\n"
@@ -149,8 +149,8 @@ func TestUsersDirIgnoredByScans(t *testing.T) {
 	if err := s.MigrateFlatLayout(); err != nil {
 		t.Fatalf("MigrateFlatLayout() error = %v", err)
 	}
-	if id, ok, err := s.ReadCurrentTask("dev"); err != nil || !ok || id != "1" {
-		t.Errorf("after migration ReadCurrentTask() = (%q, %v, %v), want (1, true, nil)", id, ok, err)
+	if ids, err := s.ReadCurrentTasks("dev"); err != nil || len(ids) != 1 || ids[0] != "1" {
+		t.Errorf("after migration ReadCurrentTasks() = (%q, %v), want ([1], nil)", ids, err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, UsersDirName, UsersDirName+".md")); err != nil {
 		t.Errorf("migration touched .users: %v", err)
@@ -175,48 +175,59 @@ func TestCurrentTaskPointer(t *testing.T) {
 		t.Errorf("CurrentTaskPath(dev) = %q, want %q", s.CurrentTaskPath("dev"), want)
 	}
 
-	if id, ok, err := s.ReadCurrentTask("dev"); err != nil || ok || id != "" {
-		t.Errorf("absent pointer: ReadCurrentTask() = (%q, %v, %v), want (\"\", false, nil)", id, ok, err)
+	if ids, err := s.ReadCurrentTasks("dev"); err != nil || ids != nil {
+		t.Errorf("absent pointer: ReadCurrentTasks() = (%q, %v), want (nil, nil)", ids, err)
 	}
 
-	for _, id := range []string{"7", "my-feature"} {
-		if err := s.WriteCurrentTask("dev", id); err != nil {
-			t.Fatalf("WriteCurrentTask(%s) error = %v", id, err)
-		}
-		got, ok, err := s.ReadCurrentTask("dev")
-		if err != nil || !ok || got != id {
-			t.Errorf("ReadCurrentTask() = (%q, %v, %v), want (%q, true, nil)", got, ok, err, id)
-		}
+	// A legacy pointer file holding a single id reads as a one-element list.
+	if err := os.MkdirAll(filepath.Join(dir, ".users", "dev"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(s.CurrentTaskPath("dev"), []byte("7\n"), 0644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if ids, err := s.ReadCurrentTasks("dev"); err != nil || len(ids) != 1 || ids[0] != "7" {
+		t.Errorf("legacy pointer: ReadCurrentTasks() = (%q, %v), want ([7], nil)", ids, err)
+	}
+
+	// Garbage tolerance: blanks, surrounding whitespace and \r are dropped,
+	// duplicates collapse to their first occurrence.
+	if err := os.WriteFile(s.CurrentTaskPath("dev"), []byte(" 7 \r\n\nmy-feature\r\n7\n"), 0644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if ids, err := s.ReadCurrentTasks("dev"); err != nil || len(ids) != 2 || ids[0] != "7" || ids[1] != "my-feature" {
+		t.Errorf("messy pointer: ReadCurrentTasks() = (%q, %v), want ([7 my-feature], nil)", ids, err)
+	}
+
+	if err := s.WriteCurrentTasks("dev", []string{"7", "my-feature"}); err != nil {
+		t.Fatalf("WriteCurrentTasks() error = %v", err)
+	}
+	if ids, err := s.ReadCurrentTasks("dev"); err != nil || len(ids) != 2 || ids[0] != "7" || ids[1] != "my-feature" {
+		t.Errorf("ReadCurrentTasks() = (%q, %v), want ([7 my-feature], nil)", ids, err)
 	}
 	if _, err := os.Stat(s.CurrentTaskPath("dev") + ".tmp"); !os.IsNotExist(err) {
 		t.Errorf("temp file left behind: stat err = %v", err)
 	}
 
-	if err := os.WriteFile(s.CurrentTaskPath("dev"), []byte("  \n"), 0644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-	if id, ok, err := s.ReadCurrentTask("dev"); err != nil || ok {
-		t.Errorf("empty pointer: ReadCurrentTask() = (%q, %v, %v), want ok=false", id, ok, err)
-	}
-
+	// An empty list removes the file; removing an absent one is not an error.
 	for i := 0; i < 2; i++ {
-		if err := s.RemoveCurrentTask("dev"); err != nil {
-			t.Errorf("RemoveCurrentTask() #%d error = %v", i+1, err)
+		if err := s.WriteCurrentTasks("dev", nil); err != nil {
+			t.Errorf("WriteCurrentTasks(nil) #%d error = %v", i+1, err)
 		}
 	}
-	if _, ok, _ := s.ReadCurrentTask("dev"); ok {
-		t.Error("pointer still readable after RemoveCurrentTask")
+	if _, err := os.Stat(s.CurrentTaskPath("dev")); !os.IsNotExist(err) {
+		t.Errorf("pointer file still there after an empty write: stat err = %v", err)
+	}
+	if ids, err := s.ReadCurrentTasks("dev"); err != nil || ids != nil {
+		t.Errorf("removed pointer: ReadCurrentTasks() = (%q, %v), want (nil, nil)", ids, err)
 	}
 
 	for _, user := range []string{"a/b", `a\b`, "..", "", "  "} {
-		if err := s.WriteCurrentTask(user, "1"); err == nil {
-			t.Errorf("WriteCurrentTask(%q) = nil, want rejection", user)
+		if err := s.WriteCurrentTasks(user, []string{"1"}); err == nil {
+			t.Errorf("WriteCurrentTasks(%q) = nil, want rejection", user)
 		}
-		if _, _, err := s.ReadCurrentTask(user); err == nil {
-			t.Errorf("ReadCurrentTask(%q) error = nil, want rejection", user)
-		}
-		if err := s.RemoveCurrentTask(user); err == nil {
-			t.Errorf("RemoveCurrentTask(%q) = nil, want rejection", user)
+		if _, err := s.ReadCurrentTasks(user); err == nil {
+			t.Errorf("ReadCurrentTasks(%q) error = nil, want rejection", user)
 		}
 	}
 }

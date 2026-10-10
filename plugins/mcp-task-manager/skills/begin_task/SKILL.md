@@ -26,7 +26,7 @@ Every phase is recorded by the task manager server: `start_phase` opens a run of
 
 Every phase below follows the same frame:
 
-1. Call `start_phase(phase=<phase>)`. For research pass `id=<id>` as well: that moves the task to `in_progress` and makes it your current task, so later phases find it without an id (`get_current_task`).
+1. Call `start_phase(phase=<phase>)`, passing `id` whenever more than one task is in progress — without `id` the call works only while exactly one task is on your current-task list (`get_current_task` shows it; the refusal error lists the open ids). For research always pass `id=<id>` as well: that moves the task to `in_progress` and appends it to your current-task list, so later phases can default to it.
 2. Spawn the phase sub-agent and save its output to the phase's artifact file.
 3. Call `finish_phase(phase=<phase>, tokens=<n>)`, where `<n>` is the sub-agent's reported total token usage (the `total_tokens` of the Agent tool's usage report). Omit `tokens` when the host does not report it.
 4. Summarize and ask for approval.
@@ -93,5 +93,6 @@ Every phase below follows the same frame:
 - Never write `*.phase` files yourself: the server owns them and refuses such writes.
 - If a phase run was left open (for example after a crash), `finish_phase` it without tokens before starting again; only one phase run of a task may be open at a time.
 - Each sub-agent must receive the prior phase files as full context — not summaries.
+- Pass `id` to `start_phase` / `finish_phase` whenever more than one task is in progress; without `id` these calls work only while exactly one task is on your current-task list (`get_current_task`).
 - Keep phase outputs complete and self-contained so future sub-agents need no additional context beyond those files.
 - The task id must be stable once created; do not rename it mid-task.

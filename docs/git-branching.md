@@ -176,8 +176,10 @@ tasks directory. The tasks directory can be:
 Task records are ordinary files on disk, so they look the same whichever
 branch is checked out.
 
-Your current task is saved per user in
-`<tasks_dir>/.users/<user>/current_task`. `start_task` sets it, and
+Your in-progress tasks are saved per user in
+`<tasks_dir>/.users/<user>/current_task`, one task id per line, in the order
+they were started (the last line is the most recent). `start_task` and
+`start_phase` append to it, `complete_task` removes what it closed, and
 `get_current_task` reads it. It describes what one person is working on, so
 add `.users/` inside your tasks directory to `.gitignore`.
 

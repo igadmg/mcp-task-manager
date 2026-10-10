@@ -3,6 +3,7 @@ package task
 import (
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -242,8 +243,8 @@ func TestStartPhaseResearchMovesTodoToInProgress(t *testing.T) {
 	if started.Status != StatusInProgress {
 		t.Errorf("status = %s, want in_progress", started.Status)
 	}
-	if id := f.pointer.ids["dev"]; id != "a" {
-		t.Errorf("pointer = %q, want a", id)
+	if id := f.pointer.lists["dev"]; !slices.Equal(id, []string{"a"}) {
+		t.Errorf("pointer = %q, want [a]", id)
 	}
 	if len(rec.Runs) != 1 || rec.Runs[0].StartedBy != "dev" || !rec.Runs[0].Open() || rec.Runs[0].StartedAt.IsZero() {
 		t.Errorf("record = %+v, want one open run started by dev", rec)
@@ -264,8 +265,8 @@ func TestStartPhaseSubtaskAutoStartsTodoParent(t *testing.T) {
 	if rec, _ := f.phases.LoadPhase("p", PhaseResearch); rec != nil {
 		t.Errorf("the parent got a phase run: %+v", rec)
 	}
-	if id := f.pointer.ids["dev"]; id != "s" {
-		t.Errorf("pointer = %q, want s", id)
+	if id := f.pointer.lists["dev"]; !slices.Equal(id, []string{"p", "s"}) {
+		t.Errorf("pointer = %q, want [p s]", id)
 	}
 }
 
@@ -282,8 +283,9 @@ func TestStartPhaseInProgressNoStatusChange(t *testing.T) {
 	if after.Status != StatusInProgress || !after.UpdatedAt.Equal(before.UpdatedAt) {
 		t.Errorf("in-progress task changed: status %s, updated %v -> %v", after.Status, before.UpdatedAt, after.UpdatedAt)
 	}
-	if id := f.pointer.ids["dev"]; id != "a" {
-		t.Errorf("pointer = %q, want a", id)
+	// A re-started task moves to the end of the list, without a duplicate.
+	if id := f.pointer.lists["dev"]; !slices.Equal(id, []string{"b", "a"}) {
+		t.Errorf("pointer = %q, want [b a]", id)
 	}
 }
 
@@ -302,6 +304,24 @@ func TestStartPhaseDefaultsToCurrentTask(t *testing.T) {
 	got, _, err := f.svc.StartPhase("", PhaseDesign)
 	if err != nil || got.ID != "a" {
 		t.Fatalf("StartPhase(current) = %v, %v; want task a", got, err)
+	}
+}
+
+func TestPhaseTaskRequiresIDWithSeveralInProgress(t *testing.T) {
+	f := newPhaseFixture(t)
+	f.create(t, "a", "")
+	f.create(t, "b", "")
+	f.start(t, "a", PhaseResearch)
+	f.start(t, "b", PhaseResearch)
+
+	_, _, err := f.svc.StartPhase("", PhaseDesign)
+	wantErrText(t, err, "several tasks are in progress (a, b); pass id")
+	_, _, err = f.svc.FinishPhase("", PhaseResearch, PhaseFinish{})
+	wantErrText(t, err, "several tasks are in progress (a, b); pass id")
+
+	// An explicit id ignores the list, whatever it holds.
+	if _, rec, err := f.svc.FinishPhase("a", PhaseResearch, PhaseFinish{}); err != nil || rec.Runs[0].Open() {
+		t.Fatalf("FinishPhase(a) = %+v, %v", rec, err)
 	}
 }
 
@@ -363,8 +383,9 @@ func TestFinishPhaseKeepsStatusAndPointer(t *testing.T) {
 	if after.Status != StatusInProgress || !after.UpdatedAt.Equal(before.UpdatedAt) {
 		t.Errorf("FinishPhase changed the task: %+v", after)
 	}
-	if id := f.pointer.ids["dev"]; id != "b" {
-		t.Errorf("pointer = %q, want b (left alone)", id)
+	// finish_phase leaves the list alone.
+	if id := f.pointer.lists["dev"]; !slices.Equal(id, []string{"a", "b"}) {
+		t.Errorf("pointer = %q, want [a b] (left alone)", id)
 	}
 }
 
@@ -425,8 +446,8 @@ func TestStartPhaseStoreFailureRollsBack(t *testing.T) {
 			t.Errorf("status of %s = %s after a failed start, want todo", id, got)
 		}
 	}
-	if _, ok := f.pointer.ids["dev"]; ok {
-		t.Errorf("pointer = %q after a failed start, want none", f.pointer.ids["dev"])
+	if _, ok := f.pointer.lists["dev"]; ok {
+		t.Errorf("pointer = %q after a failed start, want none", f.pointer.lists["dev"])
 	}
 	if len(f.phases.recs) != 0 {
 		t.Errorf("phase records after a failed start: %v", f.phases.recs)
@@ -570,8 +591,8 @@ func TestCompleteStoreFailureRollsBack(t *testing.T) {
 	if got := f.status(t, "a"); got != StatusInProgress {
 		t.Errorf("status = %s after a failed completion, want in_progress", got)
 	}
-	if id := f.pointer.ids["dev"]; id != "a" {
-		t.Errorf("pointer = %q after a failed completion, want a", id)
+	if id := f.pointer.lists["dev"]; !slices.Equal(id, []string{"a"}) {
+		t.Errorf("pointer = %q after a failed completion, want [a]", id)
 	}
 	if rec, _ := f.phases.LoadPhase("a", PhaseResearch); !rec.Runs[0].Open() {
 		t.Errorf("run closed by a failed completion: %+v", rec.Runs[0])

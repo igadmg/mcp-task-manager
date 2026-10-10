@@ -278,7 +278,7 @@ func TestStartPhaseImplementationCutsBranchlessParent(t *testing.T) {
 	if head := b.Head(t); head != "dev/wip/par--sub" {
 		t.Errorf("HEAD = %q, want the sub-wip", head)
 	}
-	requirePointer(t, b, "sub")
+	requirePointer(t, b, "par", "sub")
 	if len(rec.Runs) != 1 || !rec.Runs[0].Open() {
 		t.Errorf("subtask implementation record = %+v", rec)
 	}

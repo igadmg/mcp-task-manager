@@ -126,11 +126,11 @@ type failingStore struct {
 	fail bool
 }
 
-func (f *failingStore) WriteCurrentTask(user, id string) error {
+func (f *failingStore) WriteCurrentTasks(user string, ids []string) error {
 	if f.fail {
-		return fmt.Errorf("WriteCurrentTask: %w", errInjected)
+		return fmt.Errorf("WriteCurrentTasks: %w", errInjected)
 	}
-	return f.CurrentTaskStore.WriteCurrentTask(user, id)
+	return f.CurrentTaskStore.WriteCurrentTasks(user, ids)
 }
 
 // failingPhaseStore wraps a PhaseStore whose next SavePhase fails once

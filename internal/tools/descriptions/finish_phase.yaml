@@ -4,7 +4,8 @@ description: |
   complete_task closes still-open runs itself, without tokens - finish the
   implementation phase first to record its tokens.
 params:
-  id: Task ID; defaults to your current task
+  id: Task ID; defaults to your current task when exactly one task is in
+    progress, and is required when several are (the error lists them)
   phase: research | design | planning | implementation
   tokens: Total tokens the phase used (non-negative integer), e.g. the sub-agent's reported total
   note: Optional one-line note (e.g. what the run changed)

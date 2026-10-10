@@ -1,8 +1,9 @@
 description: >-
-  Get the task you are currently working on. Each user has their own
-  current-task pointer, kept at <tasks_dir>/.users/<user>/current_task:
-  start_task points it at the started task; complete_task (with any
-  resolution) moves it to the still-open parent of a completed subtask, or
-  removes it. Archived tasks are still returned. Returns "No current task"
-  when there is no pointer, and an error when it names a task that no longer
-  exists.
+  List the tasks you are working on. Each user has their own current-task
+  list, kept at <tasks_dir>/.users/<user>/current_task, one task id per line:
+  start_task and start_phase append (or move to the end); complete_task
+  removes the ids it closed. Returns JSON with "current" (the id of the most
+  recently started task) and "tasks" (the full task records, in the order
+  they were started). Entries that no longer resolve to an in_progress task
+  (closed, archived or deleted) are skipped. Returns "No current task" when
+  no task is in progress.
