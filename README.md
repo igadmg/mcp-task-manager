@@ -250,7 +250,7 @@ Add to your Claude Desktop configuration (`~/.config/claude/claude_desktop_confi
 
 ### Claude Code Integration
 
-Use this path for Claude Code specifically. The plugin package (`plugins/mcp-task-manager/`) bundles its own `.mcp.json`, so installing the plugin also wires up the `task-manager` MCP server — no separate `claude mcp add` step needed.
+Use this path for Claude Code specifically. The plugin package (`deploy/plugins/mcp-task-manager/`) bundles its own `.mcp.json`, so installing the plugin also wires up the `task-manager` MCP server — no separate `claude mcp add` step needed.
 
 **Setup:**
 
@@ -264,7 +264,7 @@ Use this path for Claude Code specifically. The plugin package (`plugins/mcp-tas
 /plugin install mcp-task-manager@mcp-task-manager
 ```
 
-That's it — the bundled `plugins/mcp-task-manager/.mcp.json` launches `mcp-task-manager`, so the plugin needs the binary on your `PATH` (`go install github.com/gpayer/mcp-task-manager/cmd/mcp-task-manager@latest`). An installed plugin directory is not a Go module, so `go run` cannot be used there.
+That's it — the bundled `deploy/plugins/mcp-task-manager/.mcp.json` launches `mcp-task-manager`, so the plugin needs the binary on your `PATH` (`go install github.com/gpayer/mcp-task-manager/cmd/mcp-task-manager@latest`). An installed plugin directory is not a Go module, so `go run` cannot be used there.
 
 **Working on this repository itself** is the other case, and it needs a different command. The repo root carries a *project-scoped* `.mcp.json`, which Claude Code launches with the repository as the working directory:
 
@@ -291,7 +291,7 @@ See [Agent Workflows](#agent-workflows) for what each one does.
 
 ### Codex Integration
 
-Use this path for Codex specifically. This repository now acts as a Codex marketplace root: the marketplace catalog lives in `.agents/plugins/marketplace.json`, and the installable Codex plugin package is `plugins/mcp-task-manager/`.
+Use this path for Codex specifically. This repository now acts as a Codex marketplace root: the marketplace catalog lives in `.agents/plugins/marketplace.json`, and the installable Codex plugin package is `deploy/plugins/mcp-task-manager/`.
 
 **Prerequisite: the `mcp-task-manager` binary**
 
@@ -309,7 +309,7 @@ Inside Codex, install the packaged plugin from that marketplace:
 /plugin install mcp-task-manager@mcp-task-manager
 ```
 
-The plugin package wires in the MCP server definition from `plugins/mcp-task-manager/.mcp.json`, so you do not need a separate `codex mcp add` step.
+The plugin package wires in the MCP server definition from `deploy/plugins/mcp-task-manager/.mcp.json`, so you do not need a separate `codex mcp add` step.
 
 **Usage**
 
@@ -419,7 +419,7 @@ on, `start_task` and `complete_task` do the git work instead:
 When `execute-all` finishes a parent's subtasks, it leaves the parent
 `in_progress`. Complete the parent yourself to get its one-commit final branch.
 
-**Where the skills live.** `plugins/mcp-task-manager/skills/` is the only
+**Where the skills live.** `deploy/plugins/mcp-task-manager/skills/` is the only
 copy to edit. See [Editing the Packaged Skills](#editing-the-packaged-skills).
 
 ### VS Code Integration
@@ -769,9 +769,9 @@ mcp-task-manager/
 │   ├── tools/               # MCP tool handlers
 │   ├── vcs/                 # git wrapper for branch-per-task
 │   └── web/                 # Read-only kanban dashboard (htmx + Tailwind), one session per workspace
-├── plugins/mcp-task-manager/ # The installable Claude Code / Codex plugin: skills, commands, .mcp.json
-├── .claude-plugin/          # Claude Code marketplace catalog (points at plugins/mcp-task-manager)
-├── .agents/plugins/         # Codex marketplace catalog (points at plugins/mcp-task-manager)
+├── deploy/plugins/mcp-task-manager/ # The installable Claude Code / Codex plugin: skills, commands, .mcp.json
+├── .claude-plugin/          # Claude Code marketplace catalog (points at deploy/plugins/mcp-task-manager)
+├── .agents/plugins/         # Codex marketplace catalog (points at deploy/plugins/mcp-task-manager)
 ├── .claude/skills/          # Generated dogfooding copy of the phase skills (scripts/sync-skills.sh)
 ├── scripts/build-css.sh     # Maintainer step: rebuild the vendored CSS
 ├── scripts/sync-skills.sh   # Maintainer step: mirror plugin skills into .claude/skills
@@ -808,7 +808,7 @@ to one on a clean checkout.
 
 ### Editing the Packaged Skills
 
-`plugins/mcp-task-manager/` is the only source for skills and commands: both
+`deploy/plugins/mcp-task-manager/` is the only source for skills and commands: both
 marketplace catalogs install that directory. Edit skills there and nowhere
 else.
 
@@ -825,8 +825,8 @@ bash scripts/sync-skills.sh --check  # fail if the copy has drifted
 ```
 
 When you change the plugin, bump `version` in
-`plugins/mcp-task-manager/.claude-plugin/plugin.json`,
-`plugins/mcp-task-manager/.codex-plugin/plugin.json` and
+`deploy/plugins/mcp-task-manager/.claude-plugin/plugin.json`,
+`deploy/plugins/mcp-task-manager/.codex-plugin/plugin.json` and
 `.claude-plugin/marketplace.json`, so installed copies pick up the change.
 
 ## License

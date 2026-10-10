@@ -17,11 +17,17 @@
            above the board's columns; it is here so it is on every page a
            session serves, and the poll keeps it fresh out of band. */}}
       {{ template "_shell_danger.html" .Project }}
-      <span class="ml-auto meta">
+      <span class="ml-auto meta flex items-center gap-2">
         {{ if .Project.TasksDir }}read-only &middot; {{ .Project.TaskCount }} tasks &middot; {{ end }}
+        {{/* The whole backlog as a graph, nothing highlighted. It lives in the
+             shell so every page a session serves has it; the paths are
+             static, so no view model has to carry them. */}}
+        {{ if .Project.TasksDir }}<a class="shell-link" href="{{ nav "/graph" }}"
+           hx-get="{{ nav "/strip/graph" }}" hx-target="#strip" hx-swap="outerHTML" hx-push-url="{{ nav "/graph" }}"
+           title="Open the whole backlog as a relations graph">Graph &#8599;</a> {{ end }}
         <!-- / is a global route, not a session one: it is the one page every
              session can link without a token. -->
-        <a class="hover:text-neutral-300" href="{{ root "/" }}">workspaces</a>
+        <a class="shell-link" href="{{ root "/" }}">workspaces</a>
       </span>
     </div>
   </header>

@@ -90,7 +90,7 @@ func (p Phase) Order() int {
 
 // phaseMarkers maps a normalized attached-file name to the phase a task
 // has reached once that file exists. The names are the artifacts the
-// begin_task skill writes (plugins/mcp-task-manager/skills/begin_task/SKILL.md,
+// begin_task skill writes (deploy/plugins/mcp-task-manager/skills/begin_task/SKILL.md,
 // mirrored in .claude/skills/begin_task/SKILL.md): each one is saved when
 // its phase ends, so "research" present means the task is in design.
 var phaseMarkers = map[string]Phase{
