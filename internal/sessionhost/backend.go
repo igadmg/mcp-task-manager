@@ -2,9 +2,27 @@ package sessionhost
 
 import (
 	"context"
+	"io"
 
 	"github.com/gpayer/mcp-task-manager/internal/sessionapi"
 )
+
+// rawStarter is an optional extension of Backend: backends that want the
+// per-session raw protocol log (raw.jsonl) receive it at start time. The
+// Backend interface itself stays provider-neutral.
+type rawStarter interface {
+	StartRaw(ctx context.Context, spec sessionapi.Spec, raw io.WriteCloser) (Process, error)
+}
+
+// startProcess passes the raw log to backends implementing rawStarter and
+// closes it otherwise; on failure the backend already released it.
+func startProcess(ctx context.Context, b Backend, spec sessionapi.Spec, raw io.WriteCloser) (Process, error) {
+	if rb, ok := b.(rawStarter); ok {
+		return rb.StartRaw(ctx, spec, raw)
+	}
+	raw.Close()
+	return b.Start(ctx, spec)
+}
 
 // Backend launches a provider process for a spec. The only v1 implementation
 // lives in sessionhost/claude; the manager depends on this interface only.

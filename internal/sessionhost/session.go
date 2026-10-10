@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -25,7 +26,9 @@ type Session struct {
 	journal       *Journal
 	proc          Process
 	pending       map[string]sessionapi.Event
+	turnEnded     bool // turn_result arrived while a request was still pending
 	stopRequested bool
+	closed        bool // manager.Close ran; no new journals afterwards
 }
 
 // SessionView is the manager's read model for one session.
@@ -73,8 +76,13 @@ func restoreSession(dir string, meta Meta) *Session {
 }
 
 // journalOf lazily opens the journal (restored sessions only get one when
-// someone subscribes or appends).
+// someone subscribes or appends). After Close the session refuses new
+// journals: the manager may nil the field while a pump goroutine is still
+// finalizing, and reopening would leak an unclosed file.
 func (s *Session) journalOf() (*Journal, error) {
+	if s.closed {
+		return nil, errJournalClosed
+	}
 	if s.journal != nil {
 		return s.journal, nil
 	}
@@ -121,19 +129,35 @@ func (s *Session) setStatus(status sessionapi.Status, reason string) error {
 
 // applyNormalizedEvent updates pending requests and the status machine for
 // one backend event; the event itself is already journaled by the caller.
+// The synthesized request_resolved can overtake the process's turn_result
+// (both come from different goroutines), so a turn that ended while a
+// request was still pending is remembered and applied when the last pending
+// request resolves.
 func (s *Session) applyNormalizedEvent(ev sessionapi.Event) {
 	switch ev.Kind {
 	case sessionapi.EventQuestion, sessionapi.EventPermission:
+		s.turnEnded = false // a new request means the turn did not end
 		s.pending[ev.RequestID] = ev
 		_ = s.setStatus(sessionapi.StatusWaitingAnswer, "")
 	case sessionapi.EventRequestResolved:
 		delete(s.pending, ev.RequestID)
 		if len(s.pending) == 0 && s.meta.Status == sessionapi.StatusWaitingAnswer {
-			_ = s.setStatus(sessionapi.StatusRunning, "")
+			if s.turnEnded {
+				s.turnEnded = false
+				_ = s.setStatus(sessionapi.StatusIdle, "")
+			} else {
+				_ = s.setStatus(sessionapi.StatusRunning, "")
+			}
 		}
 	case sessionapi.EventTurnResult:
-		if len(s.pending) == 0 && !s.meta.Status.IsTerminal() {
+		if s.meta.Status.IsTerminal() {
+			break
+		}
+		if len(s.pending) == 0 {
+			s.turnEnded = false
 			_ = s.setStatus(sessionapi.StatusIdle, "")
+		} else {
+			s.turnEnded = true
 		}
 	}
 }
@@ -191,17 +215,29 @@ func (s *Session) send(text string) error {
 	if _, err := s.appendEvent(sessionapi.Event{Kind: sessionapi.EventUserMessage, Text: text}); err != nil {
 		return err
 	}
+	s.turnEnded = false // a user message opens a new turn
 	return s.setStatus(sessionapi.StatusRunning, "")
 }
 
 func (s *Session) answer(a sessionapi.Answer) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, ok := s.pending[a.RequestID]; !ok {
+	_, ok := s.pending[a.RequestID]
+	proc := s.proc
+	s.mu.Unlock()
+	if !ok {
 		return &sessionapi.Error{Code: sessionapi.ErrCodeNotFound,
 			Message: "no pending request " + a.RequestID}
 	}
-	if err := s.proc.Answer(a); err != nil {
+	// Answer without holding s.mu: the backend emits request_resolved into
+	// its events channel, and the pump needs s.mu to drain that channel.
+	// Holding the lock here deadlocks once the channel buffer fills
+	// (review finding 2). The backend itself serializes answers, so a
+	// duplicate racing caller gets not_found from proc.Answer.
+	if err := proc.Answer(a); err != nil {
+		var se *sessionapi.Error
+		if errors.As(err, &se) && se.Code == sessionapi.ErrCodeNotFound {
+			return err // duplicate/late answer: the backend already resolved it
+		}
 		return &sessionapi.Error{Code: sessionapi.ErrCodeConflict, Message: err.Error()}
 	}
 	// The backend emits request_resolved once the answer is processed;
@@ -211,16 +247,21 @@ func (s *Session) answer(a sessionapi.Answer) error {
 
 func (s *Session) stop(ctx context.Context) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.meta.Status.IsTerminal() {
+		s.mu.Unlock()
 		return &sessionapi.Error{Code: sessionapi.ErrCodeConflict,
 			Message: "session is already " + string(s.meta.Status)}
 	}
 	s.stopRequested = true
 	proc := s.proc
+	s.mu.Unlock()
+	if proc == nil {
+		// Start has not finished yet; Create completes the stop once the
+		// process handle exists (review finding 6).
+		return nil
+	}
 	// pump needs s.mu to journal the process's last events, so a Stop
 	// that waits for the event channel to drain would deadlock under it.
-	s.mu.Unlock()
 	err := proc.Stop(ctx)
 	s.mu.Lock()
 	// Cancel every unanswered request so the UI can stop waiting.
@@ -237,6 +278,7 @@ func (s *Session) stop(ctx context.Context) error {
 	if serr := s.setStatus(sessionapi.StatusStopped, ""); serr != nil && err == nil {
 		err = serr
 	}
+	s.mu.Unlock()
 	return err
 }
 

@@ -3,6 +3,7 @@ package sessionhost
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -381,5 +382,206 @@ func TestManager_SlowSubscriberReadsFromJournal(t *testing.T) {
 	events := drainEvents(t, m, meta.ID, 0)
 	if len(events) != 55 { // starting, running, 50 text, turn_result, idle, finished
 		t.Fatalf("replayed %d events", len(events))
+	}
+}
+
+// blockingStartBackend stalls Start until released, to exercise Stop while
+// the session is still starting and has no process handle yet.
+type blockingStartBackend struct {
+	entered chan struct{}
+	release chan struct{}
+	proc    *fakeProcess
+}
+
+func newBlockingStartBackend() *blockingStartBackend {
+	return &blockingStartBackend{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+		proc:    newFakeProcess(),
+	}
+}
+
+func (b *blockingStartBackend) Start(ctx context.Context, spec sessionapi.Spec) (Process, error) {
+	close(b.entered)
+	<-b.release
+	return b.proc, nil
+}
+
+func TestManager_StopDuringStart(t *testing.T) {
+	dir := t.TempDir()
+	b := newBlockingStartBackend()
+	m, err := NewManager(dir, b, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { m.Close() })
+
+	created := make(chan Meta, 1)
+	go func() {
+		meta, err := m.Create(context.Background(), testSpec(t.TempDir(), "stop me"))
+		if err != nil {
+			t.Errorf("Create: %v", err)
+			return
+		}
+		created <- meta
+	}()
+	<-b.entered
+
+	var id string
+	waitFor(t, func() bool {
+		list, err := m.List()
+		if err != nil || len(list) != 1 {
+			return false
+		}
+		id = list[0].ID
+		return list[0].Status == sessionapi.StatusStarting
+	}, "session visible as starting")
+
+	stopDone := make(chan error, 1)
+	go func() { stopDone <- m.Stop(id) }()
+	select {
+	case err := <-stopDone:
+		if err != nil {
+			t.Fatalf("Stop during start: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop hung while Start was blocked")
+	}
+
+	close(b.release)
+	meta := <-created
+	if meta.ID != id {
+		t.Fatalf("Create returned %s, want %s", meta.ID, id)
+	}
+	waitFor(t, func() bool { return getStatus(t, m, id) == sessionapi.StatusStopped }, "stopped")
+	select {
+	case _, ok := <-b.proc.stopCalls:
+		if !ok {
+			break
+		}
+		t.Fatal("stopCalls should be closed, not sent to")
+	default:
+		t.Fatal("process was never stopped")
+	}
+	close(b.proc.eventsCh) // release the pump
+}
+
+// fullEmittingProcess behaves like the real backend: Answer publishes the
+// request_resolved event into the events channel, which has a tiny buffer so
+// a flood saturates it exactly like >64 queued events do for the real
+// process. A Session.answer that emits while holding Session.mu blocks
+// forever here once the buffer is full.
+type fullEmittingProcess struct {
+	eventsCh chan sessionapi.Event
+	answers  chan sessionapi.Answer
+}
+
+func newFullEmittingProcess() *fullEmittingProcess {
+	return &fullEmittingProcess{
+		eventsCh: make(chan sessionapi.Event, 1),
+		answers:  make(chan sessionapi.Answer, 16),
+	}
+}
+
+func (p *fullEmittingProcess) Events() <-chan sessionapi.Event { return p.eventsCh }
+func (p *fullEmittingProcess) Send(text string) error          { return nil }
+func (p *fullEmittingProcess) Answer(a sessionapi.Answer) error {
+	p.answers <- a
+	p.eventsCh <- sessionapi.Event{Kind: sessionapi.EventRequestResolved, RequestID: a.RequestID, Outcome: "answered"}
+	return nil
+}
+func (p *fullEmittingProcess) Stop(ctx context.Context) error { return nil }
+func (p *fullEmittingProcess) Wait() error                    { return nil }
+
+type staticBackend struct{ proc Process }
+
+func (b *staticBackend) Start(ctx context.Context, spec sessionapi.Spec) (Process, error) {
+	return b.proc, nil
+}
+
+func TestManager_AnswerDoesNotDeadlockOnFullEventBuffer(t *testing.T) {
+	dir := t.TempDir()
+	proc := newFullEmittingProcess()
+	m, err := NewManager(dir, &staticBackend{proc}, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { m.Close() })
+
+	meta, err := m.Create(context.Background(), testSpec(t.TempDir(), "hi"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return getStatus(t, m, meta.ID) == sessionapi.StatusRunning }, "running")
+
+	// Keep the events buffer full from the producer side, so an Answer
+	// that emits while holding Session.mu blocks forever with the pump
+	// unable to drain (review finding 2).
+	stopFlood := make(chan struct{})
+	var floodWG sync.WaitGroup
+	floodWG.Add(1)
+	go func() {
+		defer floodWG.Done()
+		for {
+			select {
+			case <-stopFlood:
+				return
+			case proc.eventsCh <- sessionapi.Event{Kind: sessionapi.EventAssistantText, Text: "flood"}:
+			}
+		}
+	}()
+	t.Cleanup(func() {
+		close(stopFlood)
+		floodWG.Wait()
+		close(proc.eventsCh) // release the pump
+	})
+
+	proc.eventsCh <- sessionapi.Event{Kind: sessionapi.EventQuestion, RequestID: "r1"}
+	waitFor(t, func() bool { return getStatus(t, m, meta.ID) == sessionapi.StatusWaitingAnswer }, "waiting_answer")
+	waitFor(t, func() bool { return len(proc.eventsCh) == cap(proc.eventsCh) }, "events buffer full")
+
+	const senders = 4
+	results := make(chan error, senders)
+	for i := 0; i < senders; i++ {
+		go func() {
+			results <- m.Answer(meta.ID, sessionapi.Answer{RequestID: "r1", Behavior: sessionapi.BehaviorAllow})
+		}()
+	}
+	timeout := time.After(3 * time.Second)
+	succeeded := 0
+	for i := 0; i < senders; i++ {
+		select {
+		case err := <-results:
+			// Racing duplicates are told the request is gone once the
+			// first answer resolves it; the regression here is the
+			// bounded completion, not duplicate rejection.
+			if err == nil {
+				succeeded++
+			}
+		case <-timeout:
+			t.Fatal("Answer deadlocked on a full events buffer")
+		}
+	}
+	if succeeded == 0 {
+		t.Fatal("no concurrent answer succeeded")
+	}
+	select {
+	case a := <-proc.answers:
+		if a.RequestID != "r1" {
+			t.Fatalf("answer = %+v", a)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("answer never reached the process")
+	}
+
+	stopDone := make(chan error, 1)
+	go func() { stopDone <- m.Stop(meta.ID) }()
+	select {
+	case err := <-stopDone:
+		if err != nil {
+			t.Fatalf("Stop: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop deadlocked after answers")
 	}
 }

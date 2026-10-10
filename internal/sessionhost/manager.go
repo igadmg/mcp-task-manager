@@ -20,6 +20,11 @@ type Manager struct {
 	backend     Backend
 	maxSessions int
 
+	// baseCtx bounds the provider processes: they belong to the host's
+	// lifetime, never to an individual API request (review finding 1).
+	baseCtx context.Context
+	cancel  context.CancelFunc
+
 	mu       sync.Mutex
 	sessions map[string]*Session
 }
@@ -37,7 +42,9 @@ func NewManager(stateDir string, backend Backend, maxSessions int) (*Manager, er
 		maxSessions: maxSessions,
 		sessions:    make(map[string]*Session),
 	}
+	m.baseCtx, m.cancel = context.WithCancel(context.Background())
 	if err := m.recover(); err != nil {
+		m.cancel()
 		return nil, err
 	}
 	return m, nil
@@ -78,7 +85,9 @@ func (m *Manager) recover() error {
 // Create validates the spec, enforces the live-session limit, opens the
 // session directory, and starts the backend. A backend start failure does
 // not fail the call: the session is created in failed state so the user
-// sees the error (design §4).
+// sees the error (design §4). The ctx argument does not bound the provider
+// process: process lifetime belongs to the manager (review finding 1), so a
+// cancelled request context cannot kill a freshly started session.
 func (m *Manager) Create(ctx context.Context, spec sessionapi.Spec) (Meta, error) {
 	if err := spec.Validate(); err != nil {
 		return Meta{}, err
@@ -120,7 +129,11 @@ func (m *Manager) Create(ctx context.Context, spec sessionapi.Spec) (Meta, error
 		return Meta{}, err
 	}
 
-	proc, err := m.backend.Start(ctx, spec)
+	raw, err := os.OpenFile(filepath.Join(sess.dir, "raw.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return Meta{}, err
+	}
+	proc, err := startProcess(m.baseCtx, m.backend, spec, raw)
 	if err != nil {
 		sess.mu.Lock()
 		sess.fail("start_failed", err.Error())
@@ -130,10 +143,20 @@ func (m *Manager) Create(ctx context.Context, spec sessionapi.Spec) (Meta, error
 
 	sess.mu.Lock()
 	sess.proc = proc
-	_ = sess.setStatus(sessionapi.StatusRunning, "")
+	stopped := sess.stopRequested
+	if !stopped {
+		_ = sess.setStatus(sessionapi.StatusRunning, "")
+	}
 	sess.mu.Unlock()
 
 	go sess.pump()
+
+	if stopped {
+		// Stop arrived while the backend was starting; finish the
+		// termination the early stop could not perform without a process
+		// handle (review finding 6).
+		_ = sess.stop(context.Background())
+	}
 	return sess.view().Meta, nil
 }
 
@@ -225,11 +248,13 @@ func (m *Manager) find(id string) (*Session, error) {
 // Close releases all open journals. It does not change session statuses;
 // recovery after a real host restart happens in NewManager.
 func (m *Manager) Close() error {
+	m.cancel()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var first error
 	for _, s := range m.sessions {
 		s.mu.Lock()
+		s.closed = true
 		if s.journal != nil {
 			if err := s.journal.Close(); err != nil && first == nil {
 				first = err
