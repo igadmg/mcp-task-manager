@@ -81,7 +81,7 @@ injection.
 
 ### Planning, Code Review & Testing
 Use the **task manager MCP tools** to organize work:
-- `create_task` - Add new tasks for planned work
+- `create_task` - Add new tasks for planned work. **Always pass a kebab-case `id`** (e.g. `in-progress-sort-switch`) — never let it auto-allocate a numeric one. In task text and relations refer to tasks by that id
 - `update_task` - Update task status, priority, or details
 - `list_tasks` - Review current task state and priorities
 - `delete_task` - Remove obsolete tasks
