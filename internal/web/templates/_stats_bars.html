@@ -13,14 +13,14 @@
     <svg class="stats-bar" viewBox="0 0 {{ .Total }} 1" preserveAspectRatio="none" role="img">
       <title>{{ .Value }}: {{ .Done }} done ({{ $.Colors.done }}), {{ .Recent }} of them closed in the last {{ .RecentHours }} h ({{ $.Colors.recent }}), {{ .InProgress }} in progress ({{ $.Colors.in_progress }}), {{ .Todo }} to do ({{ $.Colors.todo }}), {{ .New }} of them created in the last {{ .NewHours }} h ({{ $.Colors.new }})</title>
       {{ if .Done }}<rect class="bar-done" x="0" width="{{ .Done }}" height="1"/>{{ end }}
-      {{ if .Recent }}<rect class="bar-recent" x="{{ .RecentX }}" width="{{ .Recent }}" height="1"/>{{ end }}
+      {{ if .Recent }}<rect class="bar-done-recent" x="{{ .RecentX }}" width="{{ .Recent }}" height="1"/>{{ end }}
       {{ if .InProgress }}<rect class="bar-in_progress" x="{{ .Done }}" width="{{ .InProgress }}" height="1"/>{{ end }}
       {{ if .Todo }}<rect class="bar-todo" x="{{ .TodoX }}" width="{{ .Todo }}" height="1"/>{{ end }}
       {{/* The arrivals, painted over the start of the todo run - so recent
            work sits in the middle of the bar and the stale tail stays at the
            far right. x is TodoX, the todo segment's own start, which is why
            this needs no offset of its own. */}}
-      {{ if .New }}<rect class="bar-new" x="{{ .TodoX }}" width="{{ .New }}" height="1"/>{{ end }}
+      {{ if .New }}<rect class="bar-todo-new" x="{{ .TodoX }}" width="{{ .New }}" height="1"/>{{ end }}
     </svg>
   </div>
   {{ else }}

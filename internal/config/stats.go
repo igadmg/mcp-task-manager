@@ -123,11 +123,14 @@ func statsCardProblems(c, written StatsCard) []string {
 		case !slices.Contains(statsFieldNames, c.Field):
 			out = append(out, fmt.Sprintf("unknown field %q (one of %s); the card stays empty", c.Field, oneOf(statsFieldNames)))
 		}
+		// recent_hours is one window for the whole board now (web.recent_hours).
+		// A zero is indistinguishable from an absent key, so only a written
+		// non-zero value is reported.
+		if written.RecentHours != 0 {
+			out = append(out, fmt.Sprintf("recent_hours: %d on a card is ignored; set web.recent_hours, the one window every card and the Done list share", written.RecentHours))
+		}
 		// Like days: only a negative value proves the key was written,
 		// since yaml decodes an absent key and a written 0 alike.
-		if written.RecentHours < 0 {
-			out = append(out, fmt.Sprintf("recent_hours: %d is not a positive number; using %d", written.RecentHours, c.RecentHours))
-		}
 		if written.NewHours < 0 {
 			out = append(out, fmt.Sprintf("new_hours: %d is not a positive number; using %d", written.NewHours, c.NewHours))
 		}
@@ -198,8 +201,10 @@ type StatsCard struct {
 	Title string `yaml:"title,omitempty"`
 	// Field is the task field a bars card groups on.
 	Field string `yaml:"field,omitempty"`
-	// RecentHours is a bars card's outflow window: the done tasks closed
-	// inside it are highlighted over the end of the done run.
+	// RecentHours is deprecated: the closures window is web.recent_hours, one
+	// for every card. The key is still decoded so that a written value can be
+	// reported (ValidateStatsCards); normalization clears it and nothing
+	// reads it.
 	RecentHours int `yaml:"recent_hours,omitempty"`
 	// NewHours is a bars card's inflow window: the todo tasks created
 	// inside it are highlighted over the start of the todo run. It is a
@@ -233,6 +238,17 @@ func defaultStatsCards(newHours int) []StatsCard {
 		{Kind: StatsKindBars, Field: "resolution"},
 		{Kind: StatsKindLines, Days: DefaultStatsDays, Lines: []string{StatsLineCreated, StatsLineClosed}},
 	}, newHours)
+}
+
+// RecentHours returns the board's "recently closed" window in hours:
+// web.recent_hours, or DefaultStatsHours when it is not set. Like Palette and
+// DoneStatsCards it does not depend on applyDefaults having run, so a nil
+// config or a literal one works.
+func (c *Config) RecentHours() int {
+	if c == nil || c.Web.RecentHours <= 0 {
+		return DefaultStatsHours
+	}
+	return c.Web.RecentHours
 }
 
 // DoneStatsCards returns the Done-column cards with every default filled in.
@@ -294,9 +310,7 @@ func normalizeStatsCard(c StatsCard, newHours int) StatsCard {
 	var key []string
 	switch c.Kind {
 	case StatsKindBars:
-		if c.RecentHours <= 0 {
-			c.RecentHours = DefaultStatsHours
-		}
+		c.RecentHours = 0 // deprecated: see StatsCard.RecentHours
 		if c.NewHours <= 0 {
 			c.NewHours = newHours
 		}

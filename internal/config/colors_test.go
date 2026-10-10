@@ -58,21 +58,23 @@ func TestValidateColors(t *testing.T) {
 		name     string
 		roles    map[string]string
 		newHours int
+		recent   int
 		want     []string
 	}{
-		{"nothing written", nil, 0, nil},
-		{"valid name", map[string]string{"in_progress": "sky-400"}, 24, nil},
-		{"unknown role", map[string]string{"inprogress": "sky-400"}, 24, []string{`web.colors.inprogress: unknown role`}},
-		{"unknown name", map[string]string{"in_progress": "ambr-400"}, 24,
+		{"nothing written", nil, 0, 0, nil},
+		{"valid name", map[string]string{"in_progress": "sky-400"}, 24, 24, nil},
+		{"unknown role", map[string]string{"inprogress": "sky-400"}, 24, 24, []string{`web.colors.inprogress: unknown role`}},
+		{"unknown name", map[string]string{"in_progress": "ambr-400"}, 24, 24,
 			[]string{`web.colors.in_progress: "ambr-400" is not an allowed colour (hue-shade, e.g. amber-400); using amber-400`}},
-		{"wrong case", map[string]string{"new": "Sky-400"}, 24, []string{`web.colors.new: "Sky-400" is not an allowed colour`}},
-		{"whitespace", map[string]string{"done": " emerald-500"}, 24, []string{`web.colors.done: " emerald-500" is not an allowed colour`}},
-		{"negative window", nil, -3, []string{`web.new_hours: -3 is negative; using 24`}},
-		{"sorted", map[string]string{"todo": "x", "done": "y"}, 24,
+		{"wrong case", map[string]string{"new": "Sky-400"}, 24, 24, []string{`web.colors.new: "Sky-400" is not an allowed colour`}},
+		{"whitespace", map[string]string{"done": " emerald-500"}, 24, 24, []string{`web.colors.done: " emerald-500" is not an allowed colour`}},
+		{"negative window", nil, -3, 0, []string{`web.new_hours: -3 is negative; using 24`}},
+		{"negative recent window", nil, 24, -5, []string{`web.recent_hours: -5 is negative; using 24`}},
+		{"sorted", map[string]string{"todo": "x", "done": "y"}, 24, 24,
 			[]string{`web.colors.done: "y"`, `web.colors.todo: "x"`}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := ValidateColors(tc.roles, tc.newHours)
+			got := ValidateColors(tc.roles, tc.newHours, tc.recent)
 			if len(got) != len(tc.want) {
 				t.Fatalf("got %q, want %d lines", got, len(tc.want))
 			}
@@ -160,8 +162,8 @@ func TestNewHoursDefaultAndInheritance(t *testing.T) {
 	if cards[0].NewHours != 72 || cards[1].NewHours != 6 {
 		t.Errorf("NewHours = %d, %d, want 72 and 6", cards[0].NewHours, cards[1].NewHours)
 	}
-	if cards[0].RecentHours != DefaultStatsHours {
-		t.Errorf("RecentHours = %d, want the constant", cards[0].RecentHours)
+	if cards[0].RecentHours != 0 {
+		t.Errorf("RecentHours = %d, want 0: the per-card window is gone, web.recent_hours replaces it", cards[0].RecentHours)
 	}
 
 	// The nil-safe accessor on a literal config uses the board window too.
@@ -170,6 +172,42 @@ func TestNewHoursDefaultAndInheritance(t *testing.T) {
 		if c.Kind == StatsKindBars && c.NewHours != 12 {
 			t.Errorf("literal config card %s NewHours = %d, want 12", c.ID, c.NewHours)
 		}
+	}
+}
+
+func TestRecentHoursDefaultAndAccessor(t *testing.T) {
+	cfg, _ := loadColors(t, "enabled: false\n")
+	if cfg.Web.RecentHours != DefaultStatsHours || cfg.RecentHours() != DefaultStatsHours {
+		t.Errorf("RecentHours = %d / %d, want %d", cfg.Web.RecentHours, cfg.RecentHours(), DefaultStatsHours)
+	}
+
+	cfg, _ = loadColors(t, "recent_hours: 48\n")
+	if cfg.Web.RecentHours != 48 || cfg.RecentHours() != 48 {
+		t.Errorf("RecentHours = %d / %d, want 48", cfg.Web.RecentHours, cfg.RecentHours())
+	}
+
+	cfg, out := loadColors(t, "recent_hours: -5\n")
+	if cfg.Web.RecentHours != DefaultStatsHours || !strings.Contains(out, "web.recent_hours: -5") {
+		t.Errorf("RecentHours = %d, stderr %q: want 24 and a report", cfg.Web.RecentHours, out)
+	}
+
+	// A recent_hours written inside a card is reported and does not move the
+	// shared window.
+	cfg, out = loadColors(t, "recent_hours: 48\ndone_stats:\n  cards:\n    - {kind: bars, field: type, recent_hours: 6}\n")
+	if cfg.RecentHours() != 48 || !strings.Contains(out, "recent_hours: 6 on a card is ignored") {
+		t.Errorf("RecentHours = %d, stderr %q: want 48 and a report", cfg.RecentHours(), out)
+	}
+
+	// The accessor works without applyDefaults: nil and literal configs.
+	var nilCfg *Config
+	if got := nilCfg.RecentHours(); got != DefaultStatsHours {
+		t.Errorf("nil config RecentHours() = %d, want %d", got, DefaultStatsHours)
+	}
+	if got := (&Config{}).RecentHours(); got != DefaultStatsHours {
+		t.Errorf("literal config RecentHours() = %d, want %d", got, DefaultStatsHours)
+	}
+	if got := (&Config{Web: WebConfig{RecentHours: 12}}).RecentHours(); got != 12 {
+		t.Errorf("literal config RecentHours() = %d, want 12", got)
 	}
 }
 

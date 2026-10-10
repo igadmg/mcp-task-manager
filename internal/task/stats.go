@@ -25,8 +25,8 @@ type StatsCard struct {
 	Bars []StatsBar
 	// RecentHours and NewHours are the windows Bars was counted with, in
 	// hours. They ride along because a reader has to be told what
-	// "recently" meant - the bar's title names both - and because they are
-	// per card now rather than one constant.
+	// "recently" meant - the bar's title names both. RecentHours is the one
+	// board window (web.recent_hours), NewHours may be tuned per card.
 	RecentHours int
 	NewHours    int
 	// Days holds a lines card's days: the start (local midnight) of each,
@@ -67,16 +67,18 @@ type StatsLine struct {
 
 // computeStats computes every card over all (the active index, subtasks
 // included). types is the configured task_types order; now is the instant
-// the 24 h window ends at, and its Location() is the zone the days are
-// counted in.
-func computeStats(all []*Task, cards []config.StatsCard, types []string, now time.Time) []StatsCard {
+// the windows end at, and its Location() is the zone the days are counted in.
+// recentHours is the board's one closures window (web.recent_hours): no card
+// has a window of its own for it, so the bars and the Done column's list of
+// closed tasks (BoardSnapshot.ClosedRecently) count the same tasks.
+func computeStats(all []*Task, cards []config.StatsCard, types []string, now time.Time, recentHours int) []StatsCard {
 	out := make([]StatsCard, 0, len(cards))
 	for _, c := range cards {
 		card := StatsCard{ID: c.ID, Kind: c.Kind, Title: c.Title}
 		switch c.Kind {
 		case config.StatsKindBars:
 			card.Field = c.Field
-			recent, fresh := statsWindow(c.RecentHours), statsWindow(c.NewHours)
+			recent, fresh := statsWindow(recentHours), statsWindow(c.NewHours)
 			card.RecentHours = int(recent / time.Hour)
 			card.NewHours = int(fresh / time.Hour)
 			card.Bars = statsBars(all, c.Field, types, now, recent, fresh)
@@ -119,7 +121,7 @@ func statsBars(all []*Task, field string, types []string, now time.Time, recent,
 		switch t.Status {
 		case StatusDone:
 			row.Done++
-			if ct := closeTime(t); ct.After(now.Add(-recent)) && !ct.After(now) {
+			if _, ok := closedWithin(t, now, recent); ok {
 				row.ClosedRecently++
 			}
 		case StatusInProgress:
@@ -240,6 +242,18 @@ func metricTime(t *Task, base string) (time.Time, bool) {
 
 // closeTime is when a done task closed: closed_at, or updated_at for a task
 // closed before closed_at existed.
+// closedWithin is the one definition of "closed recently": a done task whose
+// close time is after now-window and not after now (a future close has not
+// happened yet). It returns the close time. The bars' ClosedRecently and the
+// snapshot's ClosedRecently set both use it, so the two cannot drift.
+func closedWithin(t *Task, now time.Time, window time.Duration) (time.Time, bool) {
+	if t.Status != StatusDone {
+		return time.Time{}, false
+	}
+	ct := closeTime(t)
+	return ct, ct.After(now.Add(-window)) && !ct.After(now)
+}
+
 func closeTime(t *Task) time.Time {
 	if t.ClosedAt != nil {
 		return *t.ClosedAt

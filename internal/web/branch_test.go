@@ -81,13 +81,16 @@ func TestBoardShowsBranchChip(t *testing.T) {
 			t.Errorf("board lacks %s", want)
 		}
 	}
-	// Done renders statistics, not cards: a delivered task's branch is
-	// shown by its detail view only.
-	if strings.Contains(board, "4-old-chore") {
-		t.Error("the board names done task 4's branch")
+	// Task 4 closed just now, so the Done list has its card, and a delivered
+	// card names the final branch, not the wip one.
+	if !strings.Contains(board, `data-copy="dev/4-old-chore"`) {
+		t.Error("the Done card does not name task 4's final branch")
 	}
-	if n := strings.Count(board, "copy-btn"); n != 1 {
-		t.Errorf("board has %d copy buttons, want 1 (only branched open tasks)", n)
+	if strings.Contains(board, "dev/wip/4-old-chore") {
+		t.Error("the Done card names task 4's wip branch next to its final one")
+	}
+	if n := strings.Count(board, "copy-btn"); n != 2 {
+		t.Errorf("board has %d copy buttons, want 2 (the branched open task and the delivered one)", n)
 	}
 
 	detail := get(t, h, "/tasks/4").Body.String()

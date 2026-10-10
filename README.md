@@ -134,7 +134,7 @@ on its next start.
 - Tailwind CSS and htmx are compiled into the binary, so the page renders with no network access.
 - The page header names the tasks that are **in progress**, so you can see an agent may be editing those areas from any page — a count chip plus the first couple of tasks, with the rest in a tooltip. It refreshes on the same five-second poll as the board, without a second request.
 - In progress is a grid of Research / Design / Planning / Implementation lanes, each starting one step right of the one before. A task's lane is the phase of its latest started run in its `<phase>.phase` records; a task without records falls back to the workflow files (`research`, `design`, `plan`) attached to it. A card whose nested subtasks are in other phases spans the whole range of its group, and each nested row is indented to its own lane — so a parent in research with a subtask in planning reads as research..planning instead of looking like one planning task. A lane's count is the tasks whose own phase it is, so the four counts add up to the column's.
-- Done shows statistics instead of task cards: per configured field (by default `priority`, `type`, `resolution`) one stacked bar per value with the done / in progress / todo split and **both ends highlighted** — what was closed recently over the end of done, what arrived recently and is still waiting over the start of todo — so a bar shows inflow as well as outflow, with a label like `7/12 · 5 open · +2 · 3 new`. Both windows are per card (`recent_hours`, `new_hours`, 24 h by default); and line charts of tasks created and closed per day (plain, cumulative, or one line per value of a field), drawn as inline SVG on the server with a legend, day tooltips and the lines listed in `hidden` switched off. Clicking a legend entry shows or hides its line; the choice is kept per browser (in `localStorage`, per card `id` and line) and survives the board refresh, and the toggle sends no request. A done task stays reachable at `/<token>/tasks/{id}`. See `web.done_stats` under Configuration.
+- Done shows statistics, and under them the tasks closed in the last `recent_hours` (24 by default) as ordinary cards, newest first, no cap: a closed subtask nests in its parent's card, and a parent that is still open is listed too, in its own status colour, so unfinished work is visible as unfinished. The statistics: per configured field (by default `priority`, `type`, `resolution`) one stacked bar per value with the done / in progress / todo split and **both ends highlighted** — what was closed recently over the end of done, what arrived recently and is still waiting over the start of todo — so a bar shows inflow as well as outflow, with a label like `7/12 · 5 open · +2 · 3 new`. The closures window is the one `web.recent_hours` for every card and the list, so a bar and the list always count the same tasks; the arrivals window `new_hours` can be set per card (24 h by default); and line charts of tasks created and closed per day (plain, cumulative, or one line per value of a field), drawn as inline SVG on the server with a legend, day tooltips and the lines listed in `hidden` switched off. Clicking a legend entry shows or hides its line; the choice is kept per browser (in `localStorage`, per card `id` and line) and survives the board refresh, and the toggle sends no request. A done task stays reachable at `/<token>/tasks/{id}`. See `web.done_stats` under Configuration.
 - Every card shows who created the task and when; in-progress cards with phase records also show the current phase, who started it and when, and the tokens spent so far. The detail view lists every phase run.
 - Clicking a card opens its panel at `/<token>/tasks/{id}` — the board with that panel open, not a separate page. Everything in a panel or a column is openable: its description, every attached file, its parent, its subtasks, its blockers and every relation target. Opening any of them turns the board into a workspace: the board slides off to the left, the task's own column takes its place on the far left, and what you opened appears as a column to its right. Opening something from there adds another column, so a subtask sits beside its parent rather than replacing it. A rail on the far left lists the whole chain, so one click steps back. Every column is one screen tall and scrolls inside itself; the page does not scroll, and the strip cannot be panned with a mouse or trackpad — there is no scroll container to pan. Below `lg` nothing slides and the columns stack.
 - A **Graph** button on the board, and a **Graph** link on every task, open the whole backlog as a relations graph in the working area: a node per task with done ones dimmed and blocked ones marked, parent edges plus every configured relation type with a legend, and unconnected tasks grouped at the end. Clicking a node opens that task with the graph beside it. It is rendered on the server as an SVG — no dependency, no JavaScript layout, nothing fetched.
@@ -250,7 +250,7 @@ Add to your Claude Desktop configuration (`~/.config/claude/claude_desktop_confi
 
 ### Claude Code Integration
 
-Use this path for Claude Code specifically. The plugin package (`plugins/mcp-task-manager/`) bundles its own `.mcp.json`, so installing the plugin also wires up the `task-manager` MCP server — no separate `claude mcp add` step needed.
+Use this path for Claude Code specifically. The plugin package (`deploy/plugins/mcp-task-manager/`) bundles its own `.mcp.json`, so installing the plugin also wires up the `task-manager` MCP server — no separate `claude mcp add` step needed.
 
 **Setup:**
 
@@ -264,7 +264,7 @@ Use this path for Claude Code specifically. The plugin package (`plugins/mcp-tas
 /plugin install mcp-task-manager@mcp-task-manager
 ```
 
-That's it — the bundled `plugins/mcp-task-manager/.mcp.json` launches `mcp-task-manager`, so the plugin needs the binary on your `PATH` (`go install github.com/gpayer/mcp-task-manager/cmd/mcp-task-manager@latest`). An installed plugin directory is not a Go module, so `go run` cannot be used there.
+That's it — the bundled `deploy/plugins/mcp-task-manager/.mcp.json` launches `mcp-task-manager`, so the plugin needs the binary on your `PATH` (`go install github.com/gpayer/mcp-task-manager/cmd/mcp-task-manager@latest`). An installed plugin directory is not a Go module, so `go run` cannot be used there.
 
 **Working on this repository itself** is the other case, and it needs a different command. The repo root carries a *project-scoped* `.mcp.json`, which Claude Code launches with the repository as the working directory:
 
@@ -291,7 +291,7 @@ See [Agent Workflows](#agent-workflows) for what each one does.
 
 ### Codex Integration
 
-Use this path for Codex specifically. This repository now acts as a Codex marketplace root: the marketplace catalog lives in `.agents/plugins/marketplace.json`, and the installable Codex plugin package is `plugins/mcp-task-manager/`.
+Use this path for Codex specifically. This repository now acts as a Codex marketplace root: the marketplace catalog lives in `.agents/plugins/marketplace.json`, and the installable Codex plugin package is `deploy/plugins/mcp-task-manager/`.
 
 **Prerequisite: the `mcp-task-manager` binary**
 
@@ -309,7 +309,7 @@ Inside Codex, install the packaged plugin from that marketplace:
 /plugin install mcp-task-manager@mcp-task-manager
 ```
 
-The plugin package wires in the MCP server definition from `plugins/mcp-task-manager/.mcp.json`, so you do not need a separate `codex mcp add` step.
+The plugin package wires in the MCP server definition from `deploy/plugins/mcp-task-manager/.mcp.json`, so you do not need a separate `codex mcp add` step.
 
 **Usage**
 
@@ -419,7 +419,7 @@ on, `start_task` and `complete_task` do the git work instead:
 When `execute-all` finishes a parent's subtasks, it leaves the parent
 `in_progress`. Complete the parent yourself to get its one-commit final branch.
 
-**Where the skills live.** `plugins/mcp-task-manager/skills/` is the only
+**Where the skills live.** `deploy/plugins/mcp-task-manager/skills/` is the only
 copy to edit. See [Editing the Packaged Skills](#editing-the-packaged-skills).
 
 ### VS Code Integration
@@ -524,17 +524,17 @@ web:
   enabled: false          # start the dashboard alongside the MCP server
   addr: 127.0.0.1:7777    # listen address
   new_hours: 24           # a todo card created this recently shows a `new` chip (default 24)
+  recent_hours: 24        # "recently closed": the bar highlight and the Done list (default 24)
   colors:                 # status palette; omitted roles keep these defaults
     todo: neutral-500
     in_progress: amber-400
     done: emerald-500
-    recent: emerald-200   # closed inside recent_hours (bars only)
+    recent: emerald-200   # closed inside recent_hours: bar highlight, Done card frame
     new: sky-400          # created inside new_hours, still todo
   done_stats:             # statistics cards of the Done column, in order
     cards:
       - kind: bars        # one bar per value of a task field
         field: priority
-        recent_hours: 24  # highlight closures from the last N hours (default 24)
         new_hours: 24     # highlight arrivals still waiting, last N hours (default 24)
       - kind: lines       # per-day chart over the last `days` days
         title: Last 2 weeks
@@ -769,9 +769,9 @@ mcp-task-manager/
 │   ├── tools/               # MCP tool handlers
 │   ├── vcs/                 # git wrapper for branch-per-task
 │   └── web/                 # Read-only kanban dashboard (htmx + Tailwind), one session per workspace
-├── plugins/mcp-task-manager/ # The installable Claude Code / Codex plugin: skills, commands, .mcp.json
-├── .claude-plugin/          # Claude Code marketplace catalog (points at plugins/mcp-task-manager)
-├── .agents/plugins/         # Codex marketplace catalog (points at plugins/mcp-task-manager)
+├── deploy/plugins/mcp-task-manager/ # The installable Claude Code / Codex plugin: skills, commands, .mcp.json
+├── .claude-plugin/          # Claude Code marketplace catalog (points at deploy/plugins/mcp-task-manager)
+├── .agents/plugins/         # Codex marketplace catalog (points at deploy/plugins/mcp-task-manager)
 ├── .claude/skills/          # Generated dogfooding copy of the phase skills (scripts/sync-skills.sh)
 ├── scripts/build-css.sh     # Maintainer step: rebuild the vendored CSS
 ├── scripts/sync-skills.sh   # Maintainer step: mirror plugin skills into .claude/skills
@@ -808,7 +808,7 @@ to one on a clean checkout.
 
 ### Editing the Packaged Skills
 
-`plugins/mcp-task-manager/` is the only source for skills and commands: both
+`deploy/plugins/mcp-task-manager/` is the only source for skills and commands: both
 marketplace catalogs install that directory. Edit skills there and nowhere
 else.
 
@@ -825,8 +825,8 @@ bash scripts/sync-skills.sh --check  # fail if the copy has drifted
 ```
 
 When you change the plugin, bump `version` in
-`plugins/mcp-task-manager/.claude-plugin/plugin.json`,
-`plugins/mcp-task-manager/.codex-plugin/plugin.json` and
+`deploy/plugins/mcp-task-manager/.claude-plugin/plugin.json`,
+`deploy/plugins/mcp-task-manager/.codex-plugin/plugin.json` and
 `.claude-plugin/marketplace.json`, so installed copies pick up the change.
 
 ## License

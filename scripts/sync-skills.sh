@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Mirrors the plugin's phase skills into .claude/skills/ for dogfooding.
 #
-# plugins/mcp-task-manager/skills/ is the only place to edit skills: it is the
+# deploy/plugins/mcp-task-manager/skills/ is the only place to edit skills: it is the
 # package both marketplaces install. .claude/skills/ is a generated copy, so
 # Claude Code sessions in this repository use the same skills without
 # installing the plugin (and without its second, binary-backed MCP server).
@@ -23,14 +23,14 @@ SKILLS=(begin_task research design planning implementation workflow)
 LOCAL_ONLY=(open_board)
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SRC="${REPO_ROOT}/plugins/mcp-task-manager/skills"
+SRC="${REPO_ROOT}/deploy/plugins/mcp-task-manager/skills"
 DST="${REPO_ROOT}/.claude/skills"
 
 if [[ "${1:-}" == "--check" ]]; then
   status=0
   for s in "${SKILLS[@]}"; do
     if ! diff -r "${SRC}/${s}" "${DST}/${s}" >/dev/null 2>&1; then
-      echo "drifted: .claude/skills/${s} (edit plugins/mcp-task-manager/skills/${s}, then run scripts/sync-skills.sh)" >&2
+      echo "drifted: .claude/skills/${s} (edit deploy/plugins/mcp-task-manager/skills/${s}, then run scripts/sync-skills.sh)" >&2
       status=1
     fi
   done

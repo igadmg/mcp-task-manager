@@ -162,7 +162,7 @@ func TestStatsProblemsDoNotChangeTheCards(t *testing.T) {
 	// The decision: report, never fail, never drop. The card is kept and
 	// normalized exactly as it would be without any validation.
 	want := []StatsCard{{ID: "bars-prioriry", Kind: StatsKindBars, Title: "Prioriry", Field: "prioriry",
-		RecentHours: DefaultStatsHours, NewHours: DefaultStatsHours}}
+		NewHours: DefaultStatsHours}}
 	if got := cfg.Web.DoneStats.Cards; !reflect.DeepEqual(got, want) {
 		t.Errorf("Cards = %+v, want %+v", got, want)
 	}
@@ -213,9 +213,9 @@ func TestStatsBarWindowProblems(t *testing.T) {
 		want    []string
 	}{
 		{
-			"negative recent_hours",
+			"negative recent_hours is ignored like any other",
 			StatsCard{Kind: StatsKindBars, Field: "priority", RecentHours: -1},
-			[]string{"recent_hours: -1 is not a positive number; using 24"},
+			[]string{"recent_hours: -1 on a card is ignored; set web.recent_hours, the one window every card and the Done list share"},
 		},
 		{
 			"negative new_hours",
@@ -226,7 +226,7 @@ func TestStatsBarWindowProblems(t *testing.T) {
 			"both negative, reported once each",
 			StatsCard{Kind: StatsKindBars, Field: "priority", RecentHours: -1, NewHours: -2},
 			[]string{
-				"recent_hours: -1 is not a positive number; using 24",
+				"recent_hours: -1 on a card is ignored; set web.recent_hours, the one window every card and the Done list share",
 				"new_hours: -2 is not a positive number; using 24",
 			},
 		},
@@ -236,9 +236,14 @@ func TestStatsBarWindowProblems(t *testing.T) {
 			nil,
 		},
 		{
-			"a sensible window says nothing",
-			StatsCard{Kind: StatsKindBars, Field: "priority", RecentHours: 72, NewHours: 168},
+			"a sensible new window says nothing",
+			StatsCard{Kind: StatsKindBars, Field: "priority", NewHours: 168},
 			nil,
+		},
+		{
+			"a written recent_hours is reported: the window is web.recent_hours now",
+			StatsCard{Kind: StatsKindBars, Field: "priority", RecentHours: 72},
+			[]string{"recent_hours: 72 on a card is ignored; set web.recent_hours, the one window every card and the Done list share"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

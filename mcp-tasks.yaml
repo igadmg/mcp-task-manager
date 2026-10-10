@@ -17,9 +17,10 @@ web:
   #   todo: neutral-500
   #   in_progress: amber-400
   #   done: emerald-500
-  #   recent: emerald-200   # closed inside recent_hours (bars only)
+  #   recent: emerald-200   # closed inside recent_hours: bar highlight, Done card frame
   #   new: sky-400          # created inside new_hours, still todo
   # new_hours: 24           # window of the `new` chip on todo cards; default for bars cards
+  # recent_hours: 24        # the one "recently closed" window: the bars' highlight and the Done list
   # Statistics cards of the board's Done column, in board order. These four
   # are the defaults; `cards: []` shows none.
   done_stats:

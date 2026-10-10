@@ -8,7 +8,7 @@
       "name": "mcp-task-manager",
       "source": {
         "source": "local",
-        "path": "./plugins/mcp-task-manager"
+        "path": "./deploy/plugins/mcp-task-manager"
       },
       "policy": {
         "installation": "AVAILABLE",
