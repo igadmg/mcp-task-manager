@@ -1,0 +1,40 @@
+{{ define "title" }}{{ .Title }}{{ end }}
+{{ define "extrahead" }}<meta name="csrf-token" content="{{ .CSRF }}">{{ end }}
+{{ define "content" }}
+{{/* One live session (design §8). The feed is fed by an EventSource against
+     the events URL; unanswered requests are rendered server-side too, so a
+     reload restores the pending state. Every event string the script inserts
+     goes through textContent - model and tool output is untrusted. */}}
+<div id="session-page" class="mx-auto max-w-3xl"
+     data-session-id="{{ .ID }}"
+     data-events-url="{{ nav .EventsHref }}"
+     data-messages-url="{{ nav .MessagesHref }}"
+     data-answers-url="{{ nav .AnswersHref }}"
+     data-stop-url="{{ nav .StopHref }}">
+  <p><a class="col-link" href="{{ nav .ListHref }}">&larr; sessions</a></p>
+  <h1 class="mt-2 text-base font-semibold leading-snug text-neutral-100">{{ .Title }}</h1>
+  <p class="meta mt-1">
+    status: <span id="session-status" class="chip sess-status sess-status-{{ .Status }}" data-status="{{ .Status }}">{{ .Status }}</span>
+    {{ if .TaskID }}&middot; task {{ .TaskID }}{{ end }}
+    &middot; started {{ .CreatedAt }}
+  </p>
+
+  <div id="session-feed" class="sess-feed mt-4" role="log" aria-live="polite"></div>
+
+  <div id="session-pending" class="mt-4 flex flex-col gap-3">
+    {{ range .Pending }}{{ template "_pending.html" . }}{{ end }}
+  </div>
+
+  <form id="session-message-form" class="mt-4 flex gap-2">
+    <input id="session-message-text" required placeholder="Message to the session"
+           class="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 font-mono text-sm text-neutral-100">
+    <button type="submit" class="rounded-lg border border-white/10 px-3 py-2 text-sm text-neutral-200 hover:text-neutral-100">Send</button>
+  </form>
+  <p id="session-conn" class="sess-error" role="alert" hidden></p>
+  <p id="session-error" class="sess-error" role="alert" hidden></p>
+
+  <button id="session-stop" type="button"
+          class="mt-3 rounded-lg border border-rose-400/30 px-3 py-1.5 text-sm text-rose-200 hover:text-rose-100">Stop session</button>
+</div>
+<script src="{{ asset "sessions.js" }}" defer></script>
+{{ end }}

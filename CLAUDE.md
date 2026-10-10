@@ -8,7 +8,8 @@ A Go-based MCP server for task management, designed for Claude and coding agents
 
 **Two processes, two binaries, one codebase.** `mcp-task-manager` owns writes;
 `mcp-task-manager-web` only reads, in a process of its own, so the dashboard
-outlives the agent.
+outlives the agent. (An optional third process, `mcp-session-host`, serves
+the opt-in interactive AI sessions; see "AI session host" below.)
 
 ```
   process 1: mcp-task-manager                 process 2: mcp-task-manager-web
@@ -433,6 +434,23 @@ A read-only kanban dashboard, served by `internal/web` (`net/http` +
 - **Line toggles.** `static/app.js` has a delegated click on `.stats-legend-item[data-stats-line]`: it flips the button's `aria-pressed` and `stats-off` on the card's polylines with the same `data-stats-line`, and records the choice as `"on"`/`"off"` under `mcp-task-manager.stats-line:` + `JSON.stringify([cardId, lineKey])` (never htmx's `htmx-history-cache`). Only clicked lines are stored, so a line without an entry keeps the server's config default and a config change never breaks a key. An in-memory map mirrors every choice and every `localStorage` access is in try/catch, so without storage the toggles still survive polls until a reload. The poll swaps in fresh server markup, so `applyAll()` re-applies the recorded choices to the whole document on start and on `htmx:afterSettle`, `htmx:load` and `htmx:historyRestore`. No request, no `hx-*` (`TestStatsLegendHasNoHtmxAttributes`, `TestAppJSStatsToggles`); like `app.css`, `app.js` is linked by content hash.
 - **Done statistics (data).** `BoardSnapshot.Stats` holds one `task.StatsCard` per configured `web.done_stats` card, in config order, computed by `computeStats` (`internal/task/stats.go`) from the snapshot's own `index.All()` read under the same lock, so no second index sync and no archive scan. Bars: per value of `priority`, `type`, `status`, `resolution` or `created_by`, the total, the done / in progress / todo split, and the two mirror highlights — `ClosedRecently` (done tasks whose close time is inside `recent_hours`) and `CreatedRecently` (todo tasks whose `created_at` is inside `new_hours`). Each is **part of** the segment it highlights, so `Done + InProgress + Todo == Total` still holds and `CreatedRecently <= Todo` by construction, being counted inside the `todo` arm. A future timestamp is excluded on both sides: a task dated tomorrow has neither closed nor arrived. The close time is `closed_at`, else `updated_at`. The two windows are **per card** (`statsWindow` defaults a card that named neither, reading `config.DefaultStatsHours`, so the number has one home); the computed `StatsCard` carries them back as `RecentHours` / `NewHours` because the bar's title has to name what "recently" meant. Every task counts once, subtasks included; empty values are dropped; resolution is a done task's `EffectiveResolution`. Values come in domain order (priority `Priorities()`, `task_types` order, status `Statuses()`, `Resolutions()`), then unknown values alphabetically; each field's value and order live in one table, `statsFields`. Lines: one value per calendar day over `days` days, today last, bucketed by civil date in the clock's location (DST-safe). `created` / `closed` count per day; the `_cumulative` variants are running totals that start at 0 at the window start, flagged `Cumulative` so the web layer never parses line names. A split card draws its metric per value, only for values with a count in the window. `Hidden` marks the lines the card lists as hidden. An unknown kind, field, line name or metric yields no data, never an error. The clock is `task.WithClock` (default `time.Now`); its `Location()` sets the day zone, so tests pin both.
 
+### AI session host (opt-in)
+
+The dashboard can also run interactive Claude Code sessions that a user
+drives from the browser. This is a **third process** (`mcp-session-host`,
+from `cmd/mcp-session-host`), not a feature of either existing binary:
+the browser talks only to the web server, the web server tunnels
+(start, SSE event stream, messages, answers, stop) over loopback HTTP to
+the host through `internal/hostclient`, and the host drives
+`claude -p --input-format stream-json --output-format stream-json`.
+The shared wire types (`Spec`, `Event`, `Status`, `Answer`) live in
+`internal/sessionapi`, which depends on the standard library only.
+
+- **Off by default.** `web.sessions.enabled: true` in the config registers the routes and shows the UI; otherwise there are no session routes (404) and no links. The host address must be loopback on both sides, and the host authenticates the web server with a bearer token from its own token file — never reaching the browser. Session POSTs additionally require the `X-Dashboard-CSRF` header and a JSON content type.
+- **The web server knows nothing about Claude.** It fills the spec's `workspace.path` from its own workspace registry (never from a request body), forwards the host's JSON as-is, and renders every event string through template escaping / `textContent`. A session spec carries a `workspace.kind`; v1 accepts only `working_dir` (run in the project root that already exists) — other kinds and providers are rejected with structured errors, and the format is shaped so new kinds add without breaking changes.
+- **The boundary is tested, not conventional.** `cmd/boundary_test.go` walks `go list -deps`: the host binary must not link `internal/task`, `internal/tools`, `internal/app` or `internal/web*` (it owns sessions, never task data — an agent inside a session works the task files through MCP like any local agent), neither the dashboard nor the MCP binary may link `internal/sessionhost*`, and `internal/sessionapi` must stay stdlib-only.
+- **No sandbox in v1.** A session is arbitrary code execution in a real working folder with the host's privileges; the human answering questions and permission prompts is the gate. The host does no git work of its own. Session state lives in the host's own state directory, so sessions survive a web-server restart and a browser reload (the event stream resumes from `Last-Event-ID`; a host restart marks live sessions `failed` with `reason=host_restarted`). Details, limits and the security rationale: `docs/session-host.md`.
+
 ### Git branching
 
 Opt-in (`git.branching`, or `MCP_GIT_BRANCHING`). `start_task`,
@@ -767,8 +785,10 @@ Environment overrides:
 ```
 mcp-task-manager/
 ├── cmd/
-│   └── mcp-task-manager/
-│       └── main.go              # Entry point: mode selection + signal context
+│   ├── mcp-task-manager/
+│   │   └── main.go              # Entry point: mode selection + signal context
+│   └── mcp-session-host/
+│       └── main.go              # Session host entry: loopback addr check, flags, graceful shutdown
 ├── internal/
 │   ├── app/
 │   │   ├── app.go               # Composition root: RunMCP, RunWeb, MCP server assembly
@@ -780,6 +800,9 @@ mcp-task-manager/
 │   │   ├── commands.go          # Command handlers (list, get, create, etc.)
 │   │   ├── output.go            # Output formatters (table, JSON)
 │   │   └── output_test.go       # Output formatter tests
+│   ├── hostclient/              # The web server's HTTP+SSE client for the session host (loopback, bearer)
+│   ├── sessionapi/              # Shared session wire types (Spec, Event, Status, Answer); stdlib only
+│   ├── sessionhost/             # Session manager, journal, HTTP API (claude/ is the stream-json backend)
 │   ├── config/
 │   │   ├── config.go            # Project root / tasks dir resolution + config loading + LoadForRoot
 │   │   ├── webfile.go           # The web server's own ~/.config/mcp-task-manager/web.yaml (workspace list)
@@ -842,6 +865,8 @@ mcp-task-manager/
 │       ├── server.go            # Route table (global + a GET-only session mux)
 │       ├── session.go           # Session registry: tokens, reserved segments, Pick/Adopt/Lookup
 │       ├── sessiontpl.go        # Per-session template clones and the nav func
+│       ├── sessions.go          # Session API tunnel handlers (start, SSE, messages, answers, stop)
+│       ├── csrf.go              # X-Dashboard-CSRF middleware for the session POSTs
 │       ├── handlers.go          # welcome, session POST, board, fragment, panel, workspace page + fragment, file, gone, health
 │       ├── chain.go             # Column chain: parse, canonical path, append, truncate, TaskAt
 │       ├── graph.go             # Backlog graph layout: components, layers, viewBox integers

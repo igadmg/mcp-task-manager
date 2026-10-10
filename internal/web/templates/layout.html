@@ -5,8 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ block "title" . }}Task board{{ end }}</title>
   <link rel="stylesheet" href="{{ asset "app.css" }}">
+  <link rel="stylesheet" href="{{ asset "sessions.css" }}">
   <script src="{{ asset "htmx.min.js" }}" defer></script>
   <script src="{{ asset "app.js" }}" defer></script>
+  {{ block "extrahead" . }}{{ end }}
 </head>
 <body class="min-h-full bg-neutral-950 font-sans text-neutral-200 antialiased{{ with .Project.Palette.Class }} {{ . }}{{ end }}">
   <header class="sticky top-0 z-10 border-b border-white/5 bg-neutral-950/85 backdrop-blur">
@@ -19,6 +21,7 @@
       {{ template "_shell_danger.html" .Project }}
       <span class="ml-auto meta">
         {{ if .Project.TasksDir }}read-only &middot; {{ .Project.TaskCount }} tasks &middot; {{ end }}
+        {{ if .Project.SessionsHref }}<a class="hover:text-neutral-300" href="{{ nav .Project.SessionsHref }}">sessions</a> &middot; {{ end }}
         <!-- / is a global route, not a session one: it is the one page every
              session can link without a token. -->
         <a class="hover:text-neutral-300" href="{{ root "/" }}">workspaces</a>

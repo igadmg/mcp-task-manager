@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -38,6 +39,10 @@ const (
 // DefaultWebAddr is loopback-only on purpose: the dashboard is unauthenticated,
 // so reaching it from another machine has to be the operator's explicit choice.
 const DefaultWebAddr = "127.0.0.1:7777"
+
+// DefaultSessionHostAddr is where the session host listens by default
+// (design §6); it is loopback-only by the same reasoning as DefaultWebAddr.
+const DefaultSessionHostAddr = "127.0.0.1:7778"
 
 // Well-known names inside a project root.
 const (
@@ -104,12 +109,47 @@ type AutoArchiveConfig struct {
 	AfterDays int  `yaml:"after_days"`
 }
 
+// WebSessionsConfig holds the opt-in interactive AI session settings
+// (design §7). Everything is off unless explicitly enabled.
+type WebSessionsConfig struct {
+	// Enabled registers the session routes and shows the UI links.
+	Enabled bool `yaml:"enabled"`
+	// HostAddr is the session host's loopback address, host:port.
+	HostAddr string `yaml:"host_addr"`
+	// TokenFile is the host.token file the host wrote; the web server reads
+	// the bearer token from it. The token never reaches the browser.
+	TokenFile string `yaml:"token_file"`
+}
+
+// Validate enforces the loopback-only rule for the session host address. It
+// runs only when sessions are enabled: a disabled section's address is never
+// used, so it is not validated either.
+func (s WebSessionsConfig) Validate() error {
+	if !s.Enabled {
+		return nil
+	}
+	host, _, err := net.SplitHostPort(s.HostAddr)
+	if err != nil {
+		return fmt.Errorf("web.sessions.host_addr %q: %w", s.HostAddr, err)
+	}
+	if host == "localhost" {
+		return nil
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return fmt.Errorf("web.sessions.host_addr %q: the session host must be reached over loopback only", s.HostAddr)
+	}
+	return nil
+}
+
 // WebConfig holds the read-only web dashboard settings.
 type WebConfig struct {
 	// Enabled starts the dashboard alongside the MCP server.
 	Enabled bool `yaml:"enabled"`
 	// Addr is the listen address, host:port.
 	Addr string `yaml:"addr"`
+	// Sessions is the opt-in interactive AI session surface.
+	Sessions WebSessionsConfig `yaml:"sessions"`
 	// DoneStats defines the statistics cards of the board's Done column.
 	DoneStats DoneStatsConfig `yaml:"done_stats"`
 	// Colors is the status palette shared by cards, bars and the graph.
@@ -168,6 +208,9 @@ func DefaultConfig() *Config {
 			Enabled:  false,
 			Addr:     DefaultWebAddr,
 			NewHours: DefaultStatsHours,
+			Sessions: WebSessionsConfig{
+				HostAddr: DefaultSessionHostAddr,
+			},
 			// A fresh list, like BaseBranches below.
 			DoneStats: DoneStatsConfig{Cards: DefaultStatsCards()},
 		},
@@ -312,6 +355,9 @@ func (c *Config) applyDefaults() {
 	}
 	if strings.TrimSpace(c.Web.Addr) == "" {
 		c.Web.Addr = d.Web.Addr
+	}
+	if strings.TrimSpace(c.Web.Sessions.HostAddr) == "" {
+		c.Web.Sessions.HostAddr = d.Web.Sessions.HostAddr
 	}
 	// Validate before normalizing: normalization repairs some of what the
 	// diagnostics report. Problems are never fatal and never change Cards.

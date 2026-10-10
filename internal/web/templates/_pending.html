@@ -1,0 +1,45 @@
+{{/* One unanswered question or permission request, rendered server-side on
+     the session page so a reload restores the pending state. sessions.js
+     rebuilds the same markup (same classes, same data attributes) when the
+     event stream delivers a new request, and binds the answer buttons by
+     delegation - so this server-rendered copy works with no JS changes.
+     Every event string is plain {{ }} output: html/template escapes it. */}}
+{{ if eq .Kind "question" }}
+<div class="sess-pending" data-request-id="{{ .RequestID }}" data-kind="question">
+  <p class="sess-pending-title">The session is asking</p>
+  {{ range $i, $q := .Questions }}
+  <fieldset class="sess-question" data-question="{{ $q.Question }}">
+    <legend class="mb-1 text-sm text-neutral-200">
+      {{ if $q.Header }}<span class="chip chip-muted">{{ $q.Header }}</span> {{ end }}{{ $q.Question }}
+    </legend>
+    {{ range $j, $o := $q.Options }}
+    <label class="sess-option">
+      <input type="{{ if $q.MultiSelect }}checkbox{{ else }}radio{{ end }}" name="q-{{ $.RequestID }}-{{ $i }}" value="{{ $o.Label }}">
+      <span>{{ $o.Label }}</span>
+      {{ if $o.Description }}<span class="meta">{{ $o.Description }}</span>{{ end }}
+    </label>
+    {{ end }}
+    <label class="sess-option">
+      <input type="text" class="sess-other mt-1 w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 font-mono text-sm text-neutral-100" placeholder="Other">
+    </label>
+  </fieldset>
+  {{ end }}
+  <button type="button" class="sess-send-answer rounded-lg border border-white/10 px-3 py-1.5 text-sm text-neutral-200 hover:text-neutral-100">Answer</button>
+</div>
+{{ else if eq .Kind "permission" }}
+<div class="sess-pending" data-request-id="{{ .RequestID }}" data-kind="permission">
+  <p class="sess-pending-title">The session requests permission: <strong>{{ .ToolName }}</strong></p>
+  {{ if .Description }}<p class="text-sm text-neutral-300">{{ .Description }}</p>{{ end }}
+  {{ if .Input }}
+  <details class="mt-1">
+    <summary class="meta">Input</summary>
+    <pre class="sess-pre">{{ prettyjson .Input }}</pre>
+  </details>
+  {{ end }}
+  <div class="mt-2 flex flex-wrap items-center gap-2">
+    <input type="text" class="sess-deny-reason min-w-0 flex-1 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 font-mono text-sm text-neutral-100" placeholder="Reason for declining (optional)">
+    <button type="button" class="sess-allow rounded-lg border border-emerald-400/30 px-3 py-1.5 text-sm text-emerald-200 hover:text-emerald-100">Allow</button>
+    <button type="button" class="sess-deny rounded-lg border border-rose-400/30 px-3 py-1.5 text-sm text-rose-200 hover:text-rose-100">Deny</button>
+  </div>
+</div>
+{{ end }}

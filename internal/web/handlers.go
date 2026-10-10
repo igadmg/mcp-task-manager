@@ -17,6 +17,9 @@ type handler struct {
 	// One immutable template clone per session and mount, not per poll.
 	templatesMu sync.Mutex
 	templates   map[string]sessionTemplates
+	// csrfToken is the mutation token the session pages hand out in a
+	// <meta> tag; set once per handler (see csrf.go).
+	csrfToken string
 }
 
 func (h *handler) sessionTemplates(sess *Session) sessionTemplates {
@@ -40,7 +43,7 @@ func (h *handler) welcome(w http.ResponseWriter, r *http.Request) {
 	h.renderWelcome(w, http.StatusOK, "")
 }
 
-// createSession is the only POST in this server. It turns a chosen workspace
+// createSession is the workspace-registry POST: it turns a chosen workspace
 // into a session and sends the browser into it.
 //
 // It touches no task data: Sessions.Pick opens the backlog through
@@ -520,7 +523,32 @@ func (h *handler) boardView(sess *Session) BoardView {
 		return BoardView{Project: newProjectView(resolved.Config, 0), PollSeconds: h.PollSeconds}
 	}
 	view := newBoardView(snap, resolved.Config, h.Now(), h.PollSeconds)
+	view.Project.SessionsHref = h.sessionsHref()
 	view.GraphHref, view.GraphHXGet = graphPath, stripPrefix+graphPath
+	return view
+}
+
+// sessionsHref is the header link into this workspace's session list,
+// root-relative (templates put the token back with nav). Empty when the
+// opt-in session surface is off: then no route exists, and no link may
+// either - a link to a 404 is the worst kind of UI to have.
+func (h *handler) sessionsHref() string {
+	if h.SessionAPI == nil {
+		return ""
+	}
+	return "/sessions"
+}
+
+// shellProjectView is the page shell's model for the session pages: the
+// backlog identity plus the opt-in session link, exactly like a board
+// page's. The session pages read no board snapshot, so the task count stays
+// zero - the header shows the identity, not a backlog fact.
+func (h *handler) shellProjectView(sess *Session) ProjectView {
+	var view ProjectView
+	if p := sess.Project(); p != nil {
+		view = newProjectView(p.Config, 0)
+	}
+	view.SessionsHref = h.sessionsHref()
 	return view
 }
 

@@ -1,0 +1,120 @@
+/* Sessions page styles (design §8). Deliberately hand-written and separate
+ * from the compiled Tailwind bundle: a sessions.css change must not require
+ * a CSS rebuild (scripts/build-css.sh), which is a separate step on
+ * Windows. Layout-critical class names are pinned by assets_test.go. */
+
+.sess-feed{
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.sess-line{
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.sess-msg-user,
+.sess-msg-assistant,
+.sess-msg-tool_result,
+.sess-msg-tool_use,
+.sess-msg-system{
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.85rem;
+}
+
+.sess-msg-user{
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.sess-msg-assistant,
+.sess-msg-tool_result,
+.sess-msg-tool_use,
+.sess-msg-system{
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.sess-msg-system{
+  color: #a3a3a3;
+}
+
+.sess-msg-error,
+.sess-error{
+  border-radius: 0.5rem;
+  border: 1px solid rgba(251, 113, 133, 0.3);
+  background: rgba(251, 113, 133, 0.06);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.85rem;
+  color: #fda4af;
+}
+
+.sess-pre{
+  margin: 0.25rem 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.8rem;
+  color: #a3a3a3;
+}
+
+.sess-pending{
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0.75rem;
+  padding: 0.75rem 1rem;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.sess-pending-title{
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #e5e5e5;
+  margin: 0 0 0.5rem;
+}
+
+.sess-question{
+  border: 0;
+  margin: 0 0 0.5rem;
+  padding: 0;
+}
+
+.sess-option{
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  font-size: 0.85rem;
+  color: #d4d4d4;
+}
+
+/* Session status chips: neutral greys, one per lifecycle state (design §3).
+ * Kept local to the session surface so the palette roles stay board-only. */
+.sess-status{
+  font-size: 0.75rem;
+}
+
+.sess-status-starting,
+.sess-status-running{
+  color: #93c5fd;
+}
+
+.sess-status-waiting_answer{
+  color: #fcd34d;
+}
+
+.sess-status-idle{
+  color: #a3a3a3;
+}
+
+.sess-status-finished{
+  color: #86efac;
+}
+
+.sess-status-failed{
+  color: #fda4af;
+}
+
+.sess-status-stopped{
+  color: #d4d4d4;
+}

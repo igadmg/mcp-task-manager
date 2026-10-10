@@ -1,6 +1,8 @@
 package web
 
 import (
+	"bytes"
+	"encoding/json"
 	"embed"
 	"html/template"
 )
@@ -36,11 +38,29 @@ var templateFS embed.FS
 // per session, and once for the root pages. Render through rootTpl or a
 // session's own clones, never through these.
 var (
-	funcs       = template.FuncMap{"asset": assetURL, "nav": navFor(""), "root": navFor("")}
+	// prettyjson indents a session event's raw JSON input for display. It
+	// returns a plain string: html/template escapes it like any other
+	// field, so untrusted tool input still cannot become markup.
+	prettyjson = func(m json.RawMessage) string {
+		if len(m) == 0 {
+			return ""
+		}
+		var buf bytes.Buffer
+		if err := json.Indent(&buf, m, "", "  "); err != nil {
+			return string(m)
+		}
+		return buf.String()
+	}
+	funcs       = template.FuncMap{"asset": assetURL, "nav": navFor(""), "root": navFor(""), "prettyjson": prettyjson}
 	fragments   = template.Must(template.New("fragments").Funcs(funcs).ParseFS(templateFS, "templates/_*.html"))
 	boardPage   = mustPage("board.html")
 	welcomePage = mustPage("welcome.html")
 	gonePage    = mustPage("gone.html")
+	// The opt-in session pages (design §7/§8). sessions.html is one
+	// workspace's session list and start form; session.html is one live
+	// session's page.
+	sessionsPageT = mustPage("sessions.html")
+	sessionPageT  = mustPage("session.html")
 
 	// rootTpl serves the pages that live outside any session: the workspace
 	// list and the unknown-token page. Their links are already

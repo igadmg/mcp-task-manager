@@ -1,0 +1,47 @@
+{{ define "title" }}Sessions{{ end }}
+{{ define "content" }}
+{{/* One workspace's session list and start form (design §8). The form is
+     submitted by sessions.js as a JSON POST carrying the CSRF header; a
+     plain form post would be answered 415. */}}
+<div id="sessions-page" class="mx-auto max-w-3xl" data-csrf="{{ .CSRF }}" data-start-url="{{ nav .StartHref }}">
+  <h1 class="text-base font-semibold leading-snug text-neutral-100">Sessions</h1>
+  <p class="meta mt-1">
+    Interactive AI sessions run by the session host in this workspace's project folder.
+    There is no isolation in v1: a session executes code and touches files directly
+    in the project folder, so start only work you would run yourself.
+  </p>
+
+  {{ if .Error }}
+  <p class="sess-error" role="alert">{{ .Error }}</p>
+  {{ end }}
+
+  <form id="session-start-form" class="mt-4">
+    <label class="block text-sm text-neutral-300" for="session-prompt">Initial prompt</label>
+    <textarea id="session-prompt" name="prompt" rows="4" required
+              class="mt-1 w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 font-mono text-sm text-neutral-100"></textarea>
+    <label class="mt-2 block text-sm text-neutral-300" for="session-task-id">Task id (optional)</label>
+    <input id="session-task-id" name="task_id" pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="kebab-case"
+           class="mt-1 w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 font-mono text-sm text-neutral-100">
+    <button type="submit" class="mt-3 rounded-lg border border-white/10 px-3 py-1.5 text-sm text-neutral-200 hover:text-neutral-100">Start session</button>
+    <p id="session-start-error" class="sess-error" role="alert" hidden></p>
+  </form>
+
+  {{ if .Sessions }}
+  <ul id="session-list" class="mt-6 flex flex-col gap-2">
+    {{ range .Sessions }}
+    <li class="rounded-xl border border-white/10 bg-white/[0.02] px-4 py-3">
+      <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <a class="text-sm text-neutral-100 hover:text-neutral-300" href="{{ nav "/sessions/" .ID }}">{{ .Title }}</a>
+        <span class="chip sess-status sess-status-{{ .Status }}">{{ .Status }}</span>
+        {{ if .TaskID }}<span class="chip chip-muted">{{ .TaskID }}</span>{{ end }}
+        <span class="meta ml-auto">{{ .CreatedAt.Format "2006-01-02 15:04" }}</span>
+      </div>
+    </li>
+    {{ end }}
+  </ul>
+  {{ else if not .Error }}
+  <p class="mt-6 rounded-xl border border-dashed border-white/10 p-6 text-sm text-neutral-500">No sessions yet.</p>
+  {{ end }}
+</div>
+<script src="{{ asset "sessions.js" }}" defer></script>
+{{ end }}

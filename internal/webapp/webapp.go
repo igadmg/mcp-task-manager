@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gpayer/mcp-task-manager/internal/config"
+	"github.com/gpayer/mcp-task-manager/internal/hostclient"
 	"github.com/gpayer/mcp-task-manager/internal/project"
 	"github.com/gpayer/mcp-task-manager/internal/web"
 	"github.com/gpayer/mcp-task-manager/internal/webproc"
@@ -73,12 +74,25 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	tasksDir := cfg.TasksDir()
 
+	// The interactive session surface is opt-in (design §7): only an
+	// explicit web.sessions.enabled builds a client, and only loopback
+	// host addresses are accepted. webapp links hostclient, never the
+	// session host itself - the dashboard tunnels, it does not host.
+	var sessionAPI web.SessionClient
+	if cfg.Web.Sessions.Enabled {
+		if err := cfg.Web.Sessions.Validate(); err != nil {
+			return fmt.Errorf("session host configuration: %w", err)
+		}
+		sessionAPI = hostclient.New(cfg.Web.Sessions.HostAddr, cfg.Web.Sessions.TokenFile)
+	}
+
 	sessions := NewSessions(logger)
 	controller := web.NewController(web.Deps{
 		Sessions:        sessions,
 		Logger:          logger,
 		PrimaryTasksDir: tasksDir,
 		BasePath:        basePath,
+		SessionAPI:      sessionAPI,
 	}, addr)
 
 	// Publish the project before the listener accepts anything, so the very

@@ -49,6 +49,12 @@ type ProjectView struct {
 	// on the shell's model so that every model that executes layout.html
 	// carries it.
 	Palette PaletteView
+	// SessionsHref is the header link into this workspace's session list,
+	// root-relative so a template prefixes it with nav. Empty when the
+	// opt-in session surface is disabled: no route, no link. It sits on the
+	// shell's model - like Palette - so every page that executes
+	// layout.html can carry it.
+	SessionsHref string
 }
 
 // PaletteView is the dashboard's status palette as the page needs it. Class

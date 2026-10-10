@@ -11,7 +11,7 @@ import (
 // staticFS lists the assets individually rather than static/*, so a stray
 // source map or editor backup can never be shipped inside the binary.
 //
-//go:embed static/app.css static/htmx.min.js static/app.js
+//go:embed static/app.css static/htmx.min.js static/app.js static/sessions.js static/sessions.css
 var staticFS embed.FS
 
 // staticHandler serves the embedded CSS and JS. They are part of the binary,

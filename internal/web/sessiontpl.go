@@ -22,6 +22,8 @@ type sessionTemplates struct {
 	fragments *template.Template
 	welcome   *template.Template
 	gone      *template.Template
+	sessions  *template.Template
+	session   *template.Template
 }
 
 func newSessionTemplates(base string) sessionTemplates {
@@ -39,6 +41,8 @@ func newMountedTemplates(base, mount string) sessionTemplates {
 		fragments: mustClone(fragments, funcs),
 		welcome:   mustClone(welcomePage, funcs),
 		gone:      mustClone(gonePage, funcs),
+		sessions:  mustClone(sessionsPageT, funcs),
+		session:   mustClone(sessionPageT, funcs),
 	}
 }
 

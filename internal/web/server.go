@@ -35,6 +35,14 @@ type Deps struct {
 	Now func() time.Time
 	// PollSeconds overrides DefaultPollSeconds.
 	PollSeconds int
+	// SessionAPI is the session host client for the opt-in interactive AI
+	// session surface (design §7). Nil - the default - registers no session
+	// routes and renders no session links: the feature is off unless the
+	// configuration explicitly enables it.
+	SessionAPI SessionClient
+	// CSRFToken overrides the process-random mutation token the session
+	// pages hand out; tests inject a fixed one.
+	CSRFToken string
 	// PrimaryTasksDir is the backlog this process was started for, as an
 	// absolute path. It is reported on /healthz in the X-Task-Dashboard
 	// header, which is how a process that wants to start a dashboard can
@@ -72,11 +80,15 @@ func (d Deps) withDefaults() Deps {
 // NewHandler builds the dashboard's route table.
 //
 // Every URL that shows task data starts with a session token, and the whole
-// read-only guarantee is one sentence: task data is reachable by GET only,
-// and the single POST in this server is the session registry, which touches
-// no task data at all. Only GET patterns are registered in the session mux,
-// so ServeMux answers every other method there with 405 by itself and no
-// handler below can reach a mutating Service method.
+// read-only guarantee is one sentence: task data is reachable by GET only.
+// The POSTs that exist are two, and neither touches task data: the session
+// registry below (it only opens a workspace read-only), and - only when
+// Deps.SessionAPI is set, i.e. the opt-in session surface is enabled - the
+// JSON mutations under /{token}/sessions, each behind the CSRF middleware
+// (see csrf.go) and forwarded to the session host untouched (see
+// sessions.go). Only GET patterns are registered for task data, so ServeMux
+// answers every other method there with 405 by itself and no handler below
+// can reach a mutating Service method.
 //
 // /static/ and /healthz stay outside the token space: the embedded assets
 // are identical for every session, so they get one URL space and one browser
@@ -107,6 +119,10 @@ func (d Deps) withDefaults() Deps {
 func NewHandler(d Deps) http.Handler {
 	h := &handler{Deps: d.withDefaults(), templates: make(map[string]sessionTemplates)}
 	h.rootTpl = newMountedTemplates("", h.BasePath)
+	h.csrfToken = h.CSRFToken
+	if h.SessionAPI != nil && h.csrfToken == "" {
+		h.csrfToken = newCSRFToken()
+	}
 
 	sessions := http.NewServeMux()
 	sessions.HandleFunc("GET /{token}/{$}", h.board)
@@ -128,6 +144,12 @@ func NewHandler(d Deps) http.Handler {
 	// board.
 	sessions.HandleFunc("GET /{token}/graph", h.graph)
 	sessions.HandleFunc("GET /{token}/strip/{rest...}", h.workspaceFragment)
+	// The opt-in session API (design §7): registered only when a session
+	// host client was configured. "sessions" is a reserved token segment
+	// already, so these patterns cannot collide with a workspace token.
+	if h.SessionAPI != nil {
+		registerSessionRoutes(sessions, h)
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", h.welcome)
