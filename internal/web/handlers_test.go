@@ -18,6 +18,7 @@ import (
 
 	"github.com/gpayer/mcp-task-manager/internal/config"
 	"github.com/gpayer/mcp-task-manager/internal/project"
+	"github.com/gpayer/mcp-task-manager/internal/storage"
 	"github.com/gpayer/mcp-task-manager/internal/task"
 	"github.com/gpayer/mcp-task-manager/internal/testsupport"
 )
@@ -102,8 +103,8 @@ func TestBoardRendersThreeColumns(t *testing.T) {
 			t.Errorf("board is missing card %q", want)
 		}
 	}
-	if strings.Contains(body, "Old chore") {
-		t.Error("the Done column renders a task card, want statistics only")
+	if !strings.Contains(body, "Old chore") {
+		t.Error("the Done column lacks the card of task 4, closed just now")
 	}
 	if !strings.Contains(body, "<html") {
 		t.Error("GET / did not return a full page")
@@ -775,7 +776,7 @@ func TestBoardDoneColumnRendersStats(t *testing.T) {
 		`1/2 &middot; 1 open &middot; <span class="stats-recent">+1</span>`,
 		`viewBox="0 0 2 1"`,
 		`<rect class="bar-done" x="0" width="1" height="1"/>`,
-		`<rect class="bar-recent" x="0" width="1" height="1"/>`,
+		`<rect class="bar-done-recent" x="0" width="1" height="1"/>`,
 		`<rect class="bar-todo" x="1" width="1" height="1"/>`,
 		`data-value="completed"`,
 	} {
@@ -783,8 +784,21 @@ func TestBoardDoneColumnRendersStats(t *testing.T) {
 			t.Errorf("Done column lacks %s", want)
 		}
 	}
-	if strings.Contains(body, "Old chore") || strings.Contains(body, `hx-get="`+h.base+`/strip/tasks/4"`) {
-		t.Error("the Done column renders task 4 as a card")
+	// Task 4 closed just now: it is a card under the statistics, framed as
+	// a recent closure, linked through the session prefix.
+	stats, card := strings.Index(body, `data-stats-card="bars-resolution"`), strings.Index(body, "Old chore")
+	if card < 0 || stats > card {
+		t.Errorf("task 4's card is at %d, the last stats card at %d: want the card after the statistics", card, stats)
+	}
+	for _, want := range []string{
+		`Closed in the last 24 h`,
+		`card-frame-done-recent`,
+		`closed just now`,
+		`hx-get="` + h.base + `/strip/tasks/4"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("Done column lacks %s", want)
+		}
 	}
 	if strings.Contains(body, "style=") {
 		t.Error("the board carries an inline style")
@@ -812,7 +826,24 @@ func TestStatsBarsTooltipNamesTheColours(t *testing.T) {
 	}
 }
 
-func TestBoardDoneColumnEmptyWithoutCards(t *testing.T) {
+// backdateClosure moves a done task's close time into the past, the way a
+// task closed a long time ago looks.
+func backdateClosure(t *testing.T, tasksDir, id string, at time.Time) {
+	t.Helper()
+	st := storage.NewMarkdownStorage(tasksDir)
+	rec, err := st.Load(id)
+	if err != nil {
+		t.Fatalf("Load(%s) error = %v", id, err)
+	}
+	rec.ClosedAt, rec.UpdatedAt = &at, at
+	if err := st.Save(rec); err != nil {
+		t.Fatalf("Save(%s) error = %v", id, err)
+	}
+}
+
+// cards: [] removes the statistics, not the list: a task closed just now is
+// still on the Done column.
+func TestBoardDoneColumnListsTasksWithoutStatsCards(t *testing.T) {
 	h, svc, _ := newTestHandler(t)
 	seedBoard(t, svc)
 	svc.Config().Web.DoneStats.Cards = []config.StatsCard{}
@@ -821,11 +852,44 @@ func TestBoardDoneColumnEmptyWithoutCards(t *testing.T) {
 	if strings.Contains(body, "data-stats-card") {
 		t.Error("cards: [] still renders statistics cards")
 	}
+	if !strings.Contains(body, "Old chore") || !strings.Contains(body, "Closed in the last 24 h") {
+		t.Error("cards: [] hides the list of recently closed tasks")
+	}
+	if n := strings.Count(body, ">empty</p>"); n != 0 {
+		t.Errorf("board shows %d empty placeholders, want 0: Done has a card", n)
+	}
+}
+
+// Nothing closed inside the window and no statistics: the empty stub, and no
+// heading over nothing.
+func TestBoardDoneColumnEmptyWithoutCardsOrClosures(t *testing.T) {
+	h, svc, tasksDir := newTestHandler(t)
+	seedBoard(t, svc)
+	svc.Config().Web.DoneStats.Cards = []config.StatsCard{}
+	backdateClosure(t, tasksDir, "4", time.Now().Add(-72*time.Hour))
+
+	body := get(t, h, "/board").Body.String()
 	if n := strings.Count(body, ">empty</p>"); n != 1 {
 		t.Errorf("board shows %d empty placeholders, want 1 (Done)", n)
 	}
-	if strings.Contains(body, "Old chore") {
-		t.Error("an empty Done column falls back to task cards")
+	if strings.Contains(body, "Old chore") || strings.Contains(body, "Closed in the last") {
+		t.Error("a task closed three days ago is listed")
+	}
+}
+
+// With statistics and nothing closed in the window, Done shows the statistics
+// alone: no heading, no empty stub.
+func TestBoardDoneColumnStatsAloneWhenNothingClosedRecently(t *testing.T) {
+	h, svc, tasksDir := newTestHandler(t)
+	seedBoard(t, svc)
+	backdateClosure(t, tasksDir, "4", time.Now().Add(-72*time.Hour))
+
+	body := get(t, h, "/board").Body.String()
+	if !strings.Contains(body, `data-stats-card="bars-priority"`) {
+		t.Error("the statistics are gone")
+	}
+	if strings.Contains(body, "Old chore") || strings.Contains(body, "Closed in the last") || strings.Contains(body, ">empty</p>") {
+		t.Error("Done shows a list, a heading or an empty stub beside the statistics")
 	}
 }
 
@@ -2349,7 +2413,7 @@ func TestStatsBarsDrawTheArrivals(t *testing.T) {
 	// 3 total, 1 in progress, 2 todo: the todo run starts at 1 and the
 	// arrivals cover all of it.
 	for _, want := range []string{
-		`<rect class="bar-new" x="1" width="2" height="1"/>`,
+		`<rect class="bar-todo-new" x="1" width="2" height="1"/>`,
 		`<span class="stats-new">2 new</span>`,
 	} {
 		if !strings.Contains(row, want) {
@@ -2372,7 +2436,7 @@ func TestStatsBarsWithoutArrivalsDrawNeither(t *testing.T) {
 	ageTask(t, dir, "1", 72*time.Hour)
 
 	row := sectionAfter(t, get(t, h, "/board").Body.String(), `data-value="low"`)
-	if strings.Contains(row, "bar-new") {
+	if strings.Contains(row, "bar-todo-new") {
 		t.Errorf("a stale row drew the arrivals rect: %s", row)
 	}
 	if strings.Contains(row, "new</span>") {

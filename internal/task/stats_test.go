@@ -37,7 +37,14 @@ func linesCard(days int, lines ...string) config.StatsCard {
 
 func oneCard(t *testing.T, all []*Task, c config.StatsCard, now time.Time) StatsCard {
 	t.Helper()
-	got := computeStats(all, []config.StatsCard{c}, statsTypes, now)
+	return oneCardRecent(t, all, c, now, 0)
+}
+
+// oneCardRecent is oneCard with the board's closures window (web.recent_hours)
+// given; 0 means the default.
+func oneCardRecent(t *testing.T, all []*Task, c config.StatsCard, now time.Time, recentHours int) StatsCard {
+	t.Helper()
+	got := computeStats(all, []config.StatsCard{c}, statsTypes, now, recentHours)
 	if len(got) != 1 {
 		t.Fatalf("computeStats() returned %d cards, want 1", len(got))
 	}
@@ -160,7 +167,7 @@ func TestStatsUnknownFieldAndKind(t *testing.T) {
 		{ID: "split", Kind: config.StatsKindLines, Days: 3, SplitBy: "assignee", Metric: config.StatsLineCreated},
 		{ID: "metric", Kind: config.StatsKindLines, Days: 3, SplitBy: "priority", Metric: "opened"},
 	}
-	got := computeStats(all, cards, statsTypes, statsNow)
+	got := computeStats(all, cards, statsTypes, statsNow, 0)
 	if len(got) != 4 {
 		t.Fatalf("computeStats() returned %d cards, want 4 (none dropped)", len(got))
 	}
@@ -298,7 +305,7 @@ func TestStatsLinesSplitBy(t *testing.T) {
 }
 
 func TestStatsCardOrderFollowsConfig(t *testing.T) {
-	got := computeStats(nil, config.DefaultStatsCards(), statsTypes, statsNow)
+	got := computeStats(nil, config.DefaultStatsCards(), statsTypes, statsNow, 0)
 	var ids []string
 	for _, c := range got {
 		ids = append(ids, c.ID)
@@ -457,15 +464,61 @@ func TestStatsBarsWindowsAreHonoured(t *testing.T) {
 		t.Errorf("new_hours must not widen the closures window: ClosedRecently = %d", wide.ClosedRecently)
 	}
 
-	// And the other end, independently.
+	// And the other end, independently: the closures window is the board's
+	// (web.recent_hours), handed to computeStats, not a card's own key.
+	other := oneCardRecent(t, all, barsCard("priority"), statsNow, 72)
+	if other.Bars[0].ClosedRecently != 1 {
+		t.Errorf("recent_hours: 72 → ClosedRecently = %d, want 1", other.Bars[0].ClosedRecently)
+	}
+	if other.Bars[0].CreatedRecently != 0 {
+		t.Errorf("recent_hours must not widen the arrivals window: CreatedRecently = %d", other.Bars[0].CreatedRecently)
+	}
+	if other.RecentHours != 72 {
+		t.Errorf("StatsCard.RecentHours = %d, want the board window 72", other.RecentHours)
+	}
+
+	// A card's own (deprecated) RecentHours is never read.
 	card = barsCard("priority")
 	card.RecentHours = 72
-	other := oneCard(t, all, card, statsNow).Bars[0]
-	if other.ClosedRecently != 1 {
-		t.Errorf("recent_hours: 72 → ClosedRecently = %d, want 1", other.ClosedRecently)
+	if got := oneCard(t, all, card, statsNow).Bars[0].ClosedRecently; got != 0 {
+		t.Errorf("a card-level RecentHours moved the window: ClosedRecently = %d, want 0", got)
 	}
-	if other.CreatedRecently != 0 {
-		t.Errorf("recent_hours must not widen the arrivals window: CreatedRecently = %d", other.CreatedRecently)
+}
+
+// TestClosedWithin pins the one predicate behind both the bars and the
+// snapshot's ClosedRecently set.
+func TestClosedWithin(t *testing.T) {
+	window := 24 * time.Hour
+	legacy := st(StatusDone, PriorityLow, "bug") // no closed_at: updated_at stands in
+	legacy.UpdatedAt = statsNow.Add(-2 * time.Hour)
+	edited := closedAt(st("", PriorityLow, "bug"), statsNow.Add(-72*time.Hour)) // closed_at wins
+	edited.UpdatedAt = statsNow.Add(-time.Minute)
+	open := st(StatusTodo, PriorityLow, "bug")
+	open.UpdatedAt = statsNow.Add(-time.Minute)
+
+	for _, tc := range []struct {
+		name string
+		task *Task
+		want bool
+		at   time.Time
+	}{
+		{"inside", closedAt(st("", PriorityLow, "bug"), statsNow.Add(-23*time.Hour)), true, statsNow.Add(-23 * time.Hour)},
+		{"exactly now", closedAt(st("", PriorityLow, "bug"), statsNow), true, statsNow},
+		{"on the edge is outside", closedAt(st("", PriorityLow, "bug"), statsNow.Add(-24*time.Hour)), false, time.Time{}},
+		{"future", closedAt(st("", PriorityLow, "bug"), statsNow.Add(time.Hour)), false, time.Time{}},
+		{"updated_at fallback", legacy, true, legacy.UpdatedAt},
+		{"closed_at wins over updated_at", edited, false, time.Time{}},
+		{"an open task is no closure", open, false, time.Time{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			at, ok := closedWithin(tc.task, statsNow, window)
+			if ok != tc.want {
+				t.Fatalf("closedWithin = %v, want %v", ok, tc.want)
+			}
+			if ok && !at.Equal(tc.at) {
+				t.Errorf("close time = %v, want %v", at, tc.at)
+			}
+		})
 	}
 }
 

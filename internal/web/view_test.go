@@ -689,29 +689,35 @@ func TestDetailPhasesMapping(t *testing.T) {
 	}
 }
 
-func TestDoneColumnHasStatsNotCards(t *testing.T) {
-	snap := boardOf(
+func TestDoneColumnHasStatsAndTheRecentCards(t *testing.T) {
+	snap := recentlyClosed(boardOf(
 		tk("a", "", task.StatusDone, task.PriorityHigh, fixedNow),
 		tk("b", "", task.StatusDone, task.PriorityLow, fixedNow),
 		tk("c", "", task.StatusTodo, task.PriorityLow, fixedNow),
-	)
+	), map[string]int{"a": 1})
 	snap.Stats = []task.StatsCard{{ID: "bars-priority", Kind: config.StatsKindBars, Title: "Priority",
 		Bars: []task.StatsBar{{Value: "high", Total: 1, Done: 1}}}}
 
 	done := column(newBoardView(snap, nil, fixedNow, 5), "done")
 	if done.Count != 2 {
-		t.Errorf("done Count = %d, want 2: done tasks are still counted", done.Count)
+		t.Errorf("done Count = %d, want 2: done tasks are still counted, listed or not", done.Count)
 	}
-	if len(done.Cards) != 0 {
-		t.Errorf("done column has cards %v, want none", cardIDs(done.Cards))
+	if got := cardIDs(done.Cards); !slices.Equal(got, []string{"a"}) {
+		t.Errorf("done column cards = %v, want only the recently closed [a]", got)
 	}
 	if len(done.Stats) != 1 || done.Stats[0].ID != "bars-priority" || done.Stats[0].Title != "Priority" {
 		t.Errorf("done Stats = %+v, want the bars-priority card", done.Stats)
 	}
 	for _, status := range []string{"todo", "in_progress"} {
-		if column(newBoardView(snap, nil, fixedNow, 5), status).Stats != nil {
-			t.Errorf("%s column has Stats, want nil", status)
+		col := column(newBoardView(snap, nil, fixedNow, 5), status)
+		if col.Stats != nil || col.RecentHours != 0 {
+			t.Errorf("%s column has Stats %v / RecentHours %d, want none", status, col.Stats, col.RecentHours)
 		}
+	}
+	// With no cards configured the list is still there.
+	snap.Stats = nil
+	if got := cardIDs(column(newBoardView(snap, nil, fixedNow, 5), "done").Cards); !slices.Equal(got, []string{"a"}) {
+		t.Errorf("without stats the list = %v, want [a]", got)
 	}
 }
 

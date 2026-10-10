@@ -41,6 +41,13 @@ type BoardSnapshot struct {
 	// Stats holds the Done-column statistics cards, in config order,
 	// computed from Tasks (see stats.go).
 	Stats []StatsCard
+	// ClosedRecently holds the done tasks closed inside the board's window
+	// (web.recent_hours), subtasks included, mapped to their close time. It
+	// is the same set the bars count as ClosedRecently, because both come
+	// from closedWithin.
+	ClosedRecently map[string]time.Time
+	// RecentHours is that window in hours.
+	RecentHours int
 	// TakenAt is when the snapshot was read, in UTC; Stats counts up to it.
 	TakenAt time.Time
 }
@@ -77,20 +84,27 @@ func (s *Service) BoardSnapshot() (*BoardSnapshot, error) {
 func (s *Service) boardSnapshot() (*BoardSnapshot, error) {
 	all := s.index.All()
 	now := s.now()
+	recentHours := s.config.RecentHours()
 
 	snap := &BoardSnapshot{
-		Tasks:     all,
-		Subtasks:  make(map[string][]*Task),
-		Counts:    make(map[string]SubtaskCount),
-		Phases:    make(map[string]Phase),
-		PhaseInfo: make(map[string]PhaseSummary),
-		Stats:     computeStats(all, s.config.DoneStatsCards(), s.validTypes, now),
-		TakenAt:   now.UTC(),
+		Tasks:          all,
+		Subtasks:       make(map[string][]*Task),
+		Counts:         make(map[string]SubtaskCount),
+		Phases:         make(map[string]Phase),
+		PhaseInfo:      make(map[string]PhaseSummary),
+		Stats:          computeStats(all, s.config.DoneStatsCards(), s.validTypes, now, recentHours),
+		ClosedRecently: make(map[string]time.Time),
+		RecentHours:    recentHours,
+		TakenAt:        now.UTC(),
 	}
+	window := time.Duration(recentHours) * time.Hour
 
 	ids := make([]string, 0, len(all))
 	for _, t := range all {
 		ids = append(ids, t.ID)
+		if ct, ok := closedWithin(t, now, window); ok {
+			snap.ClosedRecently[t.ID] = ct
+		}
 		if t.Status == StatusInProgress {
 			// An unreadable record only leaves itself out; with no run
 			// left, the names decide.

@@ -2,7 +2,7 @@
      the URL it was rendered at, so a panel swapped in underneath it would be
      put back to the old task by the next poll. Rendering /strip/tasks/{id}
      moves the poll along with the selection. */}}
-<article class="card {{ if .InProgress }}card-live{{ end }} {{ if .Blocked }}card-blocked{{ end }}">
+<article class="card {{ if .InProgress }}card-live{{ end }} {{ if .Blocked }}card-blocked{{ end }}{{ if .Frame }} card-frame-{{ .Frame }}{{ end }}">
   <a href="{{ nav "/tasks/" .ID }}"
      hx-get="{{ nav "/strip/tasks/" .ID }}"
      hx-target="#strip"
@@ -27,6 +27,7 @@
       <span class="meta ml-auto">{{ .UpdatedAgo }}</span>
     </div>
     <p class="meta mt-1.5 truncate" title="created {{ .CreatedAt }}">created {{ .CreatedAgo }}{{ if .CreatedBy }} by {{ .CreatedBy }}{{ end }}</p>
+    {{ if .ClosedNote }}<p class="meta mt-1 truncate">{{ .ClosedNote }}</p>{{ end }}
     {{ if .Phase }}
     <div class="mt-1 flex min-w-0 items-center gap-1.5">
       <span class="meta truncate text-neutral-400">{{ .Phase }} &middot; {{ if .PhaseOpen }}started{{ else }}finished{{ end }} {{ .PhaseAgo }}{{ if .PhaseBy }} by {{ .PhaseBy }}{{ end }}</span>

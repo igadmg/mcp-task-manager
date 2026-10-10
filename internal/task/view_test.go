@@ -514,3 +514,83 @@ func TestDetailFilesHidePhaseFiles(t *testing.T) {
 		t.Errorf("Files = %v, Phases = %d; want the phase record only in Phases", d.Files, len(d.Phases))
 	}
 }
+
+// TestBoardSnapshotClosedRecently: the snapshot's set is exactly what the
+// bars count as ClosedRecently (one predicate, one window), covers subtasks,
+// leaves out tasks closed before the window, and carries the close time.
+func TestBoardSnapshotClosedRecently(t *testing.T) {
+	svc := newViewService(t)
+	svc.config.Web.RecentHours = 48
+
+	for _, id := range []string{"old", "parent", "kid", "open"} {
+		parent := ""
+		if id == "kid" {
+			parent = "parent"
+		}
+		if _, err := svc.Create(id, "body", PriorityLow, "feature", parent, id); err != nil {
+			t.Fatalf("Create(%s) error = %v", id, err)
+		}
+	}
+	for _, id := range []string{"old", "kid", "open"} {
+		if _, err := svc.StartTask(id); err != nil {
+			t.Fatalf("StartTask(%s) error = %v", id, err)
+		}
+	}
+	for _, id := range []string{"old", "kid"} {
+		if _, err := svc.CompleteTask(id); err != nil {
+			t.Fatalf("CompleteTask(%s) error = %v", id, err)
+		}
+	}
+	// The service stamps real time; place the closures where the test needs
+	// them. The parent auto-completed with its last subtask.
+	now := time.Now().UTC()
+	WithClock(func() time.Time { return now })(svc)
+	for id, at := range map[string]time.Time{
+		"old":    now.Add(-72 * time.Hour),
+		"kid":    now.Add(-time.Hour),
+		"parent": now.Add(-time.Hour),
+	} {
+		got, err := svc.Get(id)
+		if err != nil {
+			t.Fatalf("Get(%s) error = %v", id, err)
+		}
+		at := at
+		got.ClosedAt = &at
+	}
+
+	snap, err := svc.BoardSnapshot()
+	if err != nil {
+		t.Fatalf("BoardSnapshot() error = %v", err)
+	}
+	if snap.RecentHours != 48 {
+		t.Errorf("RecentHours = %d, want the configured 48", snap.RecentHours)
+	}
+	got := make([]string, 0, len(snap.ClosedRecently))
+	for id := range snap.ClosedRecently {
+		got = append(got, id)
+	}
+	slices.Sort(got)
+	if want := []string{"kid", "parent"}; !slices.Equal(got, want) {
+		t.Errorf("ClosedRecently = %v, want %v (old closed outside the window, open not closed)", got, want)
+	}
+	if at := snap.ClosedRecently["kid"]; !at.Equal(now.Add(-time.Hour)) {
+		t.Errorf("close time of kid = %v, want %v", at, now.Add(-time.Hour))
+	}
+
+	// The bars count the same tasks.
+	for _, card := range snap.Stats {
+		if card.Kind != "bars" {
+			continue
+		}
+		total := 0
+		for _, b := range card.Bars {
+			total += b.ClosedRecently
+		}
+		if total != len(snap.ClosedRecently) {
+			t.Errorf("card %s counts %d closed recently, the snapshot set has %d", card.ID, total, len(snap.ClosedRecently))
+		}
+		if card.RecentHours != 48 {
+			t.Errorf("card %s RecentHours = %d, want 48", card.ID, card.RecentHours)
+		}
+	}
+}

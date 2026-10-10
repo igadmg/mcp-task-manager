@@ -74,7 +74,7 @@ type ColorsConfig struct {
 // nothing is an error: a typo in a dashboard colour must not break the config
 // load, and with it every MCP tool and the CLI. It is pure, and its output
 // order does not depend on map iteration.
-func ValidateColors(roles map[string]string, newHours int) []string {
+func ValidateColors(roles map[string]string, newHours, recentHours int) []string {
 	var out []string
 	known := ColorNames()
 	for _, role := range slices.Sorted(maps.Keys(roles)) {
@@ -89,6 +89,9 @@ func ValidateColors(roles map[string]string, newHours int) []string {
 	}
 	if newHours < 0 {
 		out = append(out, fmt.Sprintf("web.new_hours: %d is negative; using %d", newHours, DefaultStatsHours))
+	}
+	if recentHours < 0 {
+		out = append(out, fmt.Sprintf("web.recent_hours: %d is negative; using %d", recentHours, DefaultStatsHours))
 	}
 	return out
 }

@@ -104,8 +104,12 @@ type ColumnView struct {
 	// in workflow order; nil for every other column. They partition Cards.
 	Lanes []PhaseLaneView
 	// Stats are the Done column's statistics cards, in config order; nil
-	// for every other column. Done renders them instead of task cards.
+	// for every other column. Done renders them first, then Cards.
 	Stats []StatsCardView
+	// RecentHours is the window of the Done column's Cards - the tasks
+	// closed inside it - for the heading above them; 0 for every other
+	// column.
+	RecentHours int
 }
 
 // StatsCardView is one statistics card of the Done column. ID is the
@@ -286,6 +290,16 @@ type CardView struct {
 	Fields     []FieldView
 	FieldsMore int
 	FieldsRest string
+	// Frame names the border a card of the Done list wears: its own status
+	// (todo, in_progress, done) for a parent listed because a subtask closed
+	// inside it, done-recent for a task that itself closed inside the window.
+	// Empty outside the Done list. The class is card-frame-<Frame>, named
+	// like the bars' segments (<element>-<status>[-<flag>]).
+	Frame string
+	// ClosedNote is the Done list's line saying what closed and when:
+	// "closed 2h ago", or "subtask closed 2h ago" for a card that is listed
+	// for its subtasks.
+	ClosedNote string
 	// Subtasks are nested when they sit in the same column as this card,
 	// plus the todo subtasks of an in-progress card, which also keep their
 	// own card in To do; otherwise they render standalone in their column.
@@ -651,8 +665,12 @@ func newBoardView(snap *task.BoardSnapshot, cfg *config.Config, now time.Time, p
 			cv.Lanes = newPhaseLanes(cards, snap)
 			cv.Cards = deref(cards)
 		case task.StatusDone:
-			// Done shows statistics, not tasks; its tasks are still counted.
+			// Done shows its statistics, then the tasks closed inside the
+			// board's recent window; every done task is still counted in
+			// the header.
 			cv.Stats = newStatsCards(snap.Stats, v.Project.Palette.Names)
+			cv.Cards = newClosedCards(snap, byID, now)
+			cv.RecentHours = hours(snap.RecentHours)
 		default:
 			cv.Cards = deref(cards)
 		}

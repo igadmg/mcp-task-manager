@@ -68,11 +68,11 @@ func TestAppCSSDefinesStatsClasses(t *testing.T) {
 	}
 	for _, w := range []string{
 		".stats-card{", ".stats-title{", ".stats-row{", ".stats-bar{", ".stats-recent{",
-		".bar-done{", ".bar-done{fill:var(--role-done)}", ".bar-recent{fill:var(--role-recent)}",
+		".bar-done{", ".bar-done{fill:var(--role-done)}", ".bar-done-recent{fill:var(--role-recent)}",
 		".bar-in_progress{fill:var(--role-in_progress)}", ".bar-todo{fill:var(--role-todo)}",
-		".bar-new{fill:var(--role-new)}", ".chip-new{",
-		".bar-new{",
-		".stats-new{", ".bar-recent{", ".bar-in_progress{", ".bar-todo{",
+		".bar-todo-new{fill:var(--role-new)}", ".chip-new{",
+		".bar-todo-new{",
+		".stats-new{", ".bar-done-recent{", ".bar-in_progress{", ".bar-todo{",
 		"--color-emerald-200:",
 		".stats-chart{", ".stats-chart svg{", ".stats-line{", ".stats-off{", ".stats-day{",
 		".stats-legend{", ".stats-legend-item{", ".stats-legend-item[aria-pressed=false]{", ".stats-swatch{",
@@ -374,8 +374,12 @@ func TestColorAllowlistMatchesCSS(t *testing.T) {
 			t.Errorf(":root in input.css lacks %q", want)
 		}
 	}
-	if n := strings.Count(input, "@source inline("); n != len(config.ColorRoles()) {
-		t.Errorf("input.css has %d @source inline lines, want %d", n, len(config.ColorRoles()))
+	// One line per role, plus the Done list's card frames (data-driven class names).
+	if n := strings.Count(input, "@source inline("); n != len(config.ColorRoles())+1 {
+		t.Errorf("input.css has %d @source inline lines, want %d", n, len(config.ColorRoles())+1)
+	}
+	if want := `@source inline("card-frame-{todo,in_progress,done,done-recent}");`; !strings.Contains(input, want) {
+		t.Errorf("input.css lacks %s", want)
 	}
 
 	data, err := staticFS.ReadFile("static/app.css")
@@ -402,9 +406,10 @@ func TestStatusColoursComeFromTheRoles(t *testing.T) {
 	hard := regexp.MustCompile(`--color-(amber|emerald|sky|neutral)-\d+|\b(bg|text|ring|border|stroke|fill|decoration)-(amber|emerald|sky|neutral)-\d+`)
 	for _, sel := range []string{
 		".dot-todo", ".dot-in_progress", ".dot-done",
-		".bar-done", ".bar-recent", ".bar-in_progress", ".bar-todo", ".bar-new",
+		".bar-done", ".bar-done-recent", ".bar-in_progress", ".bar-todo", ".bar-todo-new",
 		".stats-recent", ".stats-new",
 		".card-live", ".chip-live", ".chip-new",
+		".card-frame-todo", ".card-frame-in_progress", ".card-frame-done", ".card-frame-done-recent",
 		".shell-danger-item", ".shell-danger-item:hover",
 		".graph-todo        .graph-box", ".graph-in_progress .graph-box", ".graph-done        .graph-box",
 	} {

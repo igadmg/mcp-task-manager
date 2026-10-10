@@ -48,13 +48,17 @@
           </section>
           {{ end }}
         </div>
-        {{ else if .Stats }}
-        <div class="flex flex-col gap-2">
-          {{ range .Stats }}{{ if eq .Kind "lines" }}{{ template "_stats_lines.html" . }}{{ else }}{{ template "_stats_bars.html" . }}{{ end }}{{ end }}
-        </div>
         {{ else }}
         <div class="flex flex-col gap-2">
-          {{ range .Cards }}{{ template "_card.html" . }}{{ else }}
+          {{/* Done: its statistics first, then the tasks closed inside the
+               recent window (RecentHours is set for Done only). One list in
+               one .column-body, so the column still has a single scroller. */}}
+          {{ range .Stats }}{{ if eq .Kind "lines" }}{{ template "_stats_lines.html" . }}{{ else }}{{ template "_stats_bars.html" . }}{{ end }}{{ end }}
+          {{ if and .RecentHours .Cards }}
+          <h3 class="px-1 pt-1 text-[11px] font-medium uppercase tracking-wider text-neutral-500">Closed in the last {{ .RecentHours }} h</h3>
+          {{ end }}
+          {{ range .Cards }}{{ template "_card.html" . }}{{ end }}
+          {{ if not (or .Stats .Cards) }}
           <p class="px-1 py-6 text-center text-xs text-neutral-600">empty</p>
           {{ end }}
         </div>

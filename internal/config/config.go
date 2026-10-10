@@ -118,6 +118,11 @@ type WebConfig struct {
 	// carries the new marker on its card, and a bars card that names no
 	// new_hours of its own highlights the same arrivals.
 	NewHours int `yaml:"new_hours"`
+	// RecentHours is the board's "recently closed" window, the one every
+	// bars card and the Done column's list of closed tasks share: a done
+	// task closed inside it is highlighted over the end of a bar and listed
+	// under the statistics. A recent_hours written inside a card is ignored.
+	RecentHours int `yaml:"recent_hours"`
 }
 
 // GitConfig holds the opt-in git branch-per-task workflow.
@@ -165,9 +170,10 @@ func DefaultConfig() *Config {
 			AfterDays: 30,
 		},
 		Web: WebConfig{
-			Enabled:  false,
-			Addr:     DefaultWebAddr,
-			NewHours: DefaultStatsHours,
+			Enabled:     false,
+			Addr:        DefaultWebAddr,
+			NewHours:    DefaultStatsHours,
+			RecentHours: DefaultStatsHours,
 			// A fresh list, like BaseBranches below.
 			DoneStats: DoneStatsConfig{Cards: DefaultStatsCards()},
 		},
@@ -316,9 +322,12 @@ func (c *Config) applyDefaults() {
 	// Validate before normalizing: normalization repairs some of what the
 	// diagnostics report. Problems are never fatal and never change Cards.
 	c.Web.DoneStats.Problems = ValidateStatsCards(c.Web.DoneStats.Cards)
-	c.Web.Colors.Problems = ValidateColors(c.Web.Colors.Roles, c.Web.NewHours)
+	c.Web.Colors.Problems = ValidateColors(c.Web.Colors.Roles, c.Web.NewHours, c.Web.RecentHours)
 	if c.Web.NewHours <= 0 {
 		c.Web.NewHours = DefaultStatsHours
+	}
+	if c.Web.RecentHours <= 0 {
+		c.Web.RecentHours = DefaultStatsHours
 	}
 	cards := c.Web.DoneStats.Cards
 	if reflect.DeepEqual(cards, DefaultStatsCards()) {

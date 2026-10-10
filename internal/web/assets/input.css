@@ -41,6 +41,7 @@
 @source inline("role-done-{neutral,red,orange,amber,lime,emerald,teal,sky,blue,violet,fuchsia,rose}-{200,300,400,500}");
 @source inline("role-recent-{neutral,red,orange,amber,lime,emerald,teal,sky,blue,violet,fuchsia,rose}-{200,300,400,500}");
 @source inline("role-new-{neutral,red,orange,amber,lime,emerald,teal,sky,blue,violet,fuchsia,rose}-{200,300,400,500}");
+@source inline("card-frame-{todo,in_progress,done,done-recent}");
 @utility role-todo-* { --role-todo: --value(--color-*); }
 @utility role-in_progress-* { --role-in_progress: --value(--color-*); }
 @utility role-done-* { --role-done: --value(--color-*); }
@@ -81,6 +82,15 @@
   }
   .card-live    { border-color: color-mix(in oklab, var(--role-in_progress) 40%, transparent); background-color: color-mix(in oklab, var(--role-in_progress) 4%, transparent); }
   .card-blocked { @apply border-red-500/30; }
+  /* The Done list's border, by what the card is: the status it is in
+   * (a parent listed for a subtask that closed) or done-recent (a task that
+   * itself closed inside web.recent_hours). Named <element>-<status>[-<flag>]
+   * like the bars' segments, and read from the same roles. The class name is
+   * data (CardView.Frame), hence the @source inline above. */
+  .card-frame-todo        { border-color: color-mix(in oklab, var(--role-todo) 40%, transparent); }
+  .card-frame-in_progress { border-color: color-mix(in oklab, var(--role-in_progress) 40%, transparent); }
+  .card-frame-done        { border-color: color-mix(in oklab, var(--role-done) 40%, transparent); }
+  .card-frame-done-recent { border-color: color-mix(in oklab, var(--role-recent) 40%, transparent); }
 
   .column {
     @apply flex min-h-0 min-w-0 flex-col rounded-xl border border-white/5
@@ -176,22 +186,25 @@
   /* Done-column statistics. A bar is an inline SVG whose viewBox is the
    * row's total, so segment widths are task counts and the browser scales
    * them: Go never computes geometry and no style attribute is needed.
-   * Segments use the column dot colours; the part closed inside the card's
+   * Segments use the column dot colours; the part closed inside the board's
    * recent window is a light emerald over the end of done, and the part
-   * created inside its new window a sky blue over the start of todo. */
+   * created inside its new window a sky blue over the start of todo.
+   * Class names are <element>-<status>[-<flag>], the scheme the Done list's
+   * card frames share (.card-frame-*): the flag is recent (a done task) or
+   * new (a todo task), and the colour roles keep their config names. */
   .stats-card { @apply rounded-lg border border-white/10 bg-neutral-900/60 p-3; }
   .stats-title { @apply text-[11px] font-medium uppercase tracking-wider text-neutral-400; }
   .stats-row  { @apply mt-2; }
   .stats-bar  { @apply mt-1 block h-1.5 w-full overflow-hidden rounded-full bg-white/5; }
   .bar-done        { fill: var(--role-done); }
-  .bar-recent      { fill: var(--role-recent); }
+  .bar-done-recent { fill: var(--role-recent); }
   .bar-in_progress { fill: var(--role-in_progress); }
   .bar-todo        { fill: var(--role-todo); }
   /* The arrivals: todo tasks created inside the card's new_hours window,
    * over the START of the todo run, so a bar reads left to right as
    * "shipped | shipped just now | in flight | just arrived | still waiting".
    * Sky by default, because it collides with none of emerald, amber or neutral. */
-  .bar-new         { fill: var(--role-new); }
+  .bar-todo-new    { fill: var(--role-new); }
   .stats-recent    { color: var(--role-recent); }
   .stats-new       { color: color-mix(in oklab, var(--role-new) 75%, white); }
   /* Lines cards. The viewBox is the data range - 2 units per day, counts
